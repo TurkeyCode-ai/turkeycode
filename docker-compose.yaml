@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  turkey-enterprise:
+    build: .
+    container_name: turkey-enterprise-v2
+    volumes:
+      # Mount workspace for project files
+      - ./workspace:/workspace
+      # Mount SSH keys for GitHub operations
+      - ~/.ssh:/root/.ssh:ro
+      # Mount git config
+      - ~/.gitconfig:/root/.gitconfig:ro
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - JIRA_HOST=${JIRA_HOST:-}
+      - JIRA_EMAIL=${JIRA_EMAIL:-}
+      - JIRA_TOKEN=${JIRA_TOKEN:-}
+      - JIRA_PROJECT=${JIRA_PROJECT:-}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    restart: "no"
+
+  # Optional: Run a specific project orchestration
+  # Usage: docker-compose run --rm orchestrate "Build a todo app"
+  orchestrate:
+    build: .
+    profiles: ["cli"]
+    volumes:
+      - ./workspace:/workspace
+      - ~/.ssh:/root/.ssh:ro
+      - ~/.gitconfig:/root/.gitconfig:ro
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - JIRA_HOST=${JIRA_HOST:-}
+      - JIRA_EMAIL=${JIRA_EMAIL:-}
+      - JIRA_TOKEN=${JIRA_TOKEN:-}
+      - JIRA_PROJECT=${JIRA_PROJECT:-}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+    working_dir: /workspace
+    entrypoint: ["node", "/app/dist/index.js", "run"]
