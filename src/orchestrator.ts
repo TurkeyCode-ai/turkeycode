@@ -46,7 +46,8 @@ import {
   PLAN_DONE,
   PHASES_DIR,
   REVIEWS_DIR,
-  AAR_DIR
+  AAR_DIR,
+  getModelForPhase
 } from './constants';
 import { audit, auditGate, auditPhase, auditBuildPhase, auditQA } from './audit';
 import { runQuickChecks } from './quick-check';
@@ -242,7 +243,8 @@ export class Orchestrator {
       prompt,
       timeoutMs: RESEARCH_TIMEOUT_MS,
       sessionName: 'research',
-      doneFile: RESEARCH_DONE
+      doneFile: RESEARCH_DONE,
+      model: getModelForPhase('research')
     });
 
     if (result.exitCode !== 0) {
@@ -281,7 +283,8 @@ export class Orchestrator {
       prompt,
       timeoutMs: PLAN_TIMEOUT_MS,
       sessionName: 'plan',
-      doneFile: PLAN_DONE
+      doneFile: PLAN_DONE,
+      model: getModelForPhase('plan')
     });
 
     if (result.exitCode !== 0) {
@@ -341,12 +344,18 @@ export class Orchestrator {
     // Create phase branch
     const phaseBranch = `phase-${phaseNumber}/${slugify(phase.name)}`;
     phase.branchName = phaseBranch;
-    this.github.createBranch(phaseBranch, 'main');
+    const defaultBranch = this.github.getDefaultBranch();
+    this.github.createBranch(phaseBranch, defaultBranch);
+
+    // Ensure .gitignore exists (prevents node_modules/.next etc from being committed)
+    this.ensureGitignore();
 
     // ==================== BUILD ====================
-    const resumingFromLaterPhase = ['qa', 'quick-check', 'review', 'aar'].includes(this.state.currentPhase);
-    if (resumingFromLaterPhase) {
-      this.log(`Resuming from ${this.state.currentPhase} phase, skipping build...`);
+    // Only skip build if THIS phase has actually been built (check for build.done artifact)
+    const buildDonePath = join(this.workDir, PHASES_DIR, `phase-${phaseNumber}`, 'build.done');
+    const phaseAlreadyBuilt = existsSync(buildDonePath);
+    if (phaseAlreadyBuilt) {
+      this.log(`Phase ${phaseNumber} already built (build.done exists), skipping build...`);
     } else {
       this.state.currentPhase = 'build';
       saveState(this.state);
@@ -354,25 +363,29 @@ export class Orchestrator {
       await this.runPhaseBuild(phase, phaseBranch);
     }
 
-    // Create PR for phase (reuse existing if found)
-    if (!phase.prNumber) {
-      const existingPR = this.github.findExistingPR(phaseBranch);
-      if (existingPR) {
-        phase.prNumber = existingPR;
-        this.log(`Reusing existing PR #${existingPR} for ${phaseBranch}`);
-      } else {
-        const newPR = this.github.createPR({
-          title: `Phase ${phaseNumber}: ${phase.name}`,
-          body: this.generatePRBody(phase),
-          base: 'main',
-          head: phaseBranch
-        });
-        if (newPR) {
-          phase.prNumber = newPR;
+    // Create PR for phase (reuse existing if found) — skip if no remote
+    if (this.github.hasRemote()) {
+      if (!phase.prNumber) {
+        const existingPR = this.github.findExistingPR(phaseBranch);
+        if (existingPR) {
+          phase.prNumber = existingPR;
+          this.log(`Reusing existing PR #${existingPR} for ${phaseBranch}`);
+        } else {
+          const newPR = this.github.createPR({
+            title: `Phase ${phaseNumber}: ${phase.name}`,
+            body: this.generatePRBody(phase),
+            base: defaultBranch,
+            head: phaseBranch
+          });
+          if (newPR) {
+            phase.prNumber = newPR;
+          }
         }
+      } else {
+        this.log(`Reusing existing PR #${phase.prNumber} for ${phaseBranch}`);
       }
     } else {
-      this.log(`Reusing existing PR #${phase.prNumber} for ${phaseBranch}`);
+      this.log(`Skipping PR creation (no remote configured)`);
     }
 
     // Mark build complete — quick-check and QA can resume without rebuilding
@@ -400,9 +413,13 @@ export class Orchestrator {
     // ==================== AAR ====================
     await this.runAAR(phaseNumber);
 
-    // Merge PR
+    // Merge phase branch into default branch
     if (phase.prNumber) {
       this.github.mergePR(phase.prNumber);
+    } else {
+      // No PR (no remote) — merge locally
+      this.log(`Merging ${phaseBranch} into ${defaultBranch} locally (no PR)`);
+      this.github.mergeBranch(phaseBranch, defaultBranch);
     }
 
     phase.status = 'done';
@@ -440,7 +457,8 @@ export class Orchestrator {
       prompt,
       timeoutMs: PHASE_BUILD_TIMEOUT_MS,
       sessionName: `build-phase-${phase.number}`,
-      doneFile: buildDoneFile
+      doneFile: buildDoneFile,
+      model: getModelForPhase('build')
     });
 
     const durationMs = Date.now() - startTime;
@@ -460,7 +478,8 @@ export class Orchestrator {
         prompt,
         timeoutMs: PHASE_BUILD_TIMEOUT_MS,
         sessionName: `build-phase-${phase.number}-retry`,
-        doneFile: buildDoneFile
+        doneFile: buildDoneFile,
+        model: getModelForPhase('build')
       });
 
       gateResult = this.gates.checkPhaseBuild(phase.number);
@@ -562,7 +581,8 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
         prompt: fixPrompt,
         timeoutMs: FIX_TIMEOUT_MS,
         sessionName: `quick-fix-${attempt}`,
-        doneFile: `${qaDir}/quick-fix-${attempt}.done`
+        doneFile: `${qaDir}/quick-fix-${attempt}.done`,
+        model: getModelForPhase('quick-fix')
       });
 
       if (fixResult.exitCode !== 0) {
@@ -626,9 +646,10 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       const smokeResult = await this.spawner.run({
         cwd: this.workDir,
         prompt: buildQaSmokePrompt(this.state, phaseNumber, attempt),
-        timeoutMs: QA_TIMEOUT_MS / 2,
+        timeoutMs: QA_TIMEOUT_MS,
         sessionName: `qa-smoke-${attempt}`,
-        doneFile: `${QA_DIR}/phase-${phaseNumber}/smoke-${attempt}.done`
+        doneFile: `${QA_DIR}/phase-${phaseNumber}/smoke-${attempt}.done`,
+        model: getModelForPhase('qa-smoke')
       });
 
       // Handle rate limiting — wait and retry without counting this attempt
@@ -640,8 +661,14 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
         continue;
       }
 
-      // Check smoke results - if major failures, skip other tests
+      // Brief delay after session ends to let in-flight file writes flush
+      // (killed processes may have pending writes that complete after SIGTERM)
       const smokeResultPath = `${qaDir}/smoke-${attempt}.md`;
+      if (!existsSync(smokeResultPath)) {
+        await new Promise(r => setTimeout(r, 5000));
+      }
+
+      // Check smoke results - if major failures, skip other tests
       const smokeHasCriticalFailures = this.checkSmokeForCriticalFailures(smokeResultPath);
 
       if (smokeHasCriticalFailures) {
@@ -676,14 +703,16 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
           prompt: buildQaFunctionalPrompt(this.state, phaseNumber, attempt),
           timeoutMs: QA_TIMEOUT_MS,
           sessionName: `qa-functional-${attempt}`,
-          doneFile: `${QA_DIR}/phase-${phaseNumber}/functional-${attempt}.done`
+          doneFile: `${QA_DIR}/phase-${phaseNumber}/functional-${attempt}.done`,
+          model: getModelForPhase('qa-functional')
         },
         {
           cwd: this.workDir,
           prompt: buildQaVisualPrompt(this.state, phaseNumber, attempt),
           timeoutMs: QA_TIMEOUT_MS,
           sessionName: `qa-visual-${attempt}`,
-          doneFile: `${QA_DIR}/phase-${phaseNumber}/visual-${attempt}.done`
+          doneFile: `${QA_DIR}/phase-${phaseNumber}/visual-${attempt}.done`,
+          model: getModelForPhase('qa-visual')
         }
       ], 2);
 
@@ -703,7 +732,8 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
         prompt: buildQaVerdictPrompt(this.state, phaseNumber, attempt),
         timeoutMs: QA_TIMEOUT_MS / 2,
         sessionName: `qa-verdict-${attempt}`,
-        doneFile: `${QA_DIR}/phase-${phaseNumber}/verdict-${attempt}.done`
+        doneFile: `${QA_DIR}/phase-${phaseNumber}/verdict-${attempt}.done`,
+        model: getModelForPhase('qa-verdict')
       });
 
       // Fallback: if verdict file wasn't created, create one from smoke report
@@ -798,7 +828,8 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       prompt: buildCodeReviewPrompt(this.state, phaseNumber),
       timeoutMs: QA_TIMEOUT_MS,
       sessionName: `code-review-${phaseNumber}`,
-      doneFile: `${REVIEWS_DIR}/phase-${phaseNumber}.done`
+      doneFile: `${REVIEWS_DIR}/phase-${phaseNumber}.done`,
+      model: getModelForPhase('code-review')
     });
 
     enforceGate(this.gates.checkCodeReview(phaseNumber));
@@ -817,7 +848,8 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       prompt: buildAarPrompt(this.state, phaseNumber),
       timeoutMs: QA_TIMEOUT_MS,
       sessionName: `aar-${phaseNumber}`,
-      doneFile: `${AAR_DIR}/phase-${phaseNumber}.done`
+      doneFile: `${AAR_DIR}/phase-${phaseNumber}.done`,
+      model: getModelForPhase('aar')
     });
 
     // Reload state (AAR may have updated tech context)
@@ -895,6 +927,86 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
   }
 
   /**
+   * Ensure a .gitignore exists in the work directory based on detected project type.
+   * Prevents node_modules, build artifacts, etc. from being committed.
+   */
+  private ensureGitignore(): void {
+    const gitignorePath = join(this.workDir, '.gitignore');
+    if (existsSync(gitignorePath)) return;
+
+    const tech = this.state.tech;
+    const stack = (tech.frontend || '') + ' ' + (tech.backend || '') + ' ' + ((tech as Record<string, unknown>).framework || '');
+    const lines: string[] = [
+      '# Dependencies',
+      'node_modules/',
+      '.pnp.*',
+      '.yarn/',
+      '',
+      '# Build output',
+      'dist/',
+      'build/',
+      'out/',
+      '',
+      '# Environment',
+      '.env',
+      '.env.local',
+      '.env*.local',
+      '',
+      '# OS',
+      '.DS_Store',
+      'Thumbs.db',
+      '',
+      '# IDE',
+      '.idea/',
+      '.vscode/',
+      '*.swp',
+      '*.swo',
+      '',
+      '# Logs',
+      '*.log',
+      'npm-debug.log*',
+    ];
+
+    // Next.js
+    if (/next/i.test(stack)) {
+      lines.push('', '# Next.js', '.next/', '.vercel/');
+    }
+
+    // Nuxt
+    if (/nuxt/i.test(stack)) {
+      lines.push('', '# Nuxt', '.nuxt/', '.output/');
+    }
+
+    // Python
+    if (/python|django|flask|fastapi/i.test(stack) || tech.packageManager === 'pip') {
+      lines.push('', '# Python', '__pycache__/', '*.pyc', '.venv/', 'venv/', '*.egg-info/');
+    }
+
+    // Rust
+    if (/rust|cargo/i.test(stack)) {
+      lines.push('', '# Rust', 'target/');
+    }
+
+    // Go
+    if (/\bgo\b|gin|fiber/i.test(stack)) {
+      lines.push('', '# Go', '/bin/');
+    }
+
+    // Java/Kotlin
+    if (/java|spring|kotlin|gradle|maven/i.test(stack)) {
+      lines.push('', '# Java', '*.class', '.gradle/', 'build/', 'target/');
+    }
+
+    // Testing
+    lines.push('', '# Test artifacts', 'coverage/', 'playwright-report/', 'test-results/');
+
+    lines.push('');
+
+    writeFileSync(gitignorePath, lines.join('\n'));
+    this.log('Created .gitignore based on project type');
+  }
+
+  /**
    * Run fixes - single session with full context
    */
   private async runChunkedFixes(phaseNumber: number, attempt: number): Promise<void> {
@@ -928,7 +1040,8 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       prompt: buildQaFixPrompt(this.state, phaseNumber, attempt),
       timeoutMs: FIX_TIMEOUT_MS,
       sessionName: `qa-fix-${attempt}`,
-      doneFile: `${QA_DIR}/phase-${phaseNumber}/fix-${attempt}.done`
+      doneFile: `${QA_DIR}/phase-${phaseNumber}/fix-${attempt}.done`,
+      model: getModelForPhase('qa-fix')
     });
 
     // Commit all fixes together

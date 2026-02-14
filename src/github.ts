@@ -59,6 +59,18 @@ export class GitHubClient {
   }
 
   /**
+   * Check if a git remote "origin" is configured
+   */
+  hasRemote(): boolean {
+    try {
+      execSync('git remote get-url origin', { stdio: ['pipe', 'pipe', 'pipe'] });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Stash uncommitted changes if the working tree is dirty
    * Returns true if changes were stashed
    */
@@ -89,9 +101,35 @@ export class GitHubClient {
   }
 
   /**
+   * Clean up temp files left by QA agents (smoke tests, screenshot scripts, etc.)
+   * These cause merge conflicts when switching branches.
+   */
+  cleanQaTempFiles(): void {
+    const patterns = [
+      'smoke-test*.ts', 'capture-screenshots*.ts', 'functional-test*.ts',
+      'visual-test*.ts', 'seed-test*.ts'
+    ];
+    try {
+      for (const pattern of patterns) {
+        const files = execSync(`ls ${pattern} 2>/dev/null || true`, { encoding: 'utf-8' }).trim();
+        if (files) {
+          for (const f of files.split('\n').filter(Boolean)) {
+            try {
+              execSync(`rm -f "${f}"`, { stdio: 'inherit' });
+              console.log(`Cleaned QA temp file: ${f}`);
+            } catch { /* ignore */ }
+          }
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  /**
    * Create and checkout a new branch
    */
   createBranch(branchName: string, fromBranch?: string): boolean {
+    // Clean QA temp files before branch switch to avoid conflicts
+    this.cleanQaTempFiles();
     const stashed = this.stashIfDirty();
     try {
       if (fromBranch) {
@@ -105,7 +143,17 @@ export class GitHubClient {
         execSync(`git checkout ${branchName}`, { stdio: 'inherit' });
         console.log(`Checked out existing branch: ${branchName}`);
       }
-      if (stashed) this.popStash();
+      if (stashed) {
+        try {
+          execSync('git stash pop', { stdio: 'inherit' });
+          console.log('Restored stashed changes');
+        } catch {
+          // Stash pop failed (conflicts) — drop it and use clean branch state
+          console.log('Stash pop conflicted — dropping stash, using clean branch state');
+          try { execSync('git stash drop', { stdio: 'inherit' }); } catch { /* ignore */ }
+          try { execSync('git checkout -- .', { stdio: 'inherit' }); } catch { /* ignore */ }
+        }
+      }
       return true;
     } catch (err) {
       if (stashed) this.popStash();
@@ -137,8 +185,9 @@ export class GitHubClient {
       execSync(`git rev-parse --verify ${branchName}`, { stdio: ['pipe', 'pipe', 'pipe'] });
       return true;
     } catch {
+      // Only check remote if origin is configured
+      if (!this.hasRemote()) return false;
       try {
-        // Check remote
         execSync(`git ls-remote --heads origin ${branchName}`, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
         return true;
       } catch {
@@ -148,10 +197,27 @@ export class GitHubClient {
   }
 
   /**
+   * Remove tracked files that are now in .gitignore (e.g. node_modules committed before .gitignore existed)
+   */
+  cleanTrackedIgnoredFiles(): void {
+    try {
+      const ignored = execSync('git ls-files -ci --exclude-standard', { encoding: 'utf-8' }).trim();
+      if (ignored) {
+        const count = ignored.split('\n').length;
+        console.log(`Removing ${count} tracked files now in .gitignore...`);
+        execSync('git ls-files -ci --exclude-standard -z | xargs -0 git rm --cached', { stdio: 'inherit' });
+      }
+    } catch {
+      // No ignored tracked files or git error — safe to skip
+    }
+  }
+
+  /**
    * Stage all changes and commit
    */
   commit(message: string): boolean {
     try {
+      this.cleanTrackedIgnoredFiles();
       execSync('git add -A', { stdio: 'inherit' });
       execSync(`git commit -m "${message}"`, { stdio: 'inherit' });
       console.log(`Committed: ${message}`);
@@ -163,9 +229,13 @@ export class GitHubClient {
   }
 
   /**
-   * Push branch to origin
+   * Push branch to origin (skips if no remote configured)
    */
   push(branchName: string): boolean {
+    if (!this.hasRemote()) {
+      console.log(`Skipping push (no remote configured): ${branchName}`);
+      return false;
+    }
     try {
       execSync(`git push -u origin ${branchName}`, { stdio: 'inherit' });
       console.log(`Pushed branch: ${branchName}`);
@@ -315,6 +385,22 @@ export class GitHubClient {
         return false;
       }
     }
+  }
+
+  /**
+   * Get the default branch name (main or master)
+   */
+  getDefaultBranch(): string {
+    try {
+      // Check what branches exist
+      const branches = execSync('git branch --list', { encoding: 'utf-8' });
+      if (branches.includes('main')) return 'main';
+      if (branches.includes('master')) return 'master';
+      // Fall back to checking git config
+      const configured = execSync('git config init.defaultBranch', { encoding: 'utf-8' }).trim();
+      if (configured) return configured;
+    } catch { /* ignore */ }
+    return 'main'; // default fallback
   }
 
   /**
@@ -470,7 +556,7 @@ export class GitHubClient {
     // 4. Initial commit and push if there are files
     if (this.hasUncommittedChanges()) {
       this.commit('Initial commit');
-      this.push('main');
+      this.push(this.getDefaultBranch());
     }
 
     return true;

@@ -33,13 +33,15 @@ export class Spawner {
     timeoutMs?: number;
     sessionName?: string;
     doneFile?: string;
+    model?: string;
   }): Promise<SpawnResult> {
     const {
       cwd,
       prompt,
       timeoutMs = DEFAULT_TIMEOUT_MS,
       sessionName = 'claude-session',
-      doneFile
+      doneFile,
+      model
     } = options;
 
     const startTime = Date.now();
@@ -59,16 +61,27 @@ export class Spawner {
       let rateLimited = false;
 
       // Spawn claude directly, write prompt to stdin
-      const proc: ChildProcess = spawn('claude', [
+      // Strip ANTHROPIC_API_KEY so Claude uses the logged-in account (Max)
+      // instead of the API key from the parent process environment
+      const { ANTHROPIC_API_KEY: _stripped, ...cleanEnv } = process.env;
+
+      const args = [
         '--print',
         '--dangerously-skip-permissions',
         '--verbose',
         '--input-format', 'text'
-      ], {
+      ];
+
+      if (model) {
+        args.push('--model', model);
+        this.log(`[${sessionName}] Using model: ${model}`);
+      }
+
+      const proc: ChildProcess = spawn('claude', args, {
         cwd,
         stdio: ['pipe', 'pipe', 'pipe'], // stdin piped for prompt, stdout/stderr piped for capture
         env: {
-          ...process.env,
+          ...cleanEnv,
           CI: 'true' // Prevent interactive prompts
         }
       });
@@ -223,6 +236,7 @@ export class Spawner {
     timeoutMs?: number;
     sessionName?: string;
     doneFile?: string;
+    model?: string;
   }>): Promise<SpawnResult[]> {
     const results: SpawnResult[] = [];
 
@@ -251,6 +265,7 @@ export class Spawner {
       timeoutMs?: number;
       sessionName?: string;
       doneFile?: string;
+      model?: string;
     }>,
     maxConcurrent: number = DEFAULT_MAX_CONCURRENT
   ): Promise<SpawnResult[]> {

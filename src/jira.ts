@@ -413,7 +413,24 @@ export class JiraClient {
       };
     }
 
-    const result = await jiraRequest(this.config, 'POST', 'issue', issueData);
+    let result = await jiraRequest(this.config, 'POST', 'issue', issueData);
+
+    // If project key is invalid, try to find the right one by checking with suffix
+    if (!result.ok && result.error && (result.error.includes('valid project') || result.error.includes('does not exist'))) {
+      console.log(`[jira] Project key '${this.config.project}' invalid, searching for correct key...`);
+      const baseKey = this.config.project.replace(/\d+$/, '');
+      for (let suffix = 1; suffix <= 15; suffix++) {
+        const tryKey = suffix === 1 ? baseKey : `${baseKey}${suffix}`;
+        const checkResult = await jiraRequest(this.config, 'GET', `project/${tryKey}`);
+        if (checkResult.ok) {
+          console.log(`[jira] Found valid project: ${tryKey}`);
+          this.config.project = tryKey;
+          (issueData.fields as Record<string, unknown>).project = { key: tryKey };
+          result = await jiraRequest(this.config, 'POST', 'issue', issueData);
+          break;
+        }
+      }
+    }
 
     if (result.ok && result.data) {
       const issue = result.data as { key: string; id: string };

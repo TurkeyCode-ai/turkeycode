@@ -60,7 +60,7 @@ Create this file with the following EXACT structure:
         "Docker containers start (db, backend, frontend)",
         "POST /api/auth/login returns JWT token",
         "GET /api/users returns user list",
-        "Frontend loads at localhost:3000 with navigation"
+        "Frontend loads at localhost:4000 with navigation"
       ],
       "prerequisites": [],
       "specContext": "From specs: [relevant excerpt about project setup, tech stack, core entities]...",

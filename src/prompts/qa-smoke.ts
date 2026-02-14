@@ -117,7 +117,7 @@ async function smokeTest() {
   const page = await browser.newPage();
 
   // Navigate to app
-  await page.goto('http://localhost:3000');
+  await page.goto('http://localhost:4000');
 
   // Find all interactive elements
   const buttons = await page.locator('button').all();
@@ -149,7 +149,7 @@ async function smokeTest() {
     }
 
     // Reset state
-    await page.goto('http://localhost:3000');
+    await page.goto('http://localhost:4000');
   }
 
   // Similar for links and inputs...
@@ -184,9 +184,9 @@ npx ts-node smoke-test.ts
 
 \`\`\`bash
 # Test each endpoint
-curl -s http://localhost:3000/api/health
-curl -s http://localhost:3000/api/users
-curl -X POST http://localhost:3000/api/login -d '{"email":"test@test.com"}'
+curl -s http://localhost:4000/api/health
+curl -s http://localhost:4000/api/users
+curl -X POST http://localhost:4000/api/login -d '{"email":"test@test.com"}'
 
 # DEAD = 500 or no response
 # LIVE = correct status + data

@@ -40,7 +40,7 @@ export const FIX_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 
 // Retry limits
 export const MAX_BUILD_RETRIES = 2;
-export const MAX_QA_ATTEMPTS = 3;
+export const MAX_QA_ATTEMPTS = 5;
 
 // Validation thresholds
 export const MIN_SPECS_LENGTH = 200;
@@ -53,6 +53,39 @@ export let STRICT_QA = true;
 
 export function setStrictQA(strict: boolean): void {
   STRICT_QA = strict;
+}
+
+// Model selection per phase
+// Maps each phase/sub-phase to the optimal model for cost vs quality
+export const PHASE_MODELS: Record<string, string> = {
+  // Planning phases — Opus for architecture decisions, Sonnet for extraction
+  'research': 'sonnet',
+  'plan': 'opus',
+
+  // Build phase — Sonnet is the coding sweet spot
+  'build': 'sonnet',
+
+  // QA phases — Haiku for mechanical tasks, Sonnet for reasoning
+  'qa-smoke': 'haiku',
+  'qa-functional': 'sonnet',
+  'qa-visual': 'sonnet',
+  'qa-verdict': 'haiku',
+
+  // Fix phases — Opus for debugging (hardest task), Sonnet for compile fixes
+  'qa-fix': 'opus',
+  'quick-fix': 'sonnet',
+
+  // Post-build — Sonnet for review, Haiku for mechanical summarization
+  'code-review': 'sonnet',
+  'aar': 'haiku',
+};
+
+/**
+ * Get the model for a given phase.
+ * Returns undefined if no specific model is configured (uses Claude default).
+ */
+export function getModelForPhase(phase: string): string | undefined {
+  return PHASE_MODELS[phase];
 }
 
 // All directories that need to be created

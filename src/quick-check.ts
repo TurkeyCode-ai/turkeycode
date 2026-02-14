@@ -288,10 +288,10 @@ interface StartConfig {
 const START_CONFIG: Record<BackendType, StartConfig> = {
   node: {
     startCmds: [
-      { cmd: 'npm start', condition: 'package.json' },
-      { cmd: 'npm run dev', condition: 'package.json' }
+      { cmd: 'PORT=4000 npm start', condition: 'package.json' },
+      { cmd: 'PORT=4000 npm run dev', condition: 'package.json' }
     ],
-    defaultPort: 3000,
+    defaultPort: 4000,
     healthPaths: ['/api/health', '/health', '/healthz', '/api/v1/health', '/ping']
   },
   go: {
@@ -304,10 +304,10 @@ const START_CONFIG: Record<BackendType, StartConfig> = {
   },
   ruby: {
     startCmds: [
-      { cmd: 'bundle exec rails server -d', condition: 'bin/rails' },
-      { cmd: 'bundle exec rackup', condition: 'config.ru' }
+      { cmd: 'bundle exec rails server -d -p 4000', condition: 'bin/rails' },
+      { cmd: 'bundle exec rackup -p 4000', condition: 'config.ru' }
     ],
-    defaultPort: 3000,
+    defaultPort: 4000,
     healthPaths: ['/health', '/up', '/api/health', '/rails/health']
   },
   python: {
@@ -360,7 +360,7 @@ const START_CONFIG: Record<BackendType, StartConfig> = {
   },
   unknown: {
     startCmds: [],
-    defaultPort: 3000,
+    defaultPort: 4000,
     healthPaths: ['/health', '/api/health']
   }
 };
