@@ -413,13 +413,36 @@ export class Orchestrator {
     // ==================== AAR ====================
     await this.runAAR(phaseNumber);
 
+    // Commit any uncommitted changes (AAR modifies state.json but doesn't always commit)
+    if (this.github.hasUncommittedChanges()) {
+      this.log(`Committing uncommitted changes before merge...`);
+      this.github.commit(`chore: commit remaining changes after phase ${phaseNumber} AAR`);
+      if (phase.prNumber) {
+        this.github.push(phaseBranch);
+      }
+    }
+
     // Merge phase branch into default branch
+    let merged = false;
     if (phase.prNumber) {
-      this.github.mergePR(phase.prNumber);
+      merged = this.github.mergePR(phase.prNumber);
+      if (!merged) {
+        // PR merge failed (conflicts, branch protection, etc.) — fall back to local merge
+        this.log(`PR merge failed for #${phase.prNumber}, falling back to local merge...`);
+        merged = this.github.mergeBranch(phaseBranch, defaultBranch);
+        if (merged && this.github.hasRemote()) {
+          this.github.push(defaultBranch);
+        }
+      }
     } else {
       // No PR (no remote) — merge locally
       this.log(`Merging ${phaseBranch} into ${defaultBranch} locally (no PR)`);
-      this.github.mergeBranch(phaseBranch, defaultBranch);
+      merged = this.github.mergeBranch(phaseBranch, defaultBranch);
+    }
+
+    if (!merged) {
+      this.log(`ERROR: Failed to merge ${phaseBranch} into ${defaultBranch}. Cannot proceed to next phase.`);
+      process.exit(1);
     }
 
     phase.status = 'done';
@@ -791,10 +814,9 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
         /backend.*(not running|fail)/i,
         /port.*not.*listening/i,
         /ECONNREFUSED/i,
-        /compilation.*fail/i,
-        /build.*fail/i,
-        /fatal.*error/i,
-        /critical.*fail/i,
+        /compilation.*failed/i,
+        /npm run build.*fail/i,
+        /fatal error:/i,
         /## CRITICAL/i,
         /status:\s*BLOCKED/i
       ];

@@ -208,7 +208,7 @@ If you see placeholder content or missing features NOT in the deliverables list,
 those are planned for future phases — do NOT report them as issues.
 ${previousVisualContext}
 Review EVERY screenshot for these categories of issues:
-- **BLOCKERS**: Dead/broken elements, missing required UI, broken layouts, text overflow, unreadable content, broken images, elements that prevent usability
+- **BLOCKERS**: Dead/broken elements, missing required UI, broken layouts, text overflow, unreadable content, broken images, elements that prevent usability, **low contrast text** (light text on light backgrounds, gray text on white, any text that is hard to read)
 - **WARNINGS**: Wrong colors vs spec, wrong fonts vs spec, significant alignment issues, significant responsive breakage
 
 Do NOT flag as issues:

@@ -60,7 +60,9 @@ A graph that renders empty instead of data = SMOKE pass, FUNCTIONAL fail.
 ## CORE FLOWS TO TEST
 
 ### From Specs:
+<spec_flows>
 ${flows}
+</spec_flows>
 
 ### From Acceptance Criteria:
 ${allCriteria.join('\n')}
@@ -213,6 +215,21 @@ echo "DONE - Functional test completed at $(date -Iseconds)" > ${functionalDone}
 
 ---
 
+## SECURITY & MODERATION CHECKS
+
+For any app with user accounts or user-generated content, also test these:
+
+1. **Auth guards**: Try accessing mutating API routes (POST/PUT/DELETE) without being logged in. They should return 401/403, NOT succeed.
+2. **Authorization**: Try editing/deleting another user's content. Should be blocked.
+3. **Input sanitization**: Submit text with \`<script>alert('xss')</script>\` in text fields. It should be stripped or escaped, never rendered as HTML.
+4. **Upload validation**: If there are file uploads, try uploading a non-image file (e.g., .txt, .html). Should be rejected.
+5. **Rate limiting**: Rapidly submit the same form 20+ times. Should be rate limited, not accepted every time.
+6. **Content moderation**: If users can post public content, check that there is a way to report/flag inappropriate content.
+
+Flag missing security controls as **BLOCKERS** — an app that lets anyone post unvalidated content publicly is not production-ready.
+
+---
+
 ## RULES
 
 1. **Verify OUTPUT, not just response** - A button that responds incorrectly is broken
@@ -221,6 +238,7 @@ echo "DONE - Functional test completed at $(date -Iseconds)" > ${functionalDone}
 4. **Compare precisely** - Expected vs Actual, document both
 5. **Test EVERY acceptance criterion** - This is the contract
 6. **Do NOT fix** - Just report failures
+7. **Test security basics** - Auth guards, input sanitization, rate limiting (see Security section above)
 
 Then STOP.
 `.trim();

@@ -85,7 +85,19 @@ which http || pip install httpie 2>/dev/null || brew install httpie 2>/dev/null
 
 ### 1.4 Start the Application
 
+**IMPORTANT: Always kill and restart the dev server.** Previous fix attempts may have left the server with stale build cache (missing chunks, broken hot reload). A fresh start is cheap insurance.
+
 \`\`\`bash
+# Kill any existing dev server first
+pkill -f "next dev" 2>/dev/null || true
+pkill -f "npm run dev" 2>/dev/null || true
+pkill -f "vite" 2>/dev/null || true
+pkill -f "webpack-dev-server" 2>/dev/null || true
+sleep 2
+
+# For Next.js: clear build cache to prevent stale vendor-chunks
+rm -rf .next 2>/dev/null || true
+
 # Find and run the dev command
 npm run dev &
 # or
@@ -94,8 +106,8 @@ npm start &
 cargo run &
 # or whatever the project uses
 
-# Wait for it to be ready
-sleep 5
+# Wait for it to be ready (longer after cache clear)
+sleep 10
 \`\`\`
 
 **If the app won't start, that's a BLOCKER. Document it and STOP.**

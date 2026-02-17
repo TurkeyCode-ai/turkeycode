@@ -61,9 +61,19 @@ export class Spawner {
       let rateLimited = false;
 
       // Spawn claude directly, write prompt to stdin
-      // Strip ANTHROPIC_API_KEY so Claude uses the logged-in account (Max)
-      // instead of the API key from the parent process environment
-      const { ANTHROPIC_API_KEY: _stripped, ...cleanEnv } = process.env;
+      // Pass through all env vars including ANTHROPIC_API_KEY
+      // On droplets: API key is required (no login session available)
+      // On server with Max login: Claude CLI prefers login over API key automatically
+      const cleanEnv = { ...process.env };
+
+      // Safety net: strip dangerous env vars even if caller forgot to
+      const NEVER_PASS_VARS = [
+        'DATABASE_URL', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET',
+        'SENDGRID_API_KEY', 'NEXTAUTH_SECRET', 'SESSION_SECRET',
+      ];
+      for (const key of NEVER_PASS_VARS) {
+        delete cleanEnv[key];
+      }
 
       const args = [
         '--print',

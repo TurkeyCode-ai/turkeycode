@@ -4,8 +4,8 @@
  */
 
 import { execSync } from 'child_process';
-import { writeFileSync, unlinkSync } from 'fs';
-import { join } from 'path';
+import fs, { writeFileSync, unlinkSync } from 'fs';
+import path, { join } from 'path';
 import { tmpdir } from 'os';
 
 /**
@@ -130,6 +130,16 @@ export class GitHubClient {
   createBranch(branchName: string, fromBranch?: string): boolean {
     // Clean QA temp files before branch switch to avoid conflicts
     this.cleanQaTempFiles();
+
+    // Preserve state.json before stash — it has latest progress and must survive branch switch
+    const stateFile = path.join(process.cwd(), '.turkey', 'state.json');
+    let savedState: string | null = null;
+    try {
+      if (fs.existsSync(stateFile)) {
+        savedState = fs.readFileSync(stateFile, 'utf-8');
+      }
+    } catch { /* ignore */ }
+
     const stashed = this.stashIfDirty();
     try {
       if (fromBranch) {
@@ -148,15 +158,33 @@ export class GitHubClient {
           execSync('git stash pop', { stdio: 'inherit' });
           console.log('Restored stashed changes');
         } catch {
-          // Stash pop failed (conflicts) — drop it and use clean branch state
-          console.log('Stash pop conflicted — dropping stash, using clean branch state');
+          // Stash pop failed (conflicts) — drop stash and reset index+working tree
+          console.log('Stash pop conflicted — dropping stash, resetting to clean state');
           try { execSync('git stash drop', { stdio: 'inherit' }); } catch { /* ignore */ }
+          // git reset HEAD clears "unmerged" entries from the index
+          try { execSync('git reset HEAD -- .', { stdio: 'inherit' }); } catch { /* ignore */ }
           try { execSync('git checkout -- .', { stdio: 'inherit' }); } catch { /* ignore */ }
         }
       }
+
+      // Always restore state.json to the latest version (survives merge conflicts)
+      if (savedState) {
+        try {
+          const stateDir = path.dirname(stateFile);
+          if (!fs.existsSync(stateDir)) fs.mkdirSync(stateDir, { recursive: true });
+          fs.writeFileSync(stateFile, savedState, 'utf-8');
+          // Stage it so git index is clean (no lingering "unmerged" status)
+          execSync('git add .turkey/state.json', { stdio: 'inherit' });
+        } catch { /* ignore */ }
+      }
+
       return true;
     } catch (err) {
       if (stashed) this.popStash();
+      // Restore state.json even on error
+      if (savedState) {
+        try { fs.writeFileSync(stateFile, savedState, 'utf-8'); } catch { /* ignore */ }
+      }
       console.error(`Failed to create/checkout branch: ${err}`);
       return false;
     }
@@ -218,6 +246,19 @@ export class GitHubClient {
   commit(message: string): boolean {
     try {
       this.cleanTrackedIgnoredFiles();
+      // Resolve any unmerged files before staging (e.g. state.json after stash conflicts)
+      try {
+        const unmerged = execSync('git diff --name-only --diff-filter=U', { encoding: 'utf-8' }).trim();
+        if (unmerged) {
+          console.log(`Resolving ${unmerged.split('\n').length} unmerged file(s)...`);
+          for (const file of unmerged.split('\n').filter(Boolean)) {
+            try {
+              execSync(`git checkout --theirs "${file}"`, { stdio: 'inherit' });
+              execSync(`git add "${file}"`, { stdio: 'inherit' });
+            } catch { /* ignore individual file errors */ }
+          }
+        }
+      } catch { /* no unmerged files */ }
       execSync('git add -A', { stdio: 'inherit' });
       execSync(`git commit -m "${message}"`, { stdio: 'inherit' });
       console.log(`Committed: ${message}`);
@@ -373,15 +414,28 @@ export class GitHubClient {
       console.log(`Merged ${sourceBranch} into ${targetBranch}`);
       return true;
     } catch (err) {
-      // Try to resolve conflicts by accepting theirs for state files
+      // Try to resolve all conflicts: accept theirs (source branch has the latest code)
       try {
-        execSync('git checkout --theirs .turkey/state.json', { stdio: 'inherit' });
-        execSync('git add .turkey/state.json', { stdio: 'inherit' });
-        execSync('git commit -m "Merge: auto-resolved state.json conflict"', { stdio: 'inherit' });
-        console.log(`Merged ${sourceBranch} into ${targetBranch} (auto-resolved state.json)`);
+        // Find all unmerged files and resolve with --theirs
+        const unmerged = execSync('git diff --name-only --diff-filter=U', { encoding: 'utf-8' }).trim();
+        if (unmerged) {
+          for (const file of unmerged.split('\n').filter(Boolean)) {
+            try {
+              execSync(`git checkout --theirs "${file}"`, { stdio: 'inherit' });
+              execSync(`git add "${file}"`, { stdio: 'inherit' });
+            } catch {
+              // If --theirs fails (e.g. file deleted on one side), just add it
+              try { execSync(`git add "${file}"`, { stdio: 'inherit' }); } catch { /* skip */ }
+            }
+          }
+        }
+        execSync(`git commit -m "Merge ${sourceBranch}: auto-resolved conflicts"`, { stdio: 'inherit' });
+        console.log(`Merged ${sourceBranch} into ${targetBranch} (auto-resolved ${unmerged.split('\n').length} conflicts)`);
         return true;
-      } catch {
-        console.error(`Failed to merge branch: ${err}`);
+      } catch (mergeErr) {
+        // Last resort: abort the merge to leave git in a clean state
+        try { execSync('git merge --abort', { stdio: 'inherit' }); } catch { /* ignore */ }
+        console.error(`Failed to merge branch ${sourceBranch} into ${targetBranch}: ${mergeErr}`);
         return false;
       }
     }
@@ -511,7 +565,11 @@ export class GitHubClient {
    */
   setOrigin(repoFullName: string): boolean {
     try {
-      const url = `https://github.com/${repoFullName}.git`;
+      // Embed GH_TOKEN in URL for HTTPS push auth (needed on droplets without gh credential helper)
+      const token = process.env.GH_TOKEN || process.env.GITHUB_TOKEN || '';
+      const url = token
+        ? `https://x-access-token:${token}@github.com/${repoFullName}.git`
+        : `https://github.com/${repoFullName}.git`;
 
       // Check if origin exists
       try {
@@ -523,7 +581,10 @@ export class GitHubClient {
         execSync(`git remote add origin ${url}`, { stdio: 'inherit' });
       }
 
-      console.log(`Set origin to: ${url}`);
+      const displayUrl = token
+        ? `https://x-access-token:***@github.com/${repoFullName}.git`
+        : url;
+      console.log(`Set origin to: ${displayUrl}`);
       return true;
     } catch (err) {
       console.error(`Failed to set origin: ${err}`);
