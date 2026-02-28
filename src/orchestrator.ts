@@ -3,7 +3,7 @@
  * Phase-based model: 2-5 build phases, each one Claude session
  */
 
-import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, unlinkSync, rmSync } from 'fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, unlinkSync, rmSync, statSync } from 'fs';
 import { join } from 'path';
 import {
   ProjectState,
@@ -45,6 +45,7 @@ import {
   RESEARCH_DONE,
   PLAN_DONE,
   PHASES_DIR,
+  PHASE_PLAN_FILE,
   REVIEWS_DIR,
   AAR_DIR,
   getModelForPhase
@@ -352,8 +353,23 @@ export class Orchestrator {
 
     // ==================== BUILD ====================
     // Only skip build if THIS phase has actually been built (check for build.done artifact)
+    // Guard: if phase-plan.json is newer than build.done, the plan was regenerated and build.done is stale
     const buildDonePath = join(this.workDir, PHASES_DIR, `phase-${phaseNumber}`, 'build.done');
-    const phaseAlreadyBuilt = existsSync(buildDonePath);
+    let phaseAlreadyBuilt = existsSync(buildDonePath);
+    if (phaseAlreadyBuilt) {
+      try {
+        const planPath = join(this.workDir, PHASE_PLAN_FILE);
+        if (existsSync(planPath)) {
+          const planMtime = statSync(planPath).mtimeMs;
+          const buildDoneMtime = statSync(buildDonePath).mtimeMs;
+          if (planMtime > buildDoneMtime) {
+            this.log(`Phase ${phaseNumber} build.done is stale (older than phase-plan.json), removing...`);
+            unlinkSync(buildDonePath);
+            phaseAlreadyBuilt = false;
+          }
+        }
+      } catch { /* ignore stat errors */ }
+    }
     if (phaseAlreadyBuilt) {
       this.log(`Phase ${phaseNumber} already built (build.done exists), skipping build...`);
     } else {
