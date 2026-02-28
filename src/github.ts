@@ -101,6 +101,20 @@ export class GitHubClient {
   }
 
   /**
+   * Remove stale .git/index.lock left behind by killed git processes.
+   * Without this, all subsequent git operations fail.
+   */
+  removeStaleIndexLock(): void {
+    const lockFile = path.join(process.cwd(), '.git', 'index.lock');
+    try {
+      if (fs.existsSync(lockFile)) {
+        fs.unlinkSync(lockFile);
+        console.log('Removed stale .git/index.lock');
+      }
+    } catch { /* ignore */ }
+  }
+
+  /**
    * Clean up temp files left by QA agents (smoke tests, screenshot scripts, etc.)
    * These cause merge conflicts when switching branches.
    */
@@ -128,6 +142,9 @@ export class GitHubClient {
    * Create and checkout a new branch
    */
   createBranch(branchName: string, fromBranch?: string): boolean {
+    // Remove stale index.lock left by killed git processes
+    this.removeStaleIndexLock();
+
     // Clean QA temp files before branch switch to avoid conflicts
     this.cleanQaTempFiles();
 
@@ -194,6 +211,7 @@ export class GitHubClient {
    * Checkout an existing branch
    */
   checkoutBranch(branchName: string): boolean {
+    this.removeStaleIndexLock();
     try {
       execSync(`git checkout ${branchName}`, { stdio: 'inherit' });
       console.log(`Checked out branch: ${branchName}`);
@@ -244,6 +262,7 @@ export class GitHubClient {
    * Stage all changes and commit
    */
   commit(message: string): boolean {
+    this.removeStaleIndexLock();
     try {
       this.cleanTrackedIgnoredFiles();
       // Resolve any unmerged files before staging (e.g. state.json after stash conflicts)
@@ -524,24 +543,15 @@ export class GitHubClient {
 
     const isPrivate = options.private !== false; // Default to private
 
-    // Find a unique repo name — append -2, -3, etc. if name is taken
-    let candidateName = repoName;
-    let suffix = 1;
-    while (true) {
-      const fullName = `${owner}/${candidateName}`;
-      try {
-        execSync(`gh repo view ${fullName}`, { stdio: ['pipe', 'pipe', 'pipe'] });
-        // Repo exists — try next suffix
-        suffix++;
-        candidateName = `${repoName}-${suffix}`;
-        console.log(`Repo ${fullName} already exists, trying ${candidateName}...`);
-      } catch {
-        // Repo doesn't exist — use this name
-        break;
-      }
+    // Check if the exact repo already exists — if so, reuse it
+    const fullName = `${owner}/${repoName}`;
+    try {
+      execSync(`gh repo view ${fullName}`, { stdio: ['pipe', 'pipe', 'pipe'] });
+      console.log(`Repo ${fullName} already exists — reusing it`);
+      return fullName;
+    } catch {
+      // Repo doesn't exist — create it below
     }
-
-    const fullName = `${owner}/${candidateName}`;
 
     try {
       let cmd = `gh repo create ${fullName}`;

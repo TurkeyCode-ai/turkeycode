@@ -954,6 +954,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
    */
   private ensureGitignore(): void {
     const gitignorePath = join(this.workDir, '.gitignore');
+
     if (existsSync(gitignorePath)) return;
 
     const tech = this.state.tech;

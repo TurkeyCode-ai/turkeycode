@@ -70,6 +70,8 @@ export class Spawner {
       const NEVER_PASS_VARS = [
         'DATABASE_URL', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET',
         'SENDGRID_API_KEY', 'NEXTAUTH_SECRET', 'SESSION_SECRET',
+        'CLAUDECODE',  // Prevent "nested session" error when run inside Claude Code
+        'ANTHROPIC_API_KEY',  // Strip so claude uses Max login instead of API key
       ];
       for (const key of NEVER_PASS_VARS) {
         delete cleanEnv[key];
