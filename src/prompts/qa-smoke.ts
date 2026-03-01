@@ -83,7 +83,40 @@ npm init playwright@latest --yes 2>/dev/null || npx playwright install chromium
 which http || pip install httpie 2>/dev/null || brew install httpie 2>/dev/null
 \`\`\`
 
-### 1.4 Start the Application
+### 1.4 Database Setup
+
+**Before starting the app, ensure the database is ready.** Many apps will crash or return empty data without this.
+
+\`\`\`bash
+# For Prisma projects (check for prisma/schema.prisma)
+if [ -f prisma/schema.prisma ]; then
+  # Push schema to test database (creates tables if missing)
+  npx prisma db push --skip-generate 2>/dev/null || npx prisma migrate deploy 2>/dev/null
+  # Generate client if needed
+  npx prisma generate 2>/dev/null
+  # Run seed if available
+  npx prisma db seed 2>/dev/null || true
+fi
+
+# For Drizzle projects
+if [ -f drizzle.config.ts ] || [ -f drizzle.config.js ]; then
+  npx drizzle-kit push 2>/dev/null || true
+fi
+
+# For Knex/other migration tools
+if [ -f knexfile.js ] || [ -f knexfile.ts ]; then
+  npx knex migrate:latest 2>/dev/null || true
+fi
+
+# For Django projects
+if [ -f manage.py ]; then
+  python manage.py migrate 2>/dev/null || true
+fi
+\`\`\`
+
+**If the database won't set up, that's a BLOCKER. Document it.**
+
+### 1.5 Start the Application
 
 **IMPORTANT: Always kill and restart the dev server.** Previous fix attempts may have left the server with stale build cache (missing chunks, broken hot reload). A fresh start is cheap insurance.
 

@@ -69,6 +69,28 @@ ${allCriteria.join('\n')}
 
 ---
 
+## PRE-FLIGHT: DATABASE SETUP
+
+**Before testing, ensure the database has tables and test data.** Many features return empty/error without this.
+
+\`\`\`bash
+# For Prisma projects
+if [ -f prisma/schema.prisma ]; then
+  npx prisma db push --skip-generate 2>/dev/null || npx prisma migrate deploy 2>/dev/null
+  npx prisma generate 2>/dev/null
+  npx prisma db seed 2>/dev/null || true
+fi
+
+# For Drizzle projects
+if [ -f drizzle.config.ts ] || [ -f drizzle.config.js ]; then
+  npx drizzle-kit push 2>/dev/null || true
+fi
+\`\`\`
+
+If the app uses a database, also verify the connection works before running tests. Check the DATABASE_URL in .env.
+
+---
+
 ## FUNCTIONAL TEST PROCEDURE
 
 For EACH core flow:

@@ -180,11 +180,30 @@ Ship nothing you wouldn't be proud of.
 
 ## FIX PROCEDURE
 
+### Step 0: Check Test Environment First
+
+Before touching code, verify the test environment is healthy:
+
+\`\`\`bash
+# Database tables exist?
+if [ -f prisma/schema.prisma ]; then
+  npx prisma db push --skip-generate 2>/dev/null || npx prisma migrate deploy 2>/dev/null
+  npx prisma generate 2>/dev/null
+fi
+
+# App actually starts?
+# Kill stale servers, clear cache, restart
+pkill -f "next dev" 2>/dev/null || true
+rm -rf .next 2>/dev/null || true
+\`\`\`
+
+**Many "component not rendering" bugs are actually missing DB tables or failed API calls, not code bugs.** Check the API endpoints return data before assuming the UI code is broken.
+
 ### Step 1: Fix ALL Blockers First
 
 For EACH blocker:
 1. **Locate** - Find the code causing the issue
-2. **Understand** - Why is it broken?
+2. **Understand** - Why is it broken? (check API responses, DB state, server logs — not just UI code)
 3. **Fix** - Make the minimal change to fix it
 4. **Verify** - Test that it's actually fixed
 5. **Move on** - Don't over-engineer, just fix
