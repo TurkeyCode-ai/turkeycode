@@ -23,6 +23,7 @@ export type AuditEvent =
   | 'qa_failed'
   | 'fix_started'
   | 'fix_completed'
+  | 'fix_reverted'
   | 'jira_sprint_created'
   | 'jira_ticket_created'
   | 'jira_time_logged'

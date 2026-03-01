@@ -4,6 +4,7 @@
  */
 
 import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, unlinkSync, rmSync, statSync } from 'fs';
+import { execSync } from 'child_process';
 import { join } from 'path';
 import {
   ProjectState,
@@ -669,6 +670,8 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     }
 
     let qaPass = false;
+    let preFixSha: string | null = null;  // Git SHA before fix agent runs
+    let prevBlockerCount: number | null = null;  // Blocker count from previous verdict
 
     while (!qaPass && this.state.qaAttempts < MAX_QA_ATTEMPTS) {
       this.state.qaAttempts++;
@@ -723,8 +726,26 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
         this.state.lastQaVerdict = 'NEEDS_FIX';
         auditQA(phaseNumber, attempt, 'failed', { message: verdictGate.message, phase: 'smoke' });
 
+        const currentBlockers = this.getBlockerCount(qaDir, attempt);
+        let reverted = false;
+
+        // Check if previous fix made things worse — revert if so
+        if (preFixSha && prevBlockerCount !== null && currentBlockers > prevBlockerCount) {
+          this.log(`⚠ FIX REGRESSION: ${prevBlockerCount} → ${currentBlockers} blockers. Reverting to pre-fix state...`);
+          try {
+            execSync(`git reset --hard ${preFixSha}`, { cwd: this.workDir, stdio: 'pipe' });
+            this.log(`Reverted to ${preFixSha.slice(0, 8)}`);
+            audit('fix_reverted', { details: { attempt, before: prevBlockerCount, after: currentBlockers, sha: preFixSha } });
+            reverted = true;
+          } catch (err) {
+            this.log(`Failed to revert: ${err}`);
+          }
+        }
+
         // Run fixes
         if (this.state.qaAttempts < MAX_QA_ATTEMPTS) {
+          preFixSha = this.getGitHead();
+          prevBlockerCount = reverted ? prevBlockerCount : currentBlockers;
           await this.runChunkedFixes(phaseNumber, attempt);
         }
 
@@ -795,8 +816,28 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
         this.state.lastQaVerdict = 'NEEDS_FIX';
         auditQA(phaseNumber, attempt, 'failed', { message: verdictGate.message });
 
+        const currentBlockers = this.getBlockerCount(qaDir, attempt);
+        let reverted = false;
+
+        // Check if previous fix made things worse — revert if so
+        if (preFixSha && prevBlockerCount !== null && currentBlockers > prevBlockerCount) {
+          this.log(`⚠ FIX REGRESSION: ${prevBlockerCount} → ${currentBlockers} blockers. Reverting to pre-fix state...`);
+          try {
+            execSync(`git reset --hard ${preFixSha}`, { cwd: this.workDir, stdio: 'pipe' });
+            this.log(`Reverted to ${preFixSha.slice(0, 8)}`);
+            audit('fix_reverted', { details: { attempt: attempt - 1, before: prevBlockerCount, after: currentBlockers, sha: preFixSha } });
+            reverted = true;
+          } catch (err) {
+            this.log(`Failed to revert: ${err}`);
+          }
+        }
+
         // Run fix agents if not last attempt
         if (this.state.qaAttempts < MAX_QA_ATTEMPTS) {
+          // Snapshot git state before fix — revert next round if fix makes things worse
+          preFixSha = this.getGitHead();
+          // After revert, keep original blocker count as baseline (not the inflated regression count)
+          prevBlockerCount = reverted ? prevBlockerCount : currentBlockers;
           await this.runChunkedFixes(phaseNumber, attempt);
         }
       }
@@ -1043,6 +1084,31 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
 
     writeFileSync(gitignorePath, lines.join('\n'));
     this.log('Created .gitignore based on project type');
+  }
+
+  /**
+   * Get current git HEAD SHA
+   */
+  private getGitHead(): string | null {
+    try {
+      return execSync('git rev-parse HEAD', { cwd: this.workDir, stdio: 'pipe' }).toString().trim();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Get blocker count from a verdict file
+   */
+  private getBlockerCount(qaDir: string, attempt: number): number {
+    const verdictPath = `${qaDir}/verdict-${attempt}.json`;
+    if (!existsSync(verdictPath)) return 0;
+    try {
+      const verdict = JSON.parse(readFileSync(verdictPath, 'utf-8'));
+      return (verdict.blockers || []).length;
+    } catch {
+      return 0;
+    }
   }
 
   /**
