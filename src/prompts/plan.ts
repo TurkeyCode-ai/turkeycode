@@ -122,6 +122,7 @@ Create this file with the following EXACT structure:
 - **Coherent** - everything in the phase is related and builds naturally together
 - **Self-contained** - after QA passes, the app works at that phase's level
 - **Buildable in one session** - no dependencies within the phase that require separate sessions
+- **Shippable** - every phase produces a product that could go to production. No placeholder pages, no "coming soon" stubs, no "will be implemented later" text. If a page exists, it must be functional. If it can't be built yet, don't create the page or the nav link.
 
 ### Phase 1 is ALWAYS foundation:
 - Project scaffolding
@@ -159,6 +160,7 @@ Phases: [count]
 - Phase 1 is always foundation/infrastructure
 - Do NOT write any code
 - Do NOT create tickets - create PHASES
+- Do NOT plan placeholder pages. If a page is in the navigation, it MUST be fully built in the phase that creates the navigation. Never assume future sprints will exist — there may be only one sprint. Every deliverable must specify what the page actually does, not just "placeholder"
 
 Then STOP.
 `.trim();

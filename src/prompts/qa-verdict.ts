@@ -135,7 +135,8 @@ Before judging, review EVERY finding from ALL reports and categorize:
 Common out-of-scope findings to filter:
 - Missing features/pages/buttons that are in future phases
 - "Not implemented" for functionality not in deliverables
-- Placeholder content for future-phase features
+
+**IMPORTANT: Placeholder pages ARE blockers.** If a page exists in the navigation and displays "coming soon", "future sprints", "will be implemented later", or similar stub text, that IS a blocker — not an out-of-scope finding. Either the page should be fully functional or the nav link should not exist. Users see every page; placeholder text is not shippable.
 
 ---
 
@@ -149,6 +150,7 @@ Common out-of-scope findings to filter:
 - Data loss or security issues
 - Spec violations that break intended functionality
 - Visual issues that prevent usability (text unreadable, overlapping elements, broken layout)
+- Placeholder/stub pages with "coming soon", "future sprint", or "not implemented" text — if the page is linked in the nav, it must be functional or the link must be removed
 
 ### What goes in WARNINGS (cosmetic polish):
 - Minor alignment/spacing differences
