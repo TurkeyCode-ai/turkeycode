@@ -300,9 +300,17 @@ export class GitHubClient {
       execSync(`git push -u origin ${branchName}`, { stdio: 'inherit' });
       console.log(`Pushed branch: ${branchName}`);
       return true;
-    } catch (err) {
-      console.error(`Failed to push: ${err}`);
-      return false;
+    } catch {
+      // Retry with force-with-lease if normal push fails (e.g. branch diverged on rebuild)
+      try {
+        console.log(`Normal push failed, retrying with --force-with-lease...`);
+        execSync(`git push --force-with-lease -u origin ${branchName}`, { stdio: 'inherit' });
+        console.log(`Force-pushed branch: ${branchName}`);
+        return true;
+      } catch (err) {
+        console.error(`Failed to push: ${err}`);
+        return false;
+      }
     }
   }
 
