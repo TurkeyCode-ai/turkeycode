@@ -118,7 +118,7 @@ import { chromium } from 'playwright';
 async function functionalTest() {
   const browser = await chromium.launch();
   const page = await browser.newPage();
-  await page.goto('http://localhost:4000');
+  await page.goto('http://localhost:5123');
 
   // Example: Test a calculator
   await page.fill('#input-a', '2');
@@ -164,7 +164,7 @@ echo "hello" | ./app --uppercase
 
 \`\`\`bash
 # Test with KNOWN INPUT and verify RESPONSE DATA
-curl -s -X POST http://localhost:4000/api/calculate \\
+curl -s -X POST http://localhost:5123/api/calculate \\
   -H "Content-Type: application/json" \\
   -d '{"a": 2, "b": 3, "op": "add"}'
 
@@ -173,10 +173,10 @@ curl -s -X POST http://localhost:4000/api/calculate \\
 # PASS if response.result === 5
 
 # Verify data persistence
-curl -s -X POST http://localhost:4000/api/users \\
+curl -s -X POST http://localhost:5123/api/users \\
   -d '{"name": "Test"}'
 # Get the created ID
-curl -s http://localhost:4000/api/users/[id]
+curl -s http://localhost:5123/api/users/[id]
 # PASS if user exists and name === "Test"
 \`\`\`
 

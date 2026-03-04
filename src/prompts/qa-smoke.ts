@@ -120,6 +120,8 @@ fi
 
 **IMPORTANT: Always kill and restart the dev server.** Previous fix attempts may have left the server with stale build cache (missing chunks, broken hot reload). A fresh start is cheap insurance.
 
+**CRITICAL: Use port 5123 for all QA testing** — port 3000 is reserved by the platform. Set PORT=5123 when starting the app.
+
 \`\`\`bash
 # Kill any existing dev server first
 pkill -f "next dev" 2>/dev/null || true
@@ -131,10 +133,10 @@ sleep 2
 # For Next.js: clear build cache to prevent stale vendor-chunks
 rm -rf .next 2>/dev/null || true
 
-# Find and run the dev command
-npm run dev &
+# ALWAYS use port 5123 to avoid conflicting with the platform on port 3000
+PORT=5123 npm run dev &
 # or
-npm start &
+PORT=5123 npm start &
 # or
 cargo run &
 # or whatever the project uses
@@ -142,6 +144,8 @@ cargo run &
 # Wait for it to be ready (longer after cache clear)
 sleep 10
 \`\`\`
+
+**Use http://localhost:5123 for ALL test URLs** — never use port 3000.
 
 **If the app won't start, that's a BLOCKER. Document it and STOP.**
 

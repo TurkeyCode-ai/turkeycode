@@ -112,7 +112,7 @@ async function capture() {
     const desktopPage = await browser.newPage({
       viewport: { width: 1280, height: 800 }
     });
-    await desktopPage.goto(\`http://localhost:4000\${route.path}\`);
+    await desktopPage.goto(\`http://localhost:5123\${route.path}\`);
     await desktopPage.waitForTimeout(1000); // Let animations settle
     await desktopPage.screenshot({
       path: \`\${screenshotDir}/\${route.name}-desktop.png\`,
@@ -124,7 +124,7 @@ async function capture() {
     const mobilePage = await browser.newPage({
       viewport: { width: 375, height: 667 }
     });
-    await mobilePage.goto(\`http://localhost:4000\${route.path}\`);
+    await mobilePage.goto(\`http://localhost:5123\${route.path}\`);
     await mobilePage.waitForTimeout(1000);
     await mobilePage.screenshot({
       path: \`\${screenshotDir}/\${route.name}-mobile.png\`,
@@ -158,8 +158,8 @@ mkdir -p ${screenshotsDir}
 \`\`\`bash
 mkdir -p ${screenshotsDir}
 # Document response formats
-curl -s http://localhost:4000/api/health | jq > ${screenshotsDir}/health.json
-curl -s http://localhost:4000/api/users | jq > ${screenshotsDir}/users.json
+curl -s http://localhost:5123/api/health | jq > ${screenshotsDir}/health.json
+curl -s http://localhost:5123/api/users | jq > ${screenshotsDir}/users.json
 \`\`\`
 
 ---
