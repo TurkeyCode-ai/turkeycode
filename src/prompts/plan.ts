@@ -111,30 +111,14 @@ Create this file with the following EXACT structure:
 
 ## PHASE SIZING GUIDELINES
 
-### 2-5 phases total (STRICT)
-- **2 phases**: Small projects (single feature, simple CRUD app)
-- **3 phases**: Medium projects (multi-feature app, typical SaaS)
-- **4 phases**: Large projects (complex business logic, multiple integrations)
-- **5 phases**: Very large projects (enterprise features, compliance, multi-tenant)
+### Exactly 1 phase per sprint (STRICT)
+Each sprint maps to exactly ONE build phase. The sprint already defines the scope — do NOT break it into sub-phases.
 
-### Each phase should be:
-- **30-90 minutes of build time** for one Claude session
-- **Coherent** - everything in the phase is related and builds naturally together
-- **Self-contained** - after QA passes, the app works at that phase's level
-- **Buildable in one session** - no dependencies within the phase that require separate sessions
-- **Shippable** - every phase produces a product that could go to production. No placeholder pages, no "coming soon" stubs, no "will be implemented later" text. If a page exists, it must be functional. If it can't be built yet, don't create the page or the nav link.
-
-### Phase 1 is ALWAYS foundation:
-- Project scaffolding
-- Database setup
-- Auth (if needed)
-- Core entities/models
-- Basic UI shell
-
-### Later phases build features:
-- Group related features together
-- Each phase should leave the app in a working state
-- Don't split tightly coupled features across phases
+### The single phase should be:
+- **Coherent** - everything in the sprint scope is built together in one session
+- **Self-contained** - after QA passes, the app works with all sprint deliverables
+- **Buildable in one session** - one Claude session builds everything for this sprint
+- **Shippable** - produces a product that could go to production. No placeholder pages, no "coming soon" stubs, no "will be implemented later" text. If a page exists, it must be functional.
 
 ## CRITICAL REQUIREMENTS
 
@@ -155,7 +139,7 @@ Phases: [count]
 
 ## RULES
 - Read ${SPECS_FILE} FIRST
-- Create 2-5 phases (not more, not fewer)
+- Create exactly 1 phase (the sprint IS the phase)
 - Each phase must have all required fields
 - Phase 1 is always foundation/infrastructure
 - Do NOT write any code

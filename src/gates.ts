@@ -54,7 +54,7 @@ export class Gates {
   /**
    * Check the plan gate
    * - phase-plan.json exists and is valid
-   * - 2-5 phases, each with name/scope/deliverables/acceptanceCriteria
+   * - exactly 1 phase with name/scope/deliverables/acceptanceCriteria
    * - plan.done signal exists
    */
   checkPlan(): GateResult {
@@ -76,9 +76,9 @@ export class Gates {
             return 'No phases defined in plan';
           }
 
-          // Must have 2-5 phases
-          if (plan.phases.length < 2 || plan.phases.length > 5) {
-            return `Plan has ${plan.phases.length} phases (expected 2-5)`;
+          // Must have exactly 1 phase (sprint = phase)
+          if (plan.phases.length !== 1) {
+            return `Plan has ${plan.phases.length} phases (expected exactly 1 — the sprint IS the phase)`;
           }
 
           // Validate each phase
