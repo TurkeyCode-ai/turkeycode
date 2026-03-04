@@ -41,6 +41,7 @@ export const FIX_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 // Retry limits
 export const MAX_BUILD_RETRIES = 2;
 export const MAX_QA_ATTEMPTS = 5;
+export const MAX_QA_ATTEMPTS_WARNINGS_ONLY = 3;
 
 // Validation thresholds
 export const MIN_SPECS_LENGTH = 200;
@@ -69,7 +70,7 @@ export const PHASE_MODELS: Record<string, string> = {
   'qa-smoke': 'haiku',
   'qa-functional': 'sonnet',
   'qa-visual': 'sonnet',
-  'qa-verdict': 'haiku',
+  'qa-verdict': 'sonnet',
 
   // Fix phases — Opus for debugging (hardest task), Sonnet for compile fixes
   'qa-fix': 'opus',

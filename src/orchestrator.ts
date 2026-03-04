@@ -41,6 +41,7 @@ import {
   FIX_TIMEOUT_MS,
   MAX_BUILD_RETRIES,
   MAX_QA_ATTEMPTS,
+  MAX_QA_ATTEMPTS_WARNINGS_ONLY,
   QA_DIR,
   SCREENSHOTS_DIR,
   RESEARCH_DONE,
@@ -851,8 +852,19 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
           }
         }
 
+        // Determine effective max attempts — cap at 3 if only warnings remain
+        const warningsOnly = this.isWarningsOnly(qaDir, attempt);
+        const effectiveMax = warningsOnly ? MAX_QA_ATTEMPTS_WARNINGS_ONLY : MAX_QA_ATTEMPTS;
+        if (warningsOnly && this.state.qaAttempts >= MAX_QA_ATTEMPTS_WARNINGS_ONLY) {
+          this.log(`Only warnings remain after ${this.state.qaAttempts} attempts — accepting and moving on`);
+          qaPass = true;
+          this.state.lastQaVerdict = 'CLEAN';
+          auditQA(phaseNumber, attempt, 'passed', { note: 'warnings-only acceptance' });
+          break;
+        }
+
         // Run fix agents if not last attempt
-        if (this.state.qaAttempts < MAX_QA_ATTEMPTS) {
+        if (this.state.qaAttempts < effectiveMax) {
           // Snapshot git state before fix — revert next round if fix makes things worse
           preFixSha = this.getGitHead();
           // After revert, keep original blocker count as baseline (not the inflated regression count)
@@ -1113,6 +1125,22 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       return execSync('git rev-parse HEAD', { cwd: this.workDir, stdio: 'pipe' }).toString().trim();
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Check if a verdict has only warnings (no blockers)
+   */
+  private isWarningsOnly(qaDir: string, attempt: number): boolean {
+    const verdictPath = `${qaDir}/verdict-${attempt}.json`;
+    if (!existsSync(verdictPath)) return false;
+    try {
+      const verdict = JSON.parse(readFileSync(verdictPath, 'utf-8'));
+      const blockers = (verdict.blockers || []).length;
+      const warnings = (verdict.warnings || []).length;
+      return blockers === 0 && warnings > 0;
+    } catch {
+      return false;
     }
   }
 
