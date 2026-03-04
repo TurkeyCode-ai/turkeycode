@@ -135,60 +135,79 @@ export class Orchestrator {
       specContent = readFileSync(options.specFile, 'utf-8');
     }
 
-    // ==================== RESEARCH PHASE ====================
-    if (this.state.currentPhase === 'init' || this.state.currentPhase === 'research') {
-      await this.runResearch(specContent);
-    }
+    // Detect if this is a continuation sprint (workspace already has code)
+    const isFirstSprint = !existsSync('package.json') && !existsSync('Dockerfile');
 
-    // ==================== PLAN PHASE ====================
-    if (this.state.currentPhase === 'research' || this.state.currentPhase === 'plan') {
-      await this.runPlan();
-    }
+    if (isFirstSprint) {
+      // ==================== RESEARCH PHASE (sprint 1 only) ====================
+      if (this.state.currentPhase === 'init' || this.state.currentPhase === 'research') {
+        await this.runResearch(specContent);
+      }
 
-    // Load phase plan — gracefully handle missing file on resume
-    const plan = loadPhasePlan();
-    if (!plan) {
-      if (this.state.buildPhases.length > 0) {
-        // Plan file missing but buildPhases already in state — safe to continue
-        this.log('Phase plan file missing but build phases exist in state, continuing...');
-      } else {
-        // No plan file AND no buildPhases — re-run planning
-        this.log('Phase plan missing — re-running plan phase...');
+      // ==================== PLAN PHASE (sprint 1 only) ====================
+      if (this.state.currentPhase === 'research' || this.state.currentPhase === 'plan') {
         await this.runPlan();
-        const retryPlan = loadPhasePlan();
-        if (!retryPlan) {
-          this.log('ERROR: Failed to generate phase plan after retry');
-          process.exit(1);
+      }
+
+      // Load phase plan — gracefully handle missing file on resume
+      const plan = loadPhasePlan();
+      if (!plan) {
+        if (this.state.buildPhases.length > 0) {
+          this.log('Phase plan file missing but build phases exist in state, continuing...');
+        } else {
+          this.log('Phase plan missing — re-running plan phase...');
+          await this.runPlan();
+          const retryPlan = loadPhasePlan();
+          if (!retryPlan) {
+            this.log('ERROR: Failed to generate phase plan after retry');
+            process.exit(1);
+          }
+          this.state.buildPhases = retryPlan.phases;
         }
-        this.state.buildPhases = retryPlan.phases;
+      } else {
+        if (this.state.buildPhases.length > 0) {
+          for (const planPhase of plan.phases) {
+            const existing = this.state.buildPhases.find(p => p.number === planPhase.number);
+            if (existing) {
+              Object.assign(existing, {
+                ...planPhase,
+                jiraTicketKey: existing.jiraTicketKey || planPhase.jiraTicketKey,
+                prNumber: existing.prNumber || planPhase.prNumber,
+                branchName: existing.branchName || planPhase.branchName,
+                status: existing.status !== 'planned' ? existing.status : planPhase.status,
+                buildAttempts: existing.buildAttempts || planPhase.buildAttempts,
+                qaAttempts: existing.qaAttempts || planPhase.qaAttempts,
+                lastQaVerdict: existing.lastQaVerdict || planPhase.lastQaVerdict,
+                startedAt: existing.startedAt || planPhase.startedAt,
+                completedAt: existing.completedAt || planPhase.completedAt,
+              });
+            }
+          }
+        } else {
+          this.state.buildPhases = plan.phases;
+        }
       }
     } else {
-      // Hydrate state from plan — merge with existing state to preserve runtime fields
-      // (jiraTicketKey, prNumber, branchName, status, etc.)
-      if (this.state.buildPhases.length > 0) {
-        for (const planPhase of plan.phases) {
-          const existing = this.state.buildPhases.find(p => p.number === planPhase.number);
-          if (existing) {
-            // Keep plan's spec fields, preserve runtime state
-            Object.assign(existing, {
-              ...planPhase,
-              // Preserve runtime fields that shouldn't be overwritten
-              jiraTicketKey: existing.jiraTicketKey || planPhase.jiraTicketKey,
-              prNumber: existing.prNumber || planPhase.prNumber,
-              branchName: existing.branchName || planPhase.branchName,
-              status: existing.status !== 'planned' ? existing.status : planPhase.status,
-              buildAttempts: existing.buildAttempts || planPhase.buildAttempts,
-              qaAttempts: existing.qaAttempts || planPhase.qaAttempts,
-              lastQaVerdict: existing.lastQaVerdict || planPhase.lastQaVerdict,
-              startedAt: existing.startedAt || planPhase.startedAt,
-              completedAt: existing.completedAt || planPhase.completedAt,
-            });
-          }
-        }
-      } else {
-        this.state.buildPhases = plan.phases;
-      }
+      // ==================== SPRINT 2+ : skip research & plan ====================
+      this.log('Continuation sprint detected — skipping research & plan, going straight to build');
+      this.state.currentPhase = 'build';
+
+      // Auto-generate a single phase from the spec
+      const sprintPhase: BuildPhase = {
+        number: 1,
+        name: description,
+        scope: specContent || description,
+        deliverables: [],
+        acceptanceCriteria: [],
+        prerequisites: [],
+        specContext: specContent || '',
+        status: 'planned',
+        buildAttempts: 0,
+        qaAttempts: 0,
+      };
+      this.state.buildPhases = [sprintPhase];
     }
+
     if (this.state.currentBuildPhaseNumber === 0) {
       this.state.currentBuildPhaseNumber = 1;
     }
