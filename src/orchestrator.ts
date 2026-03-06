@@ -30,6 +30,7 @@ import {
   buildQaVisualPrompt,
   buildQaVerdictPrompt,
   buildQaFixPrompt,
+  buildQaCombinedPrompt,
   buildCodeReviewPrompt,
   buildAarPrompt
 } from './prompts';
@@ -439,18 +440,9 @@ export class Orchestrator {
     if (jiraTicketKey) {
       await this.jira.addComment(jiraTicketKey, `Build complete. Starting QA (attempt ${phase.qaAttempts + 1}).`);
     }
-    await this.runQA(phaseNumber);
+    await this.runQAFast(phaseNumber);
 
-    // ==================== CODE REVIEW ====================
-    if (jiraTicketKey) {
-      await this.jira.addComment(jiraTicketKey, `QA passed. Starting code review.`);
-    }
-    await this.runCodeReview(phaseNumber);
-
-    // ==================== AAR ====================
-    await this.runAAR(phaseNumber);
-
-    // Commit any uncommitted changes (AAR modifies state.json but doesn't always commit)
+    // Commit any uncommitted changes
     if (this.github.hasUncommittedChanges()) {
       this.log(`Committing uncommitted changes before merge...`);
       this.github.commit(`chore: commit remaining changes after phase ${phaseNumber} AAR`);
@@ -654,7 +646,150 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
   }
 
   /**
-   * Run QA phase with retry loop
+   * v3-fast: Combined QA — single session does smoke + functional + verdict.
+   * Replaces the 4-agent carousel with 1 QA session + 1 fix session per attempt.
+   * Max 3 attempts (vs 5 for the old flow).
+   */
+  private async runQAFast(phaseNumber: number): Promise<void> {
+    this.log('\n=== PHASE: QA (FAST MODE) ===\n');
+    auditPhase('qa', 'started', { buildPhase: phaseNumber, mode: 'fast' });
+    this.state.currentPhase = 'qa';
+
+    const qaDir = `${QA_DIR}/phase-${phaseNumber}`;
+    // Clean stale QA artifacts
+    if (existsSync(qaDir)) {
+      const files = readdirSync(qaDir);
+      for (const file of files) {
+        if (file.endsWith('.done') || file.endsWith('.json') || file.endsWith('.md')) {
+          unlinkSync(join(qaDir, file));
+        }
+      }
+    }
+    if (!existsSync(qaDir)) {
+      mkdirSync(qaDir, { recursive: true });
+    }
+
+    this.state.qaAttempts = 0;
+    saveState(this.state);
+
+    const MAX_FAST_QA_ATTEMPTS = 3;
+    let qaPass = false;
+    let preFixSha: string | null = null;
+    let prevBlockerCount: number | null = null;
+
+    while (!qaPass && this.state.qaAttempts < MAX_FAST_QA_ATTEMPTS) {
+      this.state.qaAttempts++;
+      const attempt = this.state.qaAttempts;
+      saveState(this.state);
+
+      this.log(`\n--- QA Attempt ${attempt}/${MAX_FAST_QA_ATTEMPTS} (combined session) ---\n`);
+      auditQA(phaseNumber, attempt, 'started');
+
+      // Single combined QA session: smoke + functional + verdict
+      const qaResult = await this.spawner.run({
+        cwd: this.workDir,
+        prompt: buildQaCombinedPrompt(this.state, phaseNumber, attempt),
+        timeoutMs: QA_TIMEOUT_MS,
+        sessionName: `qa-combined-${attempt}`,
+        doneFile: `${QA_DIR}/phase-${phaseNumber}/verdict-${attempt}.done`,
+        model: getModelForPhase('qa-functional') // Sonnet for combined QA
+      });
+
+      if (qaResult.rateLimited) {
+        this.log('Rate limit detected — waiting 5 minutes before retry...');
+        await new Promise(r => setTimeout(r, 5 * 60 * 1000));
+        this.state.qaAttempts--;
+        saveState(this.state);
+        continue;
+      }
+
+      // Fallback: if verdict file wasn't created, create one
+      const verdictPath = `${qaDir}/verdict-${attempt}.json`;
+      if (!existsSync(verdictPath)) {
+        await new Promise(r => setTimeout(r, 5000)); // Wait for file writes
+        if (!existsSync(verdictPath)) {
+          this.log('Verdict file not created, creating fallback...');
+          this.createFallbackVerdict(qaDir, phaseNumber, attempt);
+        }
+      }
+
+      // Check verdict
+      const verdictGate = this.gates.checkQaVerdict(phaseNumber, attempt);
+      auditGate(`qa-verdict-${attempt}`, verdictGate.passed);
+
+      if (verdictGate.passed) {
+        this.log('QA PASSED — verdict is CLEAN');
+        qaPass = true;
+        this.state.lastQaVerdict = 'CLEAN';
+        auditQA(phaseNumber, attempt, 'passed');
+      } else {
+        this.log(`QA FAILED — ${verdictGate.message}`);
+        this.state.lastQaVerdict = 'NEEDS_FIX';
+        auditQA(phaseNumber, attempt, 'failed', { message: verdictGate.message });
+
+        const currentBlockers = this.getBlockerCount(qaDir, attempt);
+
+        // Check if previous fix made things worse — revert if so
+        let reverted = false;
+        if (preFixSha && prevBlockerCount !== null && currentBlockers > prevBlockerCount) {
+          this.log(`⚠ FIX REGRESSION: ${prevBlockerCount} → ${currentBlockers} blockers. Reverting...`);
+          try {
+            execSync(`git reset --hard ${preFixSha}`, { cwd: this.workDir, stdio: 'pipe' });
+            this.log(`Reverted to ${preFixSha.slice(0, 8)}`);
+            reverted = true;
+          } catch (err) {
+            this.log(`Failed to revert: ${err}`);
+          }
+        }
+
+        // Warnings-only acceptance after 2 attempts
+        const warningsOnly = this.isWarningsOnly(qaDir, attempt);
+        if (warningsOnly && this.state.qaAttempts >= 2) {
+          this.log(`Only warnings remain after ${this.state.qaAttempts} attempts — accepting`);
+          qaPass = true;
+          this.state.lastQaVerdict = 'CLEAN';
+          auditQA(phaseNumber, attempt, 'passed', { note: 'warnings-only acceptance' });
+          break;
+        }
+
+        // Run fix session if not last attempt
+        if (this.state.qaAttempts < MAX_FAST_QA_ATTEMPTS) {
+          preFixSha = this.getGitHead();
+          prevBlockerCount = reverted ? prevBlockerCount : currentBlockers;
+
+          this.log(`\n--- Fix Session (attempt ${attempt}) ---\n`);
+          await this.spawner.run({
+            cwd: this.workDir,
+            prompt: buildQaFixPrompt(this.state, phaseNumber, attempt),
+            timeoutMs: FIX_TIMEOUT_MS,
+            sessionName: `qa-fix-${attempt}`,
+            doneFile: `${QA_DIR}/phase-${phaseNumber}/fix-${attempt}.done`,
+            model: getModelForPhase('qa-fix') // Opus for fixes
+          });
+
+          // Commit fixes
+          const phase = this.state.buildPhases.find(p => p.number === phaseNumber);
+          this.github.commit(`fix: QA attempt ${attempt} fixes`);
+          if (phase?.branchName) {
+            this.github.push(phase.branchName);
+          }
+        }
+      }
+
+      saveState(this.state);
+    }
+
+    if (!qaPass) {
+      this.log('QA FAILED after maximum attempts');
+      auditPhase('qa', 'completed', { passed: false, attempts: this.state.qaAttempts });
+      process.exit(75); // QA exhausted exit code
+    }
+
+    auditPhase('qa', 'completed', { passed: true, attempts: this.state.qaAttempts });
+  }
+
+  /**
+   * Run QA phase with retry loop (LEGACY — kept for reference)
    * Functional and visual tests run in parallel
    */
   private async runQA(phaseNumber: number): Promise<void> {
