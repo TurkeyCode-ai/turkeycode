@@ -290,6 +290,7 @@ echo "DONE - All ${totalIssues} issues fixed at $(date -Iseconds)" > ${fixDone}
 5. **Minimal changes** - Fix the issue, don't refactor
 6. **No new features** - Just fix what's broken, don't build future-phase features
 7. **Commit when done** - Clean atomic commit
+8. **NEVER paste terminal output into source files** - When creating or editing SQL migrations, Prisma files, or any source code, write clean SQL/code only. Do NOT copy-paste terminal output, test results, or formatted text (like box-drawing characters ┌─┐│└─┘) into any file. If you need to create a migration file, write pure SQL statements only.
 
 **CLEAN = ZERO in-scope issues. Not "acceptable". ZERO.**
 
