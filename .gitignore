@@ -35,3 +35,8 @@ npm-debug.log*
 *-DESKTOP-*.ts
 *-DESKTOP-*.tsx
 *-DESKTOP-*.css
+.next/
+releases/
+roast-my-repo/
+tsconfig.tsbuildinfo
+next-env.d.ts
