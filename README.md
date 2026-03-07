@@ -1,224 +1,254 @@
-# turkey-enterprise-v3
+# 🦃 TurkeyCode
 
-**Phase-based orchestrator for Claude Code build workflows.**
+**Describe it. Build it. Deploy it.**
 
-v3 replaces v2's sprint/ticket model with a phase-based approach: 2-5 build phases, each with its own branch, QA cycle, and PR. Parallel QA (smoke + functional + visual), comprehensive fix sessions with full project context, and hard artifact gates between every step.
+One prompt → fully researched, planned, built, and QA'd application. No babysitting, no copy-paste, no "it works on my machine."
 
-## Installation
+TurkeyCode is an open-source build orchestrator that turns a plain English description into a production-ready app — complete with automated QA, code review, and bug fixes.
 
 ```bash
+npx turkeycode run "Build a job board with employer dashboards, \
+  applicant tracking, and Stripe payments"
+```
+
+Then go make coffee. Come back to a working app.
+
+---
+
+## How It Works
+
+TurkeyCode doesn't write code. It **orchestrates** Claude Code through a deterministic pipeline — research, plan, build, test, fix, review — with hard gates between every step. No AI decides what happens next. The orchestrator does.
+
+```
+You: "Build me a recipe sharing app"
+    │
+    ├── 🔍 Research    → tech stack, architecture, prior art
+    ├── 📋 Plan        → 2-5 build phases with deliverables
+    │
+    └── FOR EACH PHASE:
+        ├── 🏗️  Build     → one focused coding session
+        ├── 🧪 QA        → smoke → functional → visual (parallel)
+        ├── 🔧 Fix       → all issues in one session, full context
+        ├── 🔁 Retry     → up to 5 QA cycles until clean
+        ├── 📝 Review    → code review with actionable feedback
+        └── ✅ Merge     → PR merged to main, next phase
+```
+
+Every transition has an **artifact gate** — a file that must exist with valid content before the pipeline moves forward. No hallucinated progress. No skipped steps.
+
+## Quick Start
+
+### Prerequisites
+
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
+- Claude Max subscription ($100/mo) or Anthropic API key
+- Node.js 20+
+- Git
+
+### Install
+
+```bash
+# From npm (coming soon)
+npx turkeycode run "your app description"
+
+# From source
+git clone https://github.com/rangerchaz/turkey-enterprise-v3.git
+cd turkey-enterprise-v3
 npm install
 npm run build
 npm link
 ```
 
-## Usage
-
-### Run a new project
+### Run Your First Build
 
 ```bash
-turkey-enterprise-v3 run "Build a landing page with a contact form" --spec spec.md
+mkdir my-app && cd my-app
+turkeycode run "Build a bookmark manager with tags, search, \
+  and a Chrome extension. Stack: Next.js, Tailwind, SQLite."
 ```
 
-### With Jira and GitHub
+### With a Spec File
 
 ```bash
-turkey-enterprise-v3 run "Build a task management app" \
-  --jira PROJ \
-  --github owner/repo \
-  --spec spec.md
+turkeycode run "Build a project management tool" --spec spec.md
 ```
 
-### Allow cosmetic warnings to pass QA
+### Resume a Build
 
 ```bash
-turkey-enterprise-v3 run "Build a todo app" --allow-warnings
+turkeycode resume
 ```
 
-### Resume from where you left off
+### Check Status
 
 ```bash
-turkey-enterprise-v3 resume
+turkeycode status
 ```
 
-### Check status
+## Spawning Long-Running Builds
+
+Builds can take 30-60+ minutes. To run in the background:
 
 ```bash
-turkey-enterprise-v3 status
+cd /path/to/project
+setsid nohup turkeycode run "your description" --verbose \
+  > build.log 2>&1 < /dev/null &
 ```
 
-### Reset state
+> ⚠️ **Important:** Use `setsid` to create a new session group. Plain `nohup &` is not enough — most process managers and shell session cleanups will kill the process group on disconnect. `setsid` fully detaches it.
+
+Monitor progress:
 
 ```bash
-turkey-enterprise-v3 reset --force
-```
-
-## Architecture
-
-```
-orchestrator (TypeScript CLI, NO AI, deterministic loop)
-  │
-  ├── spawn: research agent → gate: research.done + specs.md
-  ├── spawn: plan agent → gate: phase-plan.json (2-5 phases)
-  │
-  └── FOR EACH phase:
-      │
-      ├── Create branch: phase-N/name
-      ├── spawn: build agent → gate: build.done
-      ├── git commit + push + create PR
-      │
-      ├── QA CYCLE (max 3 attempts):
-      │   ├── Tier 1: spawn smoke agent → gate: smoke.done
-      │   │   └── if critical failures → skip to fix
-      │   ├── Tier 2+3 (PARALLEL):
-      │   │   ├── spawn functional agent → gate: functional.done
-      │   │   └── spawn visual agent → gate: visual.done
-      │   ├── spawn verdict agent → gate: verdict.json
-      │   │   └── blockers = NEEDS_FIX, warnings only = CLEAN
-      │   └── if NEEDS_FIX:
-      │       └── spawn fix agent (single session, full context) → retry
-      │
-      ├── spawn: code review agent → gate: review.md
-      ├── spawn: AAR agent
-      ├── Merge PR to main
-      └── Next phase
+tail -f build.log        # live log
+turkeycode status        # structured status
+ps aux | grep turkeycode # check it's alive
 ```
 
 ## Key Design Principles
 
-### 1. One Session = One Job
+### 🎯 One Session = One Job
+Each Claude session gets a single, scoped prompt. Build ONE phase. Run ONE QA tier. Fix ALL issues in one shot. No sprawling multi-hour sessions that lose context.
 
-Each `claude --print` invocation gets a single scoped prompt. Build ONE phase. Run ONE QA tier. Fix ALL issues in one session.
+### 🧱 Gates Are Walls
+Between every step, the orchestrator checks for specific artifacts on disk. If they don't exist or are invalid: hard stop. Not a warning. This is what makes it reliable.
 
-### 2. Gates Are Walls
+### 📦 Phases Over Tickets
+No Jira-style ticket fragmentation. Each phase has a name, scope, deliverables, and acceptance criteria. The build agent gets full context. One phase = one coherent chunk of work.
 
-Between every session, the orchestrator checks for specific artifacts. If they don't exist or are invalid: hard stop. Not a warning.
+### 🔧 Fix Agents See Everything
+Fix sessions get the comprehensive picture: phase deliverables, all blockers, all warnings, smoke report, and previous attempt history. One session fixes everything coherently.
 
-### 3. Phases Over Tickets
+### 👁️ Visual QA Has Memory
+On attempt 2+, visual QA gets the previous report so it verifies fixes instead of inventing new cosmetic nits. Consistency across attempts.
 
-Each phase has a name, scope, deliverables, and acceptance criteria. The build agent gets the full phase context. No ticket fragmentation.
+### ⚖️ Blockers vs Warnings
+Blockers = broken functionality, dead elements, failed acceptance criteria. Warnings = cosmetic polish. Zero blockers = pass, regardless of warning count.
 
-### 4. Fix Agents See Everything
-
-Fix sessions get the comprehensive prompt: phase deliverables, all blockers, all warnings, smoke report, and previous attempt history. One session fixes everything coherently instead of N blind sessions each fixing one thing.
-
-### 5. Visual QA Has Memory
-
-On attempt 2+, visual QA gets the previous report so it verifies fixes instead of inventing new cosmetic nits. The verdict agent gets previous verdict context to maintain consistency.
-
-### 6. Blockers vs Warnings
-
-Blockers = broken functionality, dead elements, failed acceptance criteria. Warnings = cosmetic polish. The gate checks arrays directly — zero blockers passes, regardless of warning count (with `--allow-warnings`).
-
-## File Structure
+## Architecture
 
 ```
 project/
-├── .turkey/
-│   ├── state.json
-│   ├── audit.log
+├── .turkey/                    # Build state (gitignored)
+│   ├── state.json              # Current phase, QA attempts, etc.
+│   ├── audit.log               # Timestamped event log
 │   ├── reference/
-│   │   ├── specs.md
-│   │   └── research.done
-│   ├── phase-plan.json
+│   │   ├── specs.md            # Research output
+│   │   └── research.done       # Gate artifact
+│   ├── phase-plan.json         # 2-5 phases with deliverables
 │   ├── phases/
-│   │   └── phase-1.done
+│   │   └── phase-1.done        # Build completion gate
 │   ├── qa/
 │   │   └── phase-1/
-│   │       ├── smoke-1.md
-│   │       ├── functional-1.md
-│   │       ├── visual-1.md
-│   │       ├── verdict-1.json
-│   │       ├── fixes-1.md
-│   │       └── fix-1.done
-│   ├── screenshots/
-│   │   └── phase-1/
-│   │       ├── home-desktop.png
-│   │       └── home-mobile.png
-│   ├── reviews/
-│   │   └── phase-1.md
-│   └── aar/
-│       └── phase-1.done
-└── src/
+│   │       ├── smoke-1.md      # Smoke test report
+│   │       ├── functional-1.md # Functional test report
+│   │       ├── visual-1.md     # Visual test report
+│   │       ├── verdict-1.json  # Pass/fail decision
+│   │       └── fixes-1.md      # Fix report
+│   ├── screenshots/            # Visual QA captures
+│   ├── reviews/                # Code review reports
+│   └── aar/                    # After-action reviews
+└── src/                        # Your app's source code
 ```
+
+## Stack-Agnostic QA
+
+The quick-check system auto-detects your project stack before running expensive QA:
+
+| Backend | Frontend | Database |
+|---------|----------|----------|
+| Node.js, Go, Ruby, Python | React, Vue, Angular, Svelte | PostgreSQL, MySQL, MongoDB |
+| .NET, PHP, Rust, Spring | Solid, Astro, Next.js, Nuxt | Redis, SQLite |
+| Elixir | | |
+
+It installs missing prerequisites, starts Docker services, verifies DB connections, checks compilation, and confirms the server starts — all before the first QA agent runs.
+
+## Options
+
+```
+turkeycode run <description>     # Start a new build
+turkeycode resume                # Resume from last checkpoint
+turkeycode status                # Show current state
+turkeycode reset --force         # Nuke state, start fresh
+
+Options:
+  --spec <file>           Spec file for additional context
+  --verbose               Show detailed output
+  --allow-warnings        Let cosmetic warnings pass QA
+  --jira <project>        Create Jira tickets per phase
+  --github <owner/repo>   Create PRs per phase
+```
+
+## Integrations
+
+### Jira (optional)
+
+```bash
+export JIRA_HOST=company.atlassian.net
+export JIRA_EMAIL=you@company.com
+export JIRA_TOKEN=your-token
+turkeycode run "your app" --jira PROJ
+```
+
+### GitHub (optional)
+
+```bash
+export GH_TOKEN=your-token
+turkeycode run "your app" --github owner/repo
+```
+
+## Hosting (Coming Soon)
+
+```bash
+turkeycode deploy
+# → https://my-app.turkeycode.ai
+```
+
+Free tool builds your app. [turkeycode.ai](https://turkeycode.ai) hosts it for you.
 
 ## Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `ANTHROPIC_API_KEY` | Yes* | Anthropic API key (*or use Claude Max `--login`) |
-| `JIRA_HOST` | No | Jira host (e.g., company.atlassian.net) |
+| `ANTHROPIC_API_KEY` | Yes* | Anthropic API key (*or use Claude Max via `claude login`) |
+| `JIRA_HOST` | No | Jira host |
 | `JIRA_EMAIL` | No | Jira email |
 | `JIRA_TOKEN` | No | Jira API token |
-| `JIRA_PROJECT` | No | Default Jira project key |
-| `GH_TOKEN` | No | GitHub token for repo creation |
-| `GITHUB_OWNER` | No | GitHub org/user for repos |
-
-Jira and GitHub integrations are optional. If not configured, the orchestrator skips those steps.
+| `GH_TOKEN` | No | GitHub token |
 
 ## Gate Reference
 
 | Gate | Artifact | Validation |
 |------|----------|------------|
-| research | `.turkey/reference/research.done` | exists, specs.md > 200 chars |
-| plan | `.turkey/phase-plan.json` | valid JSON, 2-5 phases |
-| build | `.turkey/phases/phase-N.done` | exists |
-| qa-smoke | `.turkey/qa/phase-N/smoke-M.done` | exists |
-| qa-functional | `.turkey/qa/phase-N/functional-M.done` | exists |
-| qa-visual | `.turkey/qa/phase-N/visual-M.done` | exists |
-| qa-verdict | `.turkey/qa/phase-N/verdict-M.json` | 0 blockers (0 warnings if strict) |
-| code-review | `.turkey/reviews/phase-N.md` | exists |
-| aar | `.turkey/aar/phase-N.done` | exists |
+| research | `reference/research.done` | exists, specs.md > 200 chars |
+| plan | `phase-plan.json` | valid JSON, 2-5 phases |
+| build | `phases/phase-N.done` | exists |
+| qa-smoke | `qa/phase-N/smoke-M.done` | exists |
+| qa-functional | `qa/phase-N/functional-M.done` | exists |
+| qa-visual | `qa/phase-N/visual-M.done` | exists |
+| qa-verdict | `qa/phase-N/verdict-M.json` | 0 blockers |
+| code-review | `reviews/phase-N.md` | exists |
+| aar | `aar/phase-N.done` | exists |
 
-## Deployment (DigitalOcean)
-
-```bash
-# Configure
-cp deploy/.env.example deploy/.env
-# Edit deploy/.env with your keys
-
-# Deploy droplet
-./deploy/deploy.sh
-
-# Or use the full launcher with a prompt file
-./deploy/launch.sh prompt.md --login
-```
-
-### Droplet Sizes
-
-| Size | RAM | CPU | Price | Use Case |
-|------|-----|-----|-------|----------|
-| s-1vcpu-2gb | 2GB | 1 | $12/mo | Light projects |
-| s-2vcpu-4gb | 4GB | 2 | $24/mo | Medium projects |
-| **s-4vcpu-8gb** | **8GB** | **4** | **$48/mo** | **Recommended** |
-
-### On the Droplet
+## Docker
 
 ```bash
-ssh root@<DROPLET_IP>
-cd /workspace
-turkey-enterprise-v3 run "Build a todo app" --allow-warnings
-turkey-enterprise-v3 status
-turkey-enterprise-v3 resume
-```
-
-### Destroy
-
-```bash
-./deploy/deploy.sh --destroy
-```
-
-## Docker (Local)
-
-```bash
-docker build -t turkey-enterprise-v3 .
+docker build -t turkeycode .
 
 docker run -it --rm \
   -v $(pwd)/workspace:/workspace \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  turkey-enterprise-v3 run "Build a todo app"
+  turkeycode run "Build a todo app"
 ```
+
+## Contributing
+
+PRs welcome. The orchestrator is intentionally simple — it's a deterministic loop, not an AI agent. Keep it that way.
 
 ## License
 
 MIT
+
+---
+
+Built with 🦃 by [@rangerchaz](https://github.com/rangerchaz)
