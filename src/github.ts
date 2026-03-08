@@ -527,8 +527,8 @@ export class GitHubClient {
       return true;
     }
     try {
-      execSync('git init', { stdio: 'inherit' });
-      console.log('Initialized git repository');
+      execSync('git init -b main', { stdio: 'inherit' });
+      console.log('Initialized git repository (branch: main)');
       return true;
     } catch (err) {
       console.error(`Failed to init repo: ${err}`);
