@@ -228,12 +228,52 @@ export GH_TOKEN=your-token
 turkeycode run "your app" --github owner/repo
 ```
 
-## Hosting (Coming Soon)
+## Deploy
+
+Built something? Ship it.
 
 ```bash
-turkeycode deploy
-# → https://my-app.turkeycode.ai
+# Authenticate (once)
+turkey login
+
+# Deploy to turkeycode.ai
+turkey deploy
+# → ✅ Live at https://my-app.turkeycode.ai
+
+# Deploy with a specific tier
+turkey deploy --tier starter
+
+# Deploy with a custom subdomain
+turkey deploy --name cool-app
+
+# Deploy with env vars
+turkey deploy --env .env.production
 ```
+
+**Hosting tiers:**
+
+| Tier | Price | What you get |
+|------|-------|-------------|
+| Free | $0/mo | Static hosting, subdomain, sleeps on idle |
+| Starter | $12/mo | Full stack (DB + Redis), always-on |
+| Pro | $29/mo | + Stripe, Auth, S3, Email, background jobs, custom domain |
+| Business | $49/mo | + Priority support, daily backups, analytics |
+
+```bash
+# List your deployed apps
+turkey apps
+
+# Check app status
+turkey apps status my-app
+
+# Tail logs
+turkey apps logs my-app
+
+# Tear down
+turkey apps delete my-app
+```
+
+The CLI auto-detects your stack, generates a Dockerfile if needed, packages your app, and deploys it. If a `Dockerfile` already exists, it's used as-is.
 
 Free tool builds your app. [turkeycode.ai](https://turkeycode.ai) hosts it for you.
 
