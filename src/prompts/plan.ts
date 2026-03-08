@@ -1,6 +1,7 @@
 /**
  * Plan phase prompt builder
- * Single session that produces phase-plan.json with exactly 1 build phase (sprint = phase)
+ * Produces phase-plan.json with 1-5 sprints. Each sprint = one build phase = one Claude session.
+ * The orchestrator auto-runs all sprints sequentially until the project is complete.
  */
 
 import { ProjectState } from '../types';
@@ -11,7 +12,7 @@ export function buildPlanPrompt(state: ProjectState): string {
 # PLAN PHASE
 
 ## YOUR SINGLE JOB
-Read the specifications and create exactly ONE build phase. One sprint = one phase. Everything gets built in a single Claude session.
+Read the specifications and break the project into 1-5 sprints. Each sprint = one build phase = one Claude session. The orchestrator will auto-run all sprints sequentially — you just plan them.
 
 ## FIRST: READ THE SPECS
 Read the full specifications file FIRST before planning:
@@ -36,21 +37,21 @@ You are NOT creating tickets for human developers. You are creating PHASES for a
 - Loses all context between sessions (every new session = cold start)
 - Doesn't need coordination overhead (no ticket branches, no merging)
 
-**One sprint = one phase = one session. Build everything together.**
+**Each sprint is one focused session. Small projects = 1 sprint. Bigger projects = 2-5 sprints, auto-chained.**
 
 ## OUTPUT: ${PHASE_PLAN_FILE}
 
-Create this file with the following EXACT structure (exactly 1 phase):
+Create this file with the following EXACT structure:
 
 \`\`\`json
 {
   "projectName": "${state.projectDescription}",
-  "totalPhases": 1,
+  "totalPhases": 2,
   "phases": [
     {
       "number": 1,
-      "name": "Complete Build",
-      "scope": "Build the entire project in one session — project structure, all features, all UI, all tests. Everything in scope gets built together.",
+      "name": "Foundation & Core Features",
+      "scope": "Set up project structure, core functionality, and the main user-facing features. After this sprint, the app works end-to-end with core features.",
       "deliverables": [
         "Project scaffolding (package.json, tsconfig, docker-compose)",
         "Database schema with migrations",
@@ -106,16 +107,19 @@ Create this file with the following EXACT structure (exactly 1 phase):
 }
 \`\`\`
 
-## PHASE SIZING GUIDELINES
+## SPRINT SIZING GUIDELINES
 
-### Exactly 1 phase per sprint (STRICT)
-Each sprint maps to exactly ONE build phase. The sprint already defines the scope — do NOT break it into sub-phases.
+### Each sprint (phase) should be:
+- **Coherent** — one focused chunk of work built in one Claude session
+- **Self-contained** — after QA passes, the app works with everything built so far
+- **Buildable in one session** — one Claude session builds everything for this sprint
+- **Shippable** — produces a product that could go to production. No placeholder pages, no "coming soon" stubs. If a page exists, it must be functional.
 
-### The single phase should be:
-- **Coherent** - everything in the sprint scope is built together in one session
-- **Self-contained** - after QA passes, the app works with all sprint deliverables
-- **Buildable in one session** - one Claude session builds everything for this sprint
-- **Shippable** - produces a product that could go to production. No placeholder pages, no "coming soon" stubs, no "will be implemented later" text. If a page exists, it must be functional.
+### How many sprints?
+- **Simple projects** (CLI, landing page, single-feature app): 1 sprint
+- **Medium projects** (full-stack app, API + frontend): 2-3 sprints
+- **Complex projects** (multi-feature SaaS, integrations): 3-5 sprints
+- **Never more than 5** — if it seems like more, make each sprint bigger
 
 ## CRITICAL REQUIREMENTS
 
@@ -136,12 +140,14 @@ Phases: [count]
 
 ## RULES
 - Read ${SPECS_FILE} FIRST
-- Create exactly 1 phase (the sprint IS the phase)
-- Each phase must have all required fields
-- Phase 1 is always foundation/infrastructure
+- Create 1-5 sprints (phases). Each sprint is one build session.
+- Each sprint must have all required fields
+- Sprint 1 is always foundation/core — the app must work after sprint 1
+- Later sprints add features, polish, integrations
+- Each sprint builds on top of previous sprints (code persists between sprints)
 - Do NOT write any code
-- Do NOT create tickets - create PHASES
-- Do NOT plan placeholder pages. If a page is in the navigation, it MUST be fully built in the phase that creates the navigation. Never assume future sprints will exist — there may be only one sprint. Every deliverable must specify what the page actually does, not just "placeholder"
+- Do NOT create tickets — create SPRINTS
+- Do NOT plan placeholder pages. If a page is in the navigation, it MUST be fully built in the sprint that creates the navigation. Every deliverable must specify what the page actually does, not just "placeholder"
 
 Then STOP.
 `.trim();
