@@ -294,15 +294,67 @@ Uses your `gh` CLI auth — no extra tokens needed. Go projects get cross-compil
 
 Free tool builds your app. [turkeycode.ai](https://turkeycode.ai) hosts it for you.
 
-## Environment Variables
+## Setup
+
+### Option A: Claude Max / Pro (Recommended — no API key needed)
+
+If you have a Claude Max or Pro subscription:
+
+```bash
+# Install the Claude CLI and log in
+npm install -g @anthropic-ai/claude-code
+claude login
+
+# That's it — TurkeyCode uses your Claude CLI session automatically
+turkeycode run "your idea"
+```
+
+### Option B: API Key
+
+If you prefer using an API key directly:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-your-key-here
+turkeycode run "your idea"
+```
+
+> ⚠️ API keys are billed per token and can get expensive for large builds. Claude Max ($100/mo or $200/mo) is unlimited and significantly cheaper for this use case.
+
+### GitHub Integration (Optional)
+
+To push builds to GitHub or use `turkey deliver`:
+
+```bash
+# Install and authenticate the GitHub CLI
+brew install gh  # or: apt install gh
+gh auth login
+
+# Now you can push builds and deliver non-web projects
+turkeycode run "your idea" --github yourname/repo
+turkey deliver
+```
+
+### Jira Integration (Optional)
+
+To pull specs from Jira tickets:
+
+```bash
+export JIRA_HOST=yourcompany.atlassian.net
+export JIRA_EMAIL=you@company.com
+export JIRA_TOKEN=your-jira-api-token
+```
+
+Generate a Jira API token at: https://id.atlassian.com/manage-profile/security/api-tokens
+
+### Environment Variables Reference
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `ANTHROPIC_API_KEY` | Yes* | Anthropic API key (*or use Claude Max via `claude login`) |
-| `JIRA_HOST` | No | Jira host |
-| `JIRA_EMAIL` | No | Jira email |
+| `ANTHROPIC_API_KEY` | No* | Anthropic API key. *Not needed if using Claude Max/Pro via `claude login` |
+| `GH_TOKEN` | No | GitHub token (alternative to `gh auth login`) |
+| `JIRA_HOST` | No | Jira instance hostname (e.g. `company.atlassian.net`) |
+| `JIRA_EMAIL` | No | Jira account email |
 | `JIRA_TOKEN` | No | Jira API token |
-| `GH_TOKEN` | No | GitHub token |
 
 ## Gate Reference
 
