@@ -48,8 +48,11 @@ Every transition has an **artifact gate** — a file that must exist with valid 
 ### Install
 
 ```bash
-# From npm (coming soon)
+# From npm
 npx turkeycode run "your app description"
+
+# Or install globally
+npm install -g turkeycode
 
 # From source
 git clone https://github.com/rangerchaz/turkey-enterprise-v3.git
@@ -210,24 +213,6 @@ Options:
   --github <owner/repo>   Create PRs per phase
 ```
 
-## Integrations
-
-### Jira (optional)
-
-```bash
-export JIRA_HOST=company.atlassian.net
-export JIRA_EMAIL=you@company.com
-export JIRA_TOKEN=your-token
-turkeycode run "your app" --jira PROJ
-```
-
-### GitHub (optional)
-
-```bash
-export GH_TOKEN=your-token
-turkeycode run "your app" --github owner/repo
-```
-
 ## Deploy
 
 Built something? Ship it.
@@ -381,9 +366,28 @@ docker run -it --rm \
   turkeycode run "Build a todo app"
 ```
 
+## Troubleshooting
+
+**Build seems stuck?** Check `build.log` or run `turkeycode status`. Each QA cycle can take a few minutes — 5 cycles per phase is normal.
+
+**"Claude not found" error?** Make sure Claude Code is installed: `npm install -g @anthropic-ai/claude-code` then `claude login`.
+
+**QA keeps failing?** Try `--allow-warnings` to let cosmetic issues pass. If it's looping on real bugs, check `.turkey/qa/` for the latest report.
+
+**Process killed on disconnect?** Use `setsid nohup turkeycode run ... < /dev/null &` — see [Spawning Long-Running Builds](#spawning-long-running-builds).
+
+**Need to start over?** `turkeycode reset --force` nukes the `.turkey/` state directory.
+
 ## Contributing
 
 PRs welcome. The orchestrator is intentionally simple — it's a deterministic loop, not an AI agent. Keep it that way.
+
+- **Prompts:** `src/prompts/` — the build, QA, and planning instructions
+- **Gates:** `src/gates.ts` — artifact validation logic
+- **Orchestrator:** `src/orchestrator.ts` — the main loop
+- **Tests:** `npm test` — 98 tests across 8 modules
+
+Please include tests for new features.
 
 ## License
 
@@ -391,4 +395,4 @@ MIT
 
 ---
 
-Built with 🦃 by [@rangerchaz](https://github.com/rangerchaz)
+[turkeycode.ai](https://turkeycode.ai) · Built with <🦃/> by [@rangerchaz](https://github.com/rangerchaz)
