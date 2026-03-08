@@ -33,7 +33,9 @@ npx turkeycode run "Build me a job board with Stripe payments"
 - Bug detection and fixing (up to 5 cycles)
 - Code review
 - Git branches, commits, and PRs per phase
-- Works with any stack (Next.js, Go, Python, Ruby, Rust, etc.)
+- **Stack agnostic** — Next.js, Express, Go, Python, Ruby, Rust, PHP, static sites
+- **Platform agnostic** — builds run anywhere Claude Code runs (Mac, Linux, Docker, cloud VMs)
+- **Bring your own Dockerfile** — or let TurkeyCode generate one for deployment
 
 ---
 

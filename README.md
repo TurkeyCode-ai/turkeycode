@@ -67,6 +67,32 @@ turkeycode run "Build a bookmark manager with tags, search, \
   and a Chrome extension. Stack: Next.js, Tailwind, SQLite."
 ```
 
+### Any Stack. Any Platform.
+
+TurkeyCode doesn't care what you're building with.
+
+```bash
+# Node/Next.js
+turkeycode run "SaaS dashboard with Stripe billing"
+
+# Python/FastAPI
+turkeycode run "REST API for inventory management. FastAPI + SQLAlchemy + Postgres."
+
+# Go
+turkeycode run "CLI tool that monitors Docker containers. Go + Cobra."
+
+# Rust
+turkeycode run "URL shortener. Rust + Axum + SQLite."
+
+# Static site
+turkeycode run "Portfolio site with dark mode. HTML + Tailwind + Alpine.js."
+
+# Bring your own Dockerfile
+turkeycode run "Build a microservice" --spec spec.md
+```
+
+It builds wherever Claude Code runs — Mac, Linux, Docker, cloud VMs. No lock-in.
+
 ### With a Spec File
 
 ```bash
@@ -151,17 +177,22 @@ project/
 └── src/                        # Your app's source code
 ```
 
-## Stack-Agnostic QA
+## Stack-Agnostic — Build & Deploy Anything
 
-The quick-check system auto-detects your project stack before running expensive QA:
+TurkeyCode auto-detects your project and adapts. Build with any stack, deploy with `turkey deploy`.
 
-| Backend | Frontend | Database |
-|---------|----------|----------|
-| Node.js, Go, Ruby, Python | React, Vue, Angular, Svelte | PostgreSQL, MySQL, MongoDB |
-| .NET, PHP, Rust, Spring | Solid, Astro, Next.js, Nuxt | Redis, SQLite |
-| Elixir | | |
+| Runtime | Stacks | Database Detection |
+|---------|--------|--------------------|
+| **Node.js** | Next.js, Express, Fastify, Nest, Hono | Prisma, Drizzle, Mongoose, Knex |
+| **Python** | FastAPI, Django, Flask, Starlette | SQLAlchemy, Django ORM, Tortoise |
+| **Go** | Gin, Echo, Fiber, Chi, stdlib | GORM, sqlx, ent |
+| **Ruby** | Rails, Sinatra, Hanami | ActiveRecord |
+| **Rust** | Axum, Actix, Rocket, Warp | Diesel, SQLx, SeaORM |
+| **PHP** | Laravel, Symfony, Slim | Eloquent, Doctrine |
+| **Static** | HTML, Tailwind, Alpine.js, Astro | — |
+| **Docker** | Bring your own Dockerfile | Auto-detected |
 
-It installs missing prerequisites, starts Docker services, verifies DB connections, checks compilation, and confirms the server starts — all before the first QA agent runs.
+The quick-check system installs missing prerequisites, starts Docker services, verifies DB connections, checks compilation, and confirms the server starts — all before the first QA agent runs.
 
 ## Options
 
