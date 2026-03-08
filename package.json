@@ -1,25 +1,44 @@
 {
-  "name": "turkey-enterprise-v3",
+  "name": "turkeycode",
   "version": "3.0.0",
-  "description": "Parallel orchestrator for Claude Code sprint workflows",
+  "description": "Open-source build engine — one prompt to a production-ready, QA-tested app. Any stack, any platform.",
   "main": "dist/index.js",
   "bin": {
-    "turkey-enterprise-v3": "./dist/index.js"
+    "turkeycode": "./dist/index.js",
+    "turkey": "./dist/index.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
+    "ai",
+    "build",
+    "code-generation",
     "claude",
     "orchestrator",
-    "sprint",
-    "jira",
-    "github"
+    "fullstack",
+    "deploy",
+    "qa",
+    "open-source"
   ],
-  "author": "turkeycode",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rangerchaz/turkey-enterprise-v3"
+  },
+  "homepage": "https://turkeycode.ai",
+  "bugs": {
+    "url": "https://github.com/rangerchaz/turkey-enterprise-v3/issues"
+  },
+  "author": "TurkeyCode <hello@turkeycode.ai>",
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
