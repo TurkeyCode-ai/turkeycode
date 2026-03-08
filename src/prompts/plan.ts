@@ -1,7 +1,6 @@
 /**
  * Plan phase prompt builder
- * Single session that produces phase-plan.json with 2-5 build phases
- * Replaces the old plan-analyze + plan-detail two-step approach
+ * Single session that produces phase-plan.json with exactly 1 build phase (sprint = phase)
  */
 
 import { ProjectState } from '../types';
@@ -12,7 +11,7 @@ export function buildPlanPrompt(state: ProjectState): string {
 # PLAN PHASE
 
 ## YOUR SINGLE JOB
-Read the specifications and divide the project into 2-5 build phases. Each phase = ONE Claude session that builds everything in that phase's scope.
+Read the specifications and create exactly ONE build phase. One sprint = one phase. Everything gets built in a single Claude session.
 
 ## FIRST: READ THE SPECS
 Read the full specifications file FIRST before planning:
@@ -37,21 +36,21 @@ You are NOT creating tickets for human developers. You are creating PHASES for a
 - Loses all context between sessions (every new session = cold start)
 - Doesn't need coordination overhead (no ticket branches, no merging)
 
-**Fewer, bigger phases = fewer cold starts = better results.**
+**One sprint = one phase = one session. Build everything together.**
 
 ## OUTPUT: ${PHASE_PLAN_FILE}
 
-Create this file with the following EXACT structure:
+Create this file with the following EXACT structure (exactly 1 phase):
 
 \`\`\`json
 {
   "projectName": "${state.projectDescription}",
-  "totalPhases": 3,
+  "totalPhases": 1,
   "phases": [
     {
       "number": 1,
-      "name": "Foundation & Core Infrastructure",
-      "scope": "Set up project structure, database schema, authentication, and core entity CRUD. This phase creates the foundation everything else builds on.",
+      "name": "Complete Build",
+      "scope": "Build the entire project in one session — project structure, all features, all UI, all tests. Everything in scope gets built together.",
       "deliverables": [
         "Project scaffolding (package.json, tsconfig, docker-compose)",
         "Database schema with migrations",
