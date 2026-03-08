@@ -76,9 +76,9 @@ export class Gates {
             return 'No phases defined in plan';
           }
 
-          // 1-5 sprints allowed
-          if (plan.phases.length > 5) {
-            return `Plan has ${plan.phases.length} sprints (max 5)`;
+          // Must have at least 1 sprint
+          if (plan.phases.length < 1) {
+            return `Plan has no sprints`;
           }
 
           // Validate each phase

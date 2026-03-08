@@ -12,7 +12,7 @@ export function buildPlanPrompt(state: ProjectState): string {
 # PLAN PHASE
 
 ## YOUR SINGLE JOB
-Read the specifications and break the project into 1-5 sprints. Each sprint = one build phase = one Claude session. The orchestrator will auto-run all sprints sequentially — you just plan them.
+Read the specifications and break the project into as many sprints as needed. Each sprint = one build phase = one Claude session. The orchestrator will auto-run all sprints sequentially — you just plan them.
 
 ## FIRST: READ THE SPECS
 Read the full specifications file FIRST before planning:
@@ -116,10 +116,10 @@ Create this file with the following EXACT structure:
 - **Shippable** — produces a product that could go to production. No placeholder pages, no "coming soon" stubs. If a page exists, it must be functional.
 
 ### How many sprints?
-- **Simple projects** (CLI, landing page, single-feature app): 1 sprint
-- **Medium projects** (full-stack app, API + frontend): 2-3 sprints
-- **Complex projects** (multi-feature SaaS, integrations): 3-5 sprints
-- **Never more than 5** — if it seems like more, make each sprint bigger
+- **Simple projects** (CLI, landing page, single-feature app): 1-2 sprints
+- **Medium projects** (full-stack app, API + frontend): 3-5 sprints
+- **Complex projects** (multi-feature SaaS, integrations): as many as it takes
+- Each sprint should be a meaningful, coherent chunk — not too small, not too big
 
 ## CRITICAL REQUIREMENTS
 
@@ -140,7 +140,7 @@ Phases: [count]
 
 ## RULES
 - Read ${SPECS_FILE} FIRST
-- Create 1-5 sprints (phases). Each sprint is one build session.
+- Create as many sprints as the project needs. Each sprint is one build session.
 - Each sprint must have all required fields
 - Sprint 1 is always foundation/core — the app must work after sprint 1
 - Later sprints add features, polish, integrations
