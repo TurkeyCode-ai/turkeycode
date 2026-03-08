@@ -356,6 +356,67 @@ program
     console.log('');
   });
 
+// ==================== DELIVER COMMAND ====================
+program
+  .command('deliver')
+  .description('Deliver a non-web project to your GitHub (CLI, library, desktop, mobile)')
+  .option('-n, --name <name>', 'Repository name')
+  .option('-d, --description <desc>', 'Repository description')
+  .option('--public', 'Create a public repo (default: private)')
+  .action(async (options) => {
+    const { isGhAuthenticated, getGhUsername, deliverToUserGitHub } = await import('./deploy/github');
+    const { detectProjectType } = await import('./detect-project-type');
+    const cwd = process.cwd();
+
+    console.log('');
+    console.log('╔══════════════════════════════════════════════════════════╗');
+    console.log('║                 TURKEY DELIVER                           ║');
+    console.log('╚══════════════════════════════════════════════════════════╝');
+    console.log('');
+
+    // Check gh auth
+    if (!isGhAuthenticated()) {
+      console.error('❌ GitHub CLI not authenticated.');
+      console.log('   Run: gh auth login');
+      process.exit(1);
+    }
+
+    const username = getGhUsername();
+    console.log(`Authenticated as ${username}`);
+
+    // Detect project
+    const projectType = detectProjectType(cwd);
+    const { basename } = await import('path');
+    const appName = options.name || basename(cwd);
+
+    console.log(`  Project: ${appName}`);
+    console.log(`  Type:    ${projectType}`);
+    console.log('');
+
+    const result = await deliverToUserGitHub({
+      projectDir: cwd,
+      appName,
+      description: options.description,
+      visibility: options.public ? 'public' : 'private',
+    });
+
+    if (result.repoUrl) {
+      console.log('');
+      console.log('╔══════════════════════════════════════════════════════════╗');
+      console.log('║  ✅ DELIVERED                                            ║');
+      console.log('╚══════════════════════════════════════════════════════════╝');
+      console.log('');
+      console.log(`  Repo:     ${result.repoUrl}`);
+      if (result.releaseUrl) {
+        console.log(`  Release:  ${result.releaseUrl}`);
+      }
+      if (result.artifacts.length > 0) {
+        console.log(`  Binaries: ${result.artifacts.length} platform(s)`);
+      }
+      console.log('');
+    }
+  });
+
 // ==================== APPS COMMAND ====================
 const appsCmd = program
   .command('apps')
