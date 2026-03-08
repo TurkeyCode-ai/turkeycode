@@ -275,6 +275,23 @@ turkey apps delete my-app
 
 The CLI auto-detects your stack, generates a Dockerfile if needed, packages your app, and deploys it. If a `Dockerfile` already exists, it's used as-is.
 
+### Non-Web Projects
+
+Built a CLI, library, or desktop app? Deliver it to your GitHub instead:
+
+```bash
+# Push to your GitHub with compiled binaries
+turkey deliver
+
+# Public repo
+turkey deliver --public
+
+# Custom name
+turkey deliver --name my-cool-cli
+```
+
+Uses your `gh` CLI auth — no extra tokens needed. Go projects get cross-compiled for Linux, macOS, and Windows. Rust projects get a native release build. A GitHub release is created automatically with the binaries.
+
 Free tool builds your app. [turkeycode.ai](https://turkeycode.ai) hosts it for you.
 
 ## Environment Variables
