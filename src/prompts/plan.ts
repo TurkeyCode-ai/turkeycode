@@ -98,12 +98,10 @@ Create this file with the following EXACT structure:
     }
   ],
   "architecture": {
-    "stack": "Node.js + TypeScript + React + PostgreSQL",
-    "structure": "Monorepo with backend/ and frontend/ directories",
+    "stack": "[e.g. Node.js + TypeScript + React + PostgreSQL, or Rust + Clap, or Python + FastAPI, etc.]",
+    "structure": "[e.g. Monorepo with backend/ and frontend/, or single binary CLI, or library with src/lib/]",
     "patterns": [
-      "REST API with Express",
-      "React with hooks and context",
-      "Prisma ORM for database"
+      "[e.g. REST API with Express, CLI with Commander, Library with ESM exports, etc.]"
     ]
   }
 }

@@ -4,6 +4,29 @@
  */
 
 // ============================================================================
+// PROJECT TYPE (stack-agnostic detection)
+// ============================================================================
+
+export type ProjectType =
+  | 'web-fullstack'    // Frontend + backend (Next.js, Rails, Django, etc.)
+  | 'web-frontend'     // SPA/static frontend only (Vite, CRA, Astro, etc.)
+  | 'web-api'          // Backend API only, no frontend (Express, FastAPI, Go service, etc.)
+  | 'cli'              // Command-line tool
+  | 'library'          // npm package, pip package, Go module, crate, gem, etc.
+  | 'desktop'          // Electron, Tauri, Qt, etc.
+  | 'mobile'           // React Native, Flutter, Swift, Kotlin, etc.
+  | 'monorepo'         // Multiple project types in one repo
+  | 'unknown';         // Can't determine — fall back to basic compilation checks
+
+/** Project types that have a visual UI component */
+export const VISUAL_PROJECT_TYPES: ProjectType[] = ['web-fullstack', 'web-frontend', 'desktop', 'mobile'];
+
+/** Project types that should skip visual QA entirely */
+export function shouldSkipVisualQA(projectType: ProjectType): boolean {
+  return !VISUAL_PROJECT_TYPES.includes(projectType);
+}
+
+// ============================================================================
 // PHASE TYPES
 // ============================================================================
 
@@ -125,6 +148,9 @@ export interface ProjectState {
   // External integrations
   jiraProject?: string;
   githubRepo?: string;
+
+  // Project type (stack-agnostic)
+  projectType?: ProjectType;
 
   // Phase tracking
   currentPhase: Phase;

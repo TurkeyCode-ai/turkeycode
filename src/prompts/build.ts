@@ -3,8 +3,92 @@
  * Job: Build EVERYTHING in this phase's scope, commit, write build.done, STOP
  */
 
-import { ProjectState, BuildPhase } from '../types';
+import { ProjectState, BuildPhase, ProjectType } from '../types';
 import { PHASES_DIR } from '../constants';
+
+// ==================== Type-Specific Build Instructions ====================
+
+function getTypeSpecificRules(projectType: ProjectType): string {
+  const webRules = `
+8. **No placeholder pages** - NEVER create stub pages with "coming soon" text. If a feature isn't in scope, don't create the page — remove the nav link instead.
+9. **No hardcoded localhost URLs** - Use environment variables for all URLs. For Next.js + Auth.js, use \`AUTH_TRUST_HOST=true\`. Never hardcode \`localhost:3000\`.
+10. **Text contrast** - ALL text must have sufficient contrast (WCAG AA: 4.5:1 body, 3:1 large). Never use light gray on white.
+11. **Security & moderation by default** - For apps with user accounts:
+   - Input sanitization, file upload validation, rate limiting
+   - Auth guards on all mutating API routes
+   - Content moderation hooks (Report button, admin review queue)
+   - CSRF protection on forms
+12. **NEVER paste terminal output into source files** - Migrations must contain pure SQL.
+13. **Favicon** - Generate an SVG favicon in the first build phase.
+14. **Admin API** - If user-generated content exists, create \`/api/admin/config\`, \`/api/admin/content\`, etc.`;
+
+  const cliRules = `
+8. **Implement --help** - Every command and subcommand must have clear usage text via --help flag.
+9. **Implement --version** - Show the version from package.json/Cargo.toml/pyproject.toml.
+10. **Proper exit codes** - 0 = success, 1 = runtime error, 2 = usage error. Never exit 0 on failure.
+11. **stdout vs stderr** - Normal output to stdout, errors/warnings to stderr. This enables piping.
+12. **TTY detection** - Don't add colors/spinners/progress bars when stdout is not a TTY (piped to file or another command).
+13. **Graceful SIGINT** - Handle Ctrl+C: cleanup temp files, close connections, exit cleanly.
+14. **XDG directories** - Store config in \`$XDG_CONFIG_HOME\`, cache in \`$XDG_CACHE_HOME\`, data in \`$XDG_DATA_HOME\`.
+15. **Input validation** - Validate all user inputs, show helpful error messages with usage hints.
+16. **No hardcoded paths** - Use relative paths or configurable paths, never assume specific directory structure.`;
+
+  const libraryRules = `
+8. **Clean public API** - Export a well-defined surface through index.ts / __init__.py / lib.rs. No internal leaks.
+9. **TypeScript types** (if JS/TS) - Ship .d.ts declarations. Export all public types.
+10. **Documentation** - JSDoc/docstrings on all public functions. Include usage examples in README.
+11. **No side effects on import** - Importing the library must not execute anything. All behavior through explicit function calls.
+12. **Minimal dependencies** - Don't bundle unnecessary deps. Keep the install footprint small.
+13. **Tree-shaking** (if applicable) - Use ESM exports, avoid barrel files that prevent dead code elimination.
+14. **Semantic versioning** - Follow semver. Breaking changes = major bump.
+15. **Error handling** - Throw typed errors, not generic strings. Document what each function can throw.`;
+
+  const apiRules = `
+8. **Health endpoint** - Implement \`GET /health\` or \`GET /api/health\` that returns 200 with service status.
+9. **No hardcoded localhost URLs** - Use environment variables for all URLs and origins.
+10. **Security by default** - Auth guards on mutating routes, input sanitization, rate limiting.
+11. **Consistent error format** - Return errors as \`{ error: string, code: string, details?: any }\`.
+12. **CORS configuration** - If needed, use environment variable for allowed origins.
+13. **Request validation** - Validate all request bodies and params. Return 422 with specific field errors.
+14. **Proper HTTP status codes** - 200/201/204 for success, 400/401/403/404/422 for client errors, 500 for server errors.
+15. **Logging** - Structured JSON logging with request ID, method, path, status, duration.`;
+
+  const desktopRules = `
+8. **Window management** - Handle resize, minimize, maximize, close gracefully. Persist window position/size.
+9. **System tray** (if applicable) - Minimize to tray instead of closing. Show notification badge.
+10. **File associations** - Register for relevant file types if the app opens files.
+11. **Auto-update** (if applicable) - Check for updates on startup, allow user to defer.
+12. **Cross-platform** - Test on the target platforms. Handle path separators, line endings, etc.
+13. **Offline support** - Desktop apps should work without internet unless explicitly cloud-dependent.
+14. **Native menus** - Use the OS menu bar with standard shortcuts (Cmd+Q, Ctrl+S, etc.).`;
+
+  const mobileRules = `
+8. **Responsive layouts** - Support all screen sizes from small phones to tablets.
+9. **Platform conventions** - Follow iOS HIG / Material Design guidelines as appropriate.
+10. **Permissions** - Request only necessary permissions, explain why, handle denials gracefully.
+11. **Offline support** - Cache essential data. Show meaningful offline state.
+12. **Deep linking** - Support URL-based navigation if applicable.
+13. **Accessibility** - Add proper labels, support screen readers, ensure tap targets are 44px+.
+14. **Performance** - Minimize re-renders, lazy load screens, optimize images.`;
+
+  switch (projectType) {
+    case 'web-fullstack':
+    case 'web-frontend':
+      return webRules;
+    case 'web-api':
+      return apiRules;
+    case 'cli':
+      return cliRules;
+    case 'library':
+      return libraryRules;
+    case 'desktop':
+      return desktopRules;
+    case 'mobile':
+      return mobileRules;
+    default:
+      return webRules; // fallback to web rules
+  }
+}
 
 export function buildBuildPhasePrompt(
   state: ProjectState,
@@ -157,27 +241,7 @@ echo "DONE - Phase ${phase.number} build completed at $(date -Iseconds)" > ${bui
 5. **Do NOT build ahead** - Only implement what's in this phase's scope
 6. **Do NOT skip deliverables** - Every deliverable must be implemented
 7. **Push when done** - Ensure code is pushed to the phase branch
-8. **No placeholder pages** - NEVER create stub pages with "coming soon", "future sprint", or "will be implemented later" text. If a page is linked in the navigation, it MUST be fully functional. If a feature isn't in scope, don't create the page — remove the nav link instead. Users see every page you create; a stub page is worse than no page.
-9. **No hardcoded localhost URLs** - This app will be deployed to a real domain. NEVER hardcode \`localhost\` in OAuth callback URLs, redirect URIs, API base URLs, CORS origins, or any URL the browser or an external service will use. Always use environment variables (\`NEXTAUTH_URL\`, \`NEXT_PUBLIC_APP_URL\`, \`APP_URL\`, etc.) that are set at deploy time. For Next.js + Auth.js/NextAuth, use \`AUTH_TRUST_HOST=true\` and let the framework derive the callback URL from the request host automatically. For \`.env\` files baked into the image, use placeholder values (e.g. \`http://placeholder\`) that runtime env vars will override — never \`localhost:3000\` or \`localhost:4000\`.
-10. **Text contrast** - ALL text must have sufficient contrast against its background. Never use light gray on white, white on light backgrounds, or any low-contrast color combination. Use WCAG AA minimum: 4.5:1 for body text, 3:1 for large text. When in doubt, use darker text colors (gray-700+ on light backgrounds, gray-200+ on dark backgrounds)
-11. **Security & moderation by default** - Even if the spec doesn't mention it, ALWAYS implement these for any app with user accounts or user-generated content:
-   - **Input sanitization**: Sanitize all user text inputs (strip HTML/script tags, enforce length limits)
-   - **File upload validation**: Validate file types, enforce size limits, scan filenames for path traversal. Image uploads should only accept common image formats (JPEG, PNG, WebP, GIF)
-   - **Rate limiting**: Rate limit account creation, login attempts, content posting, and file uploads to prevent abuse
-   - **Auth guards**: Every API route that creates, modifies, or deletes data must verify the user is authenticated and authorized (owns the resource)
-   - **Content moderation hooks**: For apps where users post public content (text, images, comments), add a moderation flag/report mechanism and an admin review queue. At minimum, add a "Report" button on user-generated content and an admin route to review flagged content
-   - **Email verification**: New accounts should verify their email before being able to post public content
-   - **CSRF protection**: Forms that mutate data should use CSRF tokens or SameSite cookies
-12. **NEVER paste terminal output into source files** - When creating SQL migrations, Prisma files, or source code, write clean SQL/code only. Do NOT copy-paste formatted terminal output (box-drawing characters ┌─┐│└─┘, ANSI escape codes, etc.) into any file. Migration files must contain pure SQL.
-13. **Favicon** - In the FIRST build phase, generate an SVG favicon for the app and place it at the framework-appropriate location (e.g. \`app/icon.svg\` for Next.js, \`public/favicon.svg\` for Vite/CRA). The favicon should be a simple, recognizable icon that reflects the app's purpose and uses the app's primary brand color from the mockups. Keep it simple — a single shape or symbol, not text. Do NOT use a generic placeholder or leave the default framework favicon.
-14. **Admin API for content moderation** - If the app has user-generated content (posts, comments, reviews, images, etc.), create these admin API routes:
-   - \`GET /api/admin/config\` — returns JSON describing content types and their fields, e.g.:
-     \`{ contentTypes: [{ name: "comments", table: "Comment", fields: ["id","content","userId","createdAt"], actions: ["delete","flag"] }] }\`
-   - \`GET /api/admin/content?type=comments&page=1\` — paginated list of content items for that type
-   - \`DELETE /api/admin/content/[id]?type=comments\` — delete a content item
-   - \`PATCH /api/admin/content/[id]?type=comments\` — update flags/status (e.g. set flagged=true)
-   - \`GET /api/admin/content/flagged\` — list all flagged/reported content across all types
-   These routes must verify the caller via the \`X-Admin-Token\` header. Check that it is present and non-empty — the TurkeyCode admin panel only sends this header after validating the app owner's identity with turkeycode.ai. Do NOT require any other auth for these routes.
+${getTypeSpecificRules(state.projectType || 'web-fullstack')}
 
 ---
 
@@ -189,8 +253,6 @@ Before writing build.done, verify:
 3. Code compiles/builds without errors
 4. All changes are committed and pushed
 5. build.done file exists at ${buildDone}
-6. Security basics are in place: auth guards on mutating routes, input sanitization, rate limiting on auth/upload endpoints
-7. If app has user-generated content: /api/admin/config returns valid JSON schema describing content types
 
 Then STOP.
 `.trim();

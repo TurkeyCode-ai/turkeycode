@@ -3,7 +3,7 @@
  * Job: Read all QA results, write verdict JSON (CLEAN or NEEDS_FIX), STOP
  */
 
-import { ProjectState } from '../types';
+import { ProjectState, shouldSkipVisualQA } from '../types';
 import { QA_DIR } from '../constants';
 import { readFileSync, existsSync } from 'fs';
 
@@ -119,10 +119,13 @@ ${smokeReport || 'No smoke report found'}
 ${functionalReport || 'No functional report found'}
 \`\`\`
 
-### Visual Test Report
+${shouldSkipVisualQA(state.projectType || 'web-fullstack')
+    ? `### Visual Test Report
+*Skipped — project type "${state.projectType}" has no visual component. This is expected and NOT a failure.*`
+    : `### Visual Test Report
 \`\`\`markdown
 ${visualReport || 'No visual report found'}
-\`\`\`
+\`\`\``}
 
 ---
 

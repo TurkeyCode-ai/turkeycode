@@ -55,6 +55,8 @@ import {
 } from './constants';
 import { audit, auditGate, auditPhase, auditBuildPhase, auditQA } from './audit';
 import { runQuickChecks } from './quick-check';
+import { detectProjectType } from './detect-project-type';
+import { shouldSkipVisualQA } from './types';
 
 export interface OrchestratorOptions {
   verbose?: boolean;
@@ -129,6 +131,15 @@ export class Orchestrator {
           this.log(`Jira project ready: ${projectKey}`);
         }
       }
+    }
+
+    // ==================== DETECT PROJECT TYPE ====================
+    if (!this.state.projectType) {
+      this.state.projectType = detectProjectType(this.workDir);
+      this.log(`Detected project type: ${this.state.projectType}`);
+      saveState(this.state);
+    } else {
+      this.log(`Project type: ${this.state.projectType}`);
     }
 
     // Load spec file content if provided
@@ -912,7 +923,8 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
 
       // ========== TIER 2+3: FUNCTIONAL + VISUAL (PARALLEL) ==========
       this.log('--- Tier 2+3: Functional + Visual (PARALLEL) ---');
-      const qaResults = await this.spawner.runParallel([
+            // Build QA tasks — skip visual for non-visual project types
+      const qaTasks = [
         {
           cwd: this.workDir,
           prompt: buildQaFunctionalPrompt(this.state, phaseNumber, attempt),
@@ -920,16 +932,24 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
           sessionName: `qa-functional-${attempt}`,
           doneFile: `${QA_DIR}/phase-${phaseNumber}/functional-${attempt}.done`,
           model: getModelForPhase('qa-functional')
-        },
-        {
+        }
+      ];
+
+      const skipVisual = shouldSkipVisualQA(this.state.projectType || 'web-fullstack');
+      if (skipVisual) {
+        this.log(`Skipping visual QA — project type "${this.state.projectType}" has no visual component`);
+      } else {
+        qaTasks.push({
           cwd: this.workDir,
           prompt: buildQaVisualPrompt(this.state, phaseNumber, attempt),
           timeoutMs: QA_TIMEOUT_MS,
           sessionName: `qa-visual-${attempt}`,
           doneFile: `${QA_DIR}/phase-${phaseNumber}/visual-${attempt}.done`,
           model: getModelForPhase('qa-visual')
-        }
-      ], 2);
+        });
+      }
+
+      const qaResults = await this.spawner.runParallel(qaTasks, skipVisual ? 1 : 2);
 
       // Handle rate limiting in QA sessions
       if (qaResults.some(r => r.rateLimited)) {
