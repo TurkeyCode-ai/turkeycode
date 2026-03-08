@@ -375,6 +375,9 @@ export class Orchestrator {
       await this.jira.transitionTicket(jiraTicketKey, 'In Progress');
     }
 
+    // Ensure default branch is 'main' (Claude's git init may create 'master')
+    this.github.ensureMainBranch();
+
     // Create phase branch
     const phaseBranch = `phase-${phaseNumber}/${slugify(phase.name)}`;
     phase.branchName = phaseBranch;

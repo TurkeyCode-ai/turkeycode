@@ -471,6 +471,20 @@ export class GitHubClient {
   /**
    * Get the default branch name (main or master)
    */
+  /**
+   * If on 'master' with no 'main', rename to 'main'
+   */
+  ensureMainBranch(): void {
+    try {
+      const current = execSync('git branch --show-current', { encoding: 'utf-8' }).trim();
+      const branches = execSync('git branch --list', { encoding: 'utf-8' });
+      if (current === 'master' && !branches.includes('main')) {
+        execSync('git branch -m master main', { stdio: 'inherit' });
+        console.log('Renamed branch master → main');
+      }
+    } catch { /* ignore — no git repo yet */ }
+  }
+
   getDefaultBranch(): string {
     try {
       // Check what branches exist
