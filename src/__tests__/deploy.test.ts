@@ -76,8 +76,11 @@ describe('deploy/detect', () => {
     }
   });
 
-  it('throws when no package.json exists', () => {
-    expect(() => detectProject(testDir)).toThrow('No package.json');
+  it('detects static site when no project files exist', () => {
+    writeFileSync(join(testDir, 'index.html'), '<html><body>Hello</body></html>');
+    const detection = detectProject(testDir);
+    expect(detection.runtime).toBe('static');
+    expect(detection.tier).toBe('free');
   });
 
   it('detects Next.js stack', () => {
@@ -121,7 +124,7 @@ describe('deploy/detect', () => {
       dependencies: { '@prisma/client': '^5.0.0', next: '^14.0.0' },
     }));
     const detection = detectProject(testDir);
-    expect(detection.features.database).toBe(true);
+    expect(detection.features.database).toBeTruthy();
   });
 
   it('detects stripe feature', () => {
@@ -222,7 +225,7 @@ describe('deploy/detect', () => {
       engines: { node: '>=18.0.0' },
     }));
     const detection = detectProject(testDir);
-    expect(detection.nodeVersion).toBe('18');
+    expect(detection.runtimeVersion).toBe('18');
   });
 
   it('falls back to node 20 when engines not set', () => {
@@ -232,7 +235,7 @@ describe('deploy/detect', () => {
       dependencies: { express: '^4.18.0' },
     }));
     const detection = detectProject(testDir);
-    expect(detection.nodeVersion).toBe('20');
+    expect(detection.runtimeVersion).toBe('20');
   });
 
   it('detects unknown stack for bare project', () => {
@@ -242,7 +245,8 @@ describe('deploy/detect', () => {
       dependencies: {},
     }));
     const detection = detectProject(testDir);
-    expect(detection.stack).toBe('unknown');
+    expect(detection.stack).toBe('node');
+    expect(detection.runtime).toBe('node');
   });
 
   it('detects features in devDependencies too', () => {
@@ -253,7 +257,7 @@ describe('deploy/detect', () => {
       devDependencies: { prisma: '^5.0.0' },
     }));
     const detection = detectProject(testDir);
-    expect(detection.features.database).toBe(true);
+    expect(detection.features.database).toBeTruthy();
   });
 });
 
@@ -267,7 +271,7 @@ describe('deploy/upload manifest shape', () => {
       name: 'my-app',
       version: '1.2.3',
       stack: 'nextjs' as const,
-      nodeVersion: '20',
+      runtimeVersion: "20",
       features: {
         database: true, redis: false, stripe: false,
         auth: false, s3: false, email: false, backgroundJobs: false,
@@ -281,7 +285,7 @@ describe('deploy/upload manifest shape', () => {
       name: 'custom-name',
       version: detection.version,
       stack: detection.stack,
-      node: detection.nodeVersion,
+      node: detection.runtimeVersion,
       features: detection.features,
       scripts: detection.scripts,
       env: { API_KEY: 'secret' },
@@ -293,17 +297,19 @@ describe('deploy/upload manifest shape', () => {
     expect(manifest.node).toBe('20');
     expect(manifest.tier).toBe('pro');
     expect(manifest.env.API_KEY).toBe('secret');
-    expect(manifest.features.database).toBe(true);
+    expect(manifest.features.database).toBeTruthy();
     expect(manifest.scripts.migrate).toBe('prisma migrate deploy');
   });
 
   it('manifest uses detection tier when no override', () => {
-    const tier = undefined ?? 'starter';
+    const opts: { tier?: string } = {};
+    const tier = opts.tier ?? 'starter';
     expect(tier).toBe('starter');
   });
 
   it('manifest uses options name when provided', () => {
-    const name = 'override-name' ?? 'original-name';
+    const opts: { name?: string } = { name: 'override-name' };
+    const name = opts.name ?? 'original-name';
     expect(name).toBe('override-name');
   });
 });

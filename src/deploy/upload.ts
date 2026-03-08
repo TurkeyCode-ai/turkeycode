@@ -11,13 +11,17 @@ export interface DeployManifest {
   name: string;
   version: string;
   stack: string;
-  node: string;
-  features: Record<string, boolean>;
+  runtime: string;
+  runtimeVersion: string;
+  hasDockerfile: boolean;
+  features: Record<string, boolean | string>;
   scripts: {
+    install?: string;
     build?: string;
     start?: string;
     migrate?: string;
   };
+  expose: number;
   env: Record<string, string>;
   tier: string;
 }
@@ -138,9 +142,12 @@ export async function uploadAndDeploy(
     name: options.name ?? detection.name,
     version: detection.version,
     stack: detection.stack,
-    node: detection.nodeVersion,
-    features: detection.features as unknown as Record<string, boolean>,
+    runtime: detection.runtime,
+    runtimeVersion: detection.runtimeVersion,
+    hasDockerfile: detection.hasDockerfile,
+    features: detection.features as unknown as Record<string, boolean | string>,
     scripts: detection.scripts,
+    expose: detection.expose,
     env: options.env ?? {},
     tier: options.tier ?? detection.tier,
   };
