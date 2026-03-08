@@ -376,7 +376,7 @@ export class Orchestrator {
     }
 
     // Ensure default branch is 'main' (Claude's git init may create 'master')
-    this.github.ensureMainBranch();
+    this.github.ensureMainBranch(this.workDir);
 
     // Create phase branch
     const phaseBranch = `phase-${phaseNumber}/${slugify(phase.name)}`;

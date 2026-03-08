@@ -474,15 +474,15 @@ export class GitHubClient {
   /**
    * If on 'master' with no 'main', rename to 'main'
    */
-  ensureMainBranch(): void {
+  ensureMainBranch(cwd?: string): void {
+    const opts = { encoding: 'utf-8' as const, cwd: cwd || process.cwd() };
     try {
-      const branches = execSync('git branch --list', { encoding: 'utf-8' });
+      const branches = execSync('git branch --list', opts);
       const hasMaster = branches.split('\n').some(b => b.trim() === 'master' || b.trim() === '* master');
       const hasMain = branches.split('\n').some(b => b.trim() === 'main' || b.trim() === '* main');
       if (hasMaster && !hasMain) {
-        // Checkout master first in case we're on a different branch
-        try { execSync('git checkout master', { stdio: 'pipe' }); } catch { /* already on it */ }
-        execSync('git branch -m master main', { stdio: 'inherit' });
+        try { execSync('git checkout master', { ...opts, stdio: 'pipe' }); } catch { /* already on it */ }
+        execSync('git branch -m master main', { ...opts, stdio: 'inherit' });
         console.log('Renamed branch master → main');
       }
     } catch (err) {
