@@ -476,13 +476,18 @@ export class GitHubClient {
    */
   ensureMainBranch(): void {
     try {
-      const current = execSync('git branch --show-current', { encoding: 'utf-8' }).trim();
       const branches = execSync('git branch --list', { encoding: 'utf-8' });
-      if (current === 'master' && !branches.includes('main')) {
+      const hasMaster = branches.split('\n').some(b => b.trim() === 'master' || b.trim() === '* master');
+      const hasMain = branches.split('\n').some(b => b.trim() === 'main' || b.trim() === '* main');
+      if (hasMaster && !hasMain) {
+        // Checkout master first in case we're on a different branch
+        try { execSync('git checkout master', { stdio: 'pipe' }); } catch { /* already on it */ }
         execSync('git branch -m master main', { stdio: 'inherit' });
         console.log('Renamed branch master → main');
       }
-    } catch { /* ignore — no git repo yet */ }
+    } catch (err) {
+      console.log(`[ensureMainBranch] skipped: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   getDefaultBranch(): string {
