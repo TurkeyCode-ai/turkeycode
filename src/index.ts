@@ -243,4 +243,204 @@ program
     }
   });
 
+// ==================== LOGIN COMMAND ====================
+program
+  .command('login')
+  .description('Authenticate with turkeycode.ai')
+  .option('-t, --token <api-key>', 'API token for headless / CI login')
+  .action(async (options) => {
+    const { login } = await import('./deploy/auth');
+    await login({ token: options.token });
+  });
+
+// ==================== DEPLOY COMMAND ====================
+program
+  .command('deploy')
+  .description('Package and deploy the current project to turkeycode.ai')
+  .option('-n, --name <subdomain>', 'Custom subdomain name')
+  .option('-d, --domain <domain>', 'Custom domain (Pro+)')
+  .option('-t, --tier <tier>', 'Explicit tier: free | starter | pro | business')
+  .option('-e, --env <file>', 'Env file to inject (e.g. .env.production)')
+  .option('--skip-build', 'Skip the build step')
+  .action(async (options) => {
+    const { requireAuth } = await import('./deploy/auth');
+    const { detectProject } = await import('./deploy/detect');
+    const { packageApp } = await import('./deploy/package');
+    const { uploadAndDeploy } = await import('./deploy/upload');
+    const { readFileSync, existsSync } = await import('fs');
+
+    const cwd = process.cwd();
+
+    console.log('');
+    console.log('╔══════════════════════════════════════════════════════════╗');
+    console.log('║                  TURKEY DEPLOY                           ║');
+    console.log('╚══════════════════════════════════════════════════════════╝');
+    console.log('');
+
+    // 1. Check auth
+    const creds = requireAuth();
+    console.log(`Authenticated as ${creds.email}`);
+    console.log('');
+
+    // 2. Detect project
+    console.log('Detecting project...');
+    let detection;
+    try {
+      detection = detectProject(cwd);
+    } catch (err) {
+      console.error(`Detection failed: ${(err as Error).message}`);
+      process.exit(1);
+    }
+
+    const effectiveTier = options.tier ?? detection.tier;
+    const effectiveName = options.name ?? detection.name;
+    console.log(`  App:    ${effectiveName}`);
+    console.log(`  Stack:  ${detection.stack}`);
+    console.log(`  Tier:   ${effectiveTier} — ${detection.tierReason}`);
+    console.log('');
+
+    // Load env file if specified
+    let envVars: Record<string, string> = {};
+    if (options.env) {
+      if (!existsSync(options.env)) {
+        console.error(`Env file not found: ${options.env}`);
+        process.exit(1);
+      }
+      const lines = readFileSync(options.env, 'utf-8').split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const eqIdx = trimmed.indexOf('=');
+        if (eqIdx > 0) {
+          const key = trimmed.slice(0, eqIdx).trim();
+          const val = trimmed.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, '');
+          envVars[key] = val;
+        }
+      }
+      console.log(`Loaded ${Object.keys(envVars).length} env vars from ${options.env}`);
+    }
+
+    // 3. Package
+    console.log('Packaging...');
+    let pkg;
+    try {
+      pkg = await packageApp(detection, cwd, {
+        skipBuild: options.skipBuild,
+        envFile: options.env,
+      });
+    } catch (err) {
+      console.error(`Packaging failed: ${(err as Error).message}`);
+      process.exit(1);
+    }
+    console.log(`  Package: ${pkg.sizeMB}MB`);
+    console.log('');
+
+    // 4. Upload and poll
+    let result;
+    try {
+      result = await uploadAndDeploy(pkg.tarballPath, detection, creds.token, {
+        name: effectiveName,
+        tier: effectiveTier,
+        env: envVars,
+      });
+    } catch (err) {
+      console.error(`Deploy failed: ${(err as Error).message}`);
+      process.exit(1);
+    }
+
+    console.log('');
+    console.log(`  App:    ${effectiveName}`);
+    console.log(`  Tier:   ${effectiveTier}`);
+    console.log(`  Stack:  ${detection.stack}`);
+    console.log(`  URL:    ${result.url}`);
+    console.log('');
+  });
+
+// ==================== APPS COMMAND ====================
+const appsCmd = program
+  .command('apps')
+  .description('Manage deployed apps');
+
+appsCmd
+  .command('list', { isDefault: true })
+  .description('List all deployed apps')
+  .action(async () => {
+    const { requireAuth } = await import('./deploy/auth');
+    const { listApps, printApps } = await import('./deploy/apps');
+    const creds = requireAuth();
+    try {
+      const apps = await listApps(creds.token);
+      printApps(apps);
+    } catch (err) {
+      console.error(`Failed to list apps: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  });
+
+appsCmd
+  .command('status [app-name]')
+  .description('Show app health and status')
+  .action(async (appName?: string) => {
+    const { requireAuth } = await import('./deploy/auth');
+    const { listApps, printApps, getAppStatus } = await import('./deploy/apps');
+    const creds = requireAuth();
+    try {
+      if (appName) {
+        const app = await getAppStatus(appName, creds.token);
+        printApps([app]);
+      } else {
+        const apps = await listApps(creds.token);
+        printApps(apps);
+      }
+    } catch (err) {
+      console.error(`Failed to get status: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  });
+
+appsCmd
+  .command('logs <app-name>')
+  .description('Tail logs for an app')
+  .option('-n, --lines <number>', 'Number of log lines', '100')
+  .action(async (appName: string, options) => {
+    const { requireAuth } = await import('./deploy/auth');
+    const { getAppLogs } = await import('./deploy/apps');
+    const creds = requireAuth();
+    try {
+      const logs = await getAppLogs(appName, creds.token, parseInt(options.lines, 10));
+      if (logs.length === 0) {
+        console.log('No logs found.');
+      } else {
+        console.log(logs.join('\n'));
+      }
+    } catch (err) {
+      console.error(`Failed to get logs: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  });
+
+appsCmd
+  .command('delete <app-name>')
+  .description('Tear down a deployed app')
+  .option('-f, --force', 'Skip confirmation')
+  .action(async (appName: string, options) => {
+    const { requireAuth } = await import('./deploy/auth');
+    const { deleteApp } = await import('./deploy/apps');
+    const creds = requireAuth();
+
+    if (!options.force) {
+      console.log(`This will permanently delete '${appName}' and all its data.`);
+      console.log(`Use --force to confirm.`);
+      process.exit(1);
+    }
+
+    try {
+      await deleteApp(appName, creds.token);
+      console.log(`✅ Deleted ${appName}`);
+    } catch (err) {
+      console.error(`Failed to delete app: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  });
+
 program.parse(process.argv);
