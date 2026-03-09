@@ -253,6 +253,39 @@ program
     await login({ token: options.token });
   });
 
+// ==================== RUN-LOCAL COMMAND ====================
+program
+  .command('run-local')
+  .description('Run the current project locally in Docker (mirrors turkeycode.ai hosting)')
+  .option('-p, --port <port>', 'Local port to expose', '3000')
+  .action(async (options) => {
+    const { detectProject } = await import('./deploy/detect');
+    const { runLocal } = await import('./deploy/run-local');
+
+    const cwd = process.cwd();
+
+    console.log('');
+    console.log('╔══════════════════════════════════════════════════════════╗');
+    console.log('║                  TURKEY RUN-LOCAL                        ║');
+    console.log('╚══════════════════════════════════════════════════════════╝');
+    console.log('');
+
+    console.log('Detecting project...');
+    let detection;
+    try {
+      detection = detectProject(cwd);
+    } catch (err) {
+      console.error(`Detection failed: ${(err as Error).message}`);
+      process.exit(1);
+    }
+
+    console.log(`  App:    ${detection.name}`);
+    console.log(`  Stack:  ${detection.stack}`);
+    console.log(`  Tier:   ${detection.tier} — ${detection.tierReason}`);
+
+    await runLocal(cwd, detection);
+  });
+
 // ==================== DEPLOY COMMAND ====================
 program
   .command('deploy')
