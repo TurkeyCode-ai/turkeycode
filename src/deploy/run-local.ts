@@ -387,9 +387,9 @@ export async function runLocal(cwd: string, detection: ProjectDetection): Promis
   const composeCmd = 'docker compose';
 
   try {
-    // Build
+    // Build (use host network for npm/pip/cargo downloads)
     console.log('  Building containers...');
-    execSync(`${composeCmd} -f ${COMPOSE_FILE} -p ${appName} build`, {
+    execSync(`DOCKER_BUILDKIT=1 ${composeCmd} -f ${COMPOSE_FILE} -p ${appName} build --network host`, {
       cwd,
       stdio: 'inherit',
     });
