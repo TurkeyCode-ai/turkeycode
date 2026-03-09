@@ -45,7 +45,15 @@ function generateDockerfile(detection: ProjectDetection, cwd: string): string {
                          existsSync(join(cwd, 'pnpm-lock.yaml')) ? 'corepack enable && pnpm install --frozen-lockfile' :
                          'npm ci';
       const buildCmd = scripts.build ? 'RUN npm run build' : '';
-      const startCmd = scripts.start || 'npm start';
+      // Smart start command based on stack
+      let startCmd = scripts.start || 'npm start';
+      if (!scripts.start) {
+        if (stack === 'vite' || (scripts.build && scripts.build.includes('vite'))) {
+          startCmd = 'npx vite preview --host 0.0.0.0 --port 3000';
+        } else if (stack === 'nextjs') {
+          startCmd = 'npm start';
+        }
+      }
 
       return `FROM node:${nodeVersion}-slim
 WORKDIR /app
