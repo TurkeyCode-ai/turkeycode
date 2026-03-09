@@ -242,7 +242,7 @@ export class GitHubClient {
   branchExists(branchName: string): boolean {
     try {
       // Check local
-      execSync(`git rev-parse --verify ${branchName}`, { stdio: ['pipe', 'pipe', 'pipe'] });
+      execSync(`git rev-parse --verify ${branchName}`, { stdio: ['pipe', 'pipe', 'pipe'], cwd: this.workDir });
       return true;
     } catch {
       // Only check remote if origin is configured
@@ -521,7 +521,7 @@ export class GitHubClient {
    */
   getCurrentBranch(): string | null {
     try {
-      return execSync('git branch --show-current', { encoding: 'utf-8' }).trim();
+      return execSync('git branch --show-current', { encoding: 'utf-8', cwd: this.workDir }).trim();
     } catch {
       return null;
     }

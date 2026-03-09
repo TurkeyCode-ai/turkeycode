@@ -466,12 +466,18 @@ export class Orchestrator {
     // Re-read default branch right before merge (repo now guaranteed to exist)
     const mergeTarget = this.github.getDefaultBranch();
 
-    // Merge phase branch into default branch
+    // Check if the phase branch actually exists (createBranch may have failed silently)
+    const currentBranch = this.github.getCurrentBranch();
+    const phaseBranchExists = this.github.branchExists(phaseBranch);
+
     let merged = false;
-    if (phase.prNumber) {
+    if (!phaseBranchExists) {
+      // Code was built directly on the default branch — no merge needed
+      this.log(`Phase branch '${phaseBranch}' not found — code is already on '${currentBranch}'. Skipping merge.`);
+      merged = true;
+    } else if (phase.prNumber) {
       merged = this.github.mergePR(phase.prNumber);
       if (!merged) {
-        // PR merge failed (conflicts, branch protection, etc.) — fall back to local merge
         this.log(`PR merge failed for #${phase.prNumber}, falling back to local merge...`);
         merged = this.github.mergeBranch(phaseBranch, mergeTarget);
         if (merged && this.github.hasRemote()) {
