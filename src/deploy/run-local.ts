@@ -44,7 +44,7 @@ function generateDockerfile(detection: ProjectDetection, cwd: string): string {
       const installCmd = existsSync(join(cwd, 'yarn.lock')) ? 'yarn install --frozen-lockfile' :
                          existsSync(join(cwd, 'pnpm-lock.yaml')) ? 'corepack enable && pnpm install --frozen-lockfile' :
                          'npm ci';
-      const buildCmd = scripts.build ? `RUN ${scripts.build.replace(/^npm run /, 'npx ')}` : '';
+      const buildCmd = scripts.build ? 'RUN npm run build' : '';
       const startCmd = scripts.start || 'npm start';
 
       return `FROM node:${nodeVersion}-slim
@@ -244,6 +244,25 @@ function buildCompose(detection: ProjectDetection, cwd: string): ComposeFile {
     const dockerfile = generateDockerfile(detection, cwd);
     writeFileSync(join(cwd, 'Dockerfile.turkeycode'), dockerfile);
     console.log(`  Generated Dockerfile.turkeycode`);
+
+    // Generate .dockerignore if not present
+    if (!existsSync(join(cwd, '.dockerignore'))) {
+      const dockerignore = [
+        'node_modules',
+        '.git',
+        '.turkey',
+        '*.log',
+        'build.log',
+        '.next/cache',
+        '.env',
+        '.env.local',
+        '.env.*.local',
+        'docker-compose*.yml',
+        'Dockerfile.turkeycode',
+      ].join('\n') + '\n';
+      writeFileSync(join(cwd, '.dockerignore'), dockerignore);
+      console.log(`  Generated .dockerignore`);
+    }
   }
 
   // Load .env if it exists (don't override what we set)
