@@ -1,6 +1,6 @@
 {
   "name": "turkeycode",
-  "version": "3.0.3",
+  "version": "3.0.4",
   "description": "Open-source build engine — one prompt to a production-ready, QA-tested app. Any stack, any platform.",
   "main": "dist/index.js",
   "bin": {
