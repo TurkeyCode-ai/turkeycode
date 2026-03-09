@@ -23,10 +23,23 @@ const EXCLUDE_PATTERNS = [
 
 // Files/dirs to include in the tarball (if they exist)
 const INCLUDE_CANDIDATES = [
+  // Source code
+  'src',
+  'app',
+  'pages',
+  'components',
+  'lib',
+  'utils',
+  'hooks',
+  'styles',
+  'server',
+  'api',
+  // Build output
   '.next',
   'dist',
   'build',
   'out',
+  // Data / config
   'prisma',
   'public',
   'package.json',
@@ -39,7 +52,35 @@ const INCLUDE_CANDIDATES = [
   'next.config.js',
   'next.config.ts',
   'next.config.mjs',
+  'next-env.d.ts',
   'tsconfig.json',
+  'postcss.config.js',
+  'postcss.config.mjs',
+  'tailwind.config.js',
+  'tailwind.config.ts',
+  // App entry points
+  'index.js',
+  'index.ts',
+  'main.js',
+  'main.ts',
+  'server.js',
+  'server.ts',
+  'app.js',
+  'app.ts',
+  'app.py',
+  'main.py',
+  'manage.py',
+  'main.go',
+  'go.mod',
+  'go.sum',
+  'Cargo.toml',
+  'Cargo.lock',
+  'Gemfile',
+  'Gemfile.lock',
+  'requirements.txt',
+  'pyproject.toml',
+  'composer.json',
+  'composer.lock',
 ];
 
 export interface PackageOptions {
