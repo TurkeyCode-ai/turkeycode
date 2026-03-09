@@ -293,11 +293,47 @@ program
     }
 
     const effectiveTier = options.tier ?? detection.tier;
-    const effectiveName = options.name ?? detection.name;
+    let effectiveName = options.name ?? detection.name;
     console.log(`  App:    ${effectiveName}`);
     console.log(`  Stack:  ${detection.stack}`);
     console.log(`  Tier:   ${effectiveTier} — ${detection.tierReason}`);
     console.log('');
+
+    // Check subdomain availability
+    const subCheckRes = await fetch(
+      `https://turkeycode.ai/api/v1/apps/check?name=${encodeURIComponent(effectiveName)}`
+    ).catch(() => null);
+
+    if (subCheckRes?.ok) {
+      const check = await subCheckRes.json() as {
+        available: boolean;
+        userId?: string;
+        suggestions?: string[];
+      };
+
+      if (!check.available) {
+        // Check if it's our own app (redeploy)
+        const ownAppRes = await fetch(`https://turkeycode.ai/api/v1/apps/${effectiveName}`, {
+          headers: { Authorization: `Bearer ${creds.token}` },
+        }).catch(() => null);
+
+        if (ownAppRes?.ok) {
+          // It's ours — redeploy
+          console.log(`  ♻️  Redeploying ${effectiveName}.turkeycode.ai`);
+          console.log('');
+        } else {
+          // Someone else's — suggest alternatives
+          console.log(`  ⚠️  Subdomain "${effectiveName}.turkeycode.ai" is taken.`);
+          if (check.suggestions && check.suggestions.length > 0) {
+            console.log('  Available alternatives:');
+            check.suggestions.forEach((s, i) => console.log(`    ${i + 1}. ${s}.turkeycode.ai`));
+          }
+          console.log('');
+          console.log(`  Use: turkeycode deploy --name <subdomain>`);
+          process.exit(1);
+        }
+      }
+    }
 
     // If paid tier, handle Stripe checkout
     if (effectiveTier !== 'free') {
