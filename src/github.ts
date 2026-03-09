@@ -162,10 +162,22 @@ export class GitHubClient {
     const stashed = this.stashIfDirty();
     try {
       if (fromBranch) {
-        execSync(`git checkout ${fromBranch}`, { stdio: 'inherit' });
+        // Verify the branch actually exists before checking out
+        try {
+          const branches = execSync('git branch --list', { encoding: 'utf-8', cwd: this.workDir });
+          if (!branches.includes(fromBranch)) {
+            // Try the other common default
+            const fallback = fromBranch === 'main' ? 'master' : 'main';
+            if (branches.includes(fallback)) {
+              console.log(`Branch '${fromBranch}' not found, using '${fallback}'`);
+              fromBranch = fallback;
+            }
+          }
+        } catch { /* no git repo yet, will fail below */ }
+        execSync(`git checkout ${fromBranch}`, { stdio: 'inherit', cwd: this.workDir });
       }
       try {
-        execSync(`git checkout -b ${branchName}`, { stdio: 'inherit' });
+        execSync(`git checkout -b ${branchName}`, { stdio: 'inherit', cwd: this.workDir });
         console.log(`Created branch: ${branchName}`);
       } catch {
         // Branch already exists — just check it out
@@ -438,8 +450,8 @@ export class GitHubClient {
    */
   mergeBranch(sourceBranch: string, targetBranch: string): boolean {
     try {
-      execSync(`git checkout ${targetBranch}`, { stdio: 'inherit' });
-      execSync(`git merge ${sourceBranch}`, { stdio: 'inherit' });
+      execSync(`git checkout ${targetBranch}`, { stdio: 'inherit', cwd: this.workDir });
+      execSync(`git merge ${sourceBranch}`, { stdio: 'inherit', cwd: this.workDir });
       console.log(`Merged ${sourceBranch} into ${targetBranch}`);
       return true;
     } catch (err) {
