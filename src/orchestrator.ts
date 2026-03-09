@@ -465,6 +465,11 @@ export class Orchestrator {
       }
     }
 
+    // Ensure default branch is 'main' before merge (Claude's git init may create 'master')
+    this.github.ensureMainBranch(this.workDir);
+    // Re-read default branch after potential rename
+    const mergeTarget = this.github.getDefaultBranch();
+
     // Merge phase branch into default branch
     let merged = false;
     if (phase.prNumber) {
@@ -472,19 +477,19 @@ export class Orchestrator {
       if (!merged) {
         // PR merge failed (conflicts, branch protection, etc.) — fall back to local merge
         this.log(`PR merge failed for #${phase.prNumber}, falling back to local merge...`);
-        merged = this.github.mergeBranch(phaseBranch, defaultBranch);
+        merged = this.github.mergeBranch(phaseBranch, mergeTarget);
         if (merged && this.github.hasRemote()) {
-          this.github.push(defaultBranch);
+          this.github.push(mergeTarget);
         }
       }
     } else {
       // No PR (no remote) — merge locally
-      this.log(`Merging ${phaseBranch} into ${defaultBranch} locally (no PR)`);
-      merged = this.github.mergeBranch(phaseBranch, defaultBranch);
+      this.log(`Merging ${phaseBranch} into ${mergeTarget} locally (no PR)`);
+      merged = this.github.mergeBranch(phaseBranch, mergeTarget);
     }
 
     if (!merged) {
-      this.log(`ERROR: Failed to merge ${phaseBranch} into ${defaultBranch}. Cannot proceed to next phase.`);
+      this.log(`ERROR: Failed to merge ${phaseBranch} into ${mergeTarget}. Cannot proceed to next phase.`);
       process.exit(1);
     }
 
