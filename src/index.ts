@@ -381,8 +381,8 @@ program
           headers: { Authorization: `Bearer ${creds.token}` },
         }).catch(() => null);
 
-        const existingApp = checkRes?.ok ? await checkRes.json() as { hostingTier?: string } : null;
-        const alreadyPaid = existingApp?.hostingTier && existingApp.hostingTier !== 'free';
+        const existingApp = checkRes?.ok ? await checkRes.json() as { tier?: string; hostingTier?: string } : null;
+        const alreadyPaid = (existingApp?.tier && existingApp.tier !== 'free') || (existingApp?.hostingTier && existingApp.hostingTier !== 'free');
 
         if (!alreadyPaid) {
           // Create checkout session
@@ -424,8 +424,8 @@ program
               headers: { Authorization: `Bearer ${creds.token}` },
             }).catch(() => null);
             if (statusRes?.ok) {
-              const app = await statusRes.json() as { hostingTier?: string };
-              if (app.hostingTier && app.hostingTier !== 'free') {
+              const app = await statusRes.json() as { tier?: string; hostingTier?: string };
+              if ((app.tier && app.tier !== 'free') || (app.hostingTier && app.hostingTier !== 'free')) {
                 paid = true;
                 break;
               }
