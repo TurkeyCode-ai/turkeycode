@@ -46,13 +46,15 @@ function generateDockerfile(detection: ProjectDetection, cwd: string): string {
                          'npm ci';
       const buildCmd = scripts.build ? 'RUN npm run build' : '';
       // Smart start command based on stack
-      let startCmd = scripts.start || 'npm start';
-      if (!scripts.start) {
-        if (stack === 'vite' || (scripts.build && scripts.build.includes('vite'))) {
-          startCmd = 'npx vite preview --host 0.0.0.0 --port 3000';
-        } else if (stack === 'nextjs') {
-          startCmd = 'npm start';
-        }
+      let startCmd: string;
+      if (stack === 'vite' || (scripts.build && scripts.build.includes('vite'))) {
+        startCmd = 'npx vite preview --host 0.0.0.0 --port 3000';
+      } else if (stack === 'nextjs') {
+        startCmd = 'npx next start -p 3000';
+      } else if (scripts.start && !scripts.start.includes('dist/index.js')) {
+        startCmd = scripts.start;
+      } else {
+        startCmd = 'npm start';
       }
 
       return `FROM node:${nodeVersion}-slim
