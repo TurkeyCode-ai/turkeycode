@@ -1,7 +1,7 @@
 {
   "name": "turkeycode",
-  "version": "3.0.0",
-  "description": "Open-source build engine \u2014 one prompt to a production-ready, QA-tested app. Any stack, any platform.",
+  "version": "3.0.1",
+  "description": "Open-source build engine — one prompt to a production-ready, QA-tested app. Any stack, any platform.",
   "main": "dist/index.js",
   "bin": {
     "turkeycode": "./dist/index.js",
