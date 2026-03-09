@@ -39,8 +39,10 @@ export function isGitHubAuthenticated(): boolean {
 export class GitHubClient {
   private available: boolean;
   private authenticated: boolean;
+  workDir: string;
 
   constructor() {
+    this.workDir = process.cwd();
     this.available = isGitHubAvailable();
     this.authenticated = this.available && isGitHubAuthenticated();
 
@@ -492,12 +494,11 @@ export class GitHubClient {
 
   getDefaultBranch(): string {
     try {
-      // Check what branches exist
-      const branches = execSync('git branch --list', { encoding: 'utf-8' });
+      const opts = { encoding: 'utf-8' as const, cwd: this.workDir || process.cwd() };
+      const branches = execSync('git branch --list', opts);
       if (branches.includes('main')) return 'main';
       if (branches.includes('master')) return 'master';
-      // Fall back to checking git config
-      const configured = execSync('git config init.defaultBranch', { encoding: 'utf-8' }).trim();
+      const configured = execSync('git config init.defaultBranch', opts).trim();
       if (configured) return configured;
     } catch { /* ignore */ }
     return 'main'; // default fallback

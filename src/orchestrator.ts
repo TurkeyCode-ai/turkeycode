@@ -86,6 +86,7 @@ export class Orchestrator {
     this.gates = createGates();
     this.jira = createJiraClient(options.jiraProject || this.state.jiraProject);
     this.github = createGitHubClient();
+    this.github.workDir = this.workDir;
   }
 
   /**
@@ -375,9 +376,6 @@ export class Orchestrator {
       await this.jira.transitionTicket(jiraTicketKey, 'In Progress');
     }
 
-    // Ensure default branch is 'main' (Claude's git init may create 'master')
-    this.github.ensureMainBranch(this.workDir);
-
     // Create phase branch
     const phaseBranch = `phase-${phaseNumber}/${slugify(phase.name)}`;
     phase.branchName = phaseBranch;
@@ -465,9 +463,7 @@ export class Orchestrator {
       }
     }
 
-    // Ensure default branch is 'main' before merge (Claude's git init may create 'master')
-    this.github.ensureMainBranch(this.workDir);
-    // Re-read default branch after potential rename
+    // Re-read default branch right before merge (repo now guaranteed to exist)
     const mergeTarget = this.github.getDefaultBranch();
 
     // Merge phase branch into default branch
