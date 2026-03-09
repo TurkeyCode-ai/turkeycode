@@ -299,6 +299,87 @@ program
     console.log(`  Tier:   ${effectiveTier} — ${detection.tierReason}`);
     console.log('');
 
+    // If paid tier, handle Stripe checkout
+    if (effectiveTier !== 'free') {
+      const tierPrices: Record<string, number> = { starter: 12, pro: 29, business: 49 };
+      const price = tierPrices[effectiveTier] ?? 0;
+      if (price > 0) {
+        console.log(`  💳 ${effectiveTier.charAt(0).toUpperCase() + effectiveTier.slice(1)} tier: $${price}/mo`);
+        console.log('');
+
+        // Check if already subscribed for this app
+        const checkRes = await fetch(`https://turkeycode.ai/api/v1/apps/${effectiveName}`, {
+          headers: { Authorization: `Bearer ${creds.token}` },
+        }).catch(() => null);
+
+        const existingApp = checkRes?.ok ? await checkRes.json() as { hostingTier?: string } : null;
+        const alreadyPaid = existingApp?.hostingTier && existingApp.hostingTier !== 'free';
+
+        if (!alreadyPaid) {
+          // Create checkout session
+          const checkoutRes = await fetch('https://turkeycode.ai/api/v1/deploy/checkout', {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${creds.token}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ tier: effectiveTier, appName: effectiveName }),
+          });
+
+          if (!checkoutRes.ok) {
+            const err = await checkoutRes.json().catch(() => ({ error: 'Checkout failed' })) as { error?: string };
+            console.error(`Checkout failed: ${err.error || checkoutRes.statusText}`);
+            process.exit(1);
+          }
+
+          const { checkoutUrl } = await checkoutRes.json() as { checkoutUrl: string };
+
+          console.log('  Complete payment to continue:');
+          console.log('');
+          console.log(`  ${checkoutUrl}`);
+          console.log('');
+
+          // Try to open browser
+          const { exec: execCmd } = await import('child_process');
+          const openCmd = process.platform === 'darwin' ? 'open' :
+                          process.platform === 'win32' ? 'start' : 'xdg-open';
+          execCmd(`${openCmd} "${checkoutUrl}"`, () => {});
+
+          // Wait for payment confirmation
+          console.log('  Waiting for payment...');
+          const maxWait = 300; // 5 minutes
+          let paid = false;
+          for (let i = 0; i < maxWait; i++) {
+            await new Promise(r => setTimeout(r, 2000));
+            const statusRes = await fetch(`https://turkeycode.ai/api/v1/apps/${effectiveName}`, {
+              headers: { Authorization: `Bearer ${creds.token}` },
+            }).catch(() => null);
+            if (statusRes?.ok) {
+              const app = await statusRes.json() as { hostingTier?: string };
+              if (app.hostingTier && app.hostingTier !== 'free') {
+                paid = true;
+                break;
+              }
+            }
+            if (i % 5 === 0 && i > 0) {
+              process.stdout.write('.');
+            }
+          }
+
+          if (!paid) {
+            console.log('');
+            console.error('  Payment not confirmed. Deploy cancelled.');
+            console.error('  If you already paid, try again — your subscription is active.');
+            process.exit(1);
+          }
+
+          console.log('');
+          console.log('  ✅ Payment confirmed!');
+          console.log('');
+        }
+      }
+    }
+
     // Load env file if specified
     let envVars: Record<string, string> = {};
     if (options.env) {
