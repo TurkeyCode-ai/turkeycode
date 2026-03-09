@@ -40,8 +40,8 @@ Every transition has an **artifact gate** — a file that must exist with valid 
 
 | App | What it does | Link |
 |-----|-------------|------|
-| **Roast My Repo** | Paste a GitHub URL, get your repo graded on code quality, docs, CI, and security | [roastmyrepo.dev](https://roastmyrepo.dev) |
 | **HomeChef** | Recipe and meal planning app | [homechef.turkeycode.ai](https://homechef.turkeycode.ai) |
+| **Roast My Repo** | Paste a GitHub URL, get your repo graded on code quality, docs, CI, and security | *coming soon* |
 
 *Built something with TurkeyCode? Open a PR to add it here.*
 
