@@ -76,8 +76,8 @@ DONE - Research completed at [timestamp]
 
 ## FEASIBILITY CHECK
 Before finalizing specs, evaluate:
-- **Proprietary dependencies**: Does this require ROMs, licensed firmware, paid APIs with no free tier, or assets the user won't have? If so, document alternatives (e.g., build a calculator UI from scratch instead of emulating proprietary hardware).
-- **Self-contained**: The finished project must work out of the box with NO external files, accounts, or licenses the user hasn't explicitly requested. If the obvious approach requires proprietary assets, pivot to an open alternative and document why.
+- **Proprietary assets**: Does this require ROMs, licensed firmware, proprietary binaries, or copyrighted data files the user won't have? If so, pivot to building it from scratch (e.g., build a calculator UI instead of emulating proprietary hardware) and document why.
+- **Self-contained**: The finished project must work out of the box. If a dependency requires files the user can't legally obtain, that's a dead end — find an open alternative.
 
 ## RULES
 - Do NOT write any code
