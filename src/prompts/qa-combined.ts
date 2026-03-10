@@ -401,6 +401,7 @@ echo "DONE - QA completed at $(date -Iseconds)" > ${verdictDone}
 5. **Do NOT fix anything** — just test and report
 6. **Write valid JSON** — the verdict file must parse correctly
 7. **NEVER paste terminal output into source files** — if you create test scripts, write clean code only
+8. **Playability check (games/interactive)** — if this is a game or interactive simulation, verify the core loop is actually completable. E.g., can you jump over the first obstacle? Can you score a point? An unbeatable/unplayable game is a BLOCKER, not a warning. Test with default settings — if the user can't succeed in the first 30 seconds, it's broken.
 
 Then STOP.
 `.trim();

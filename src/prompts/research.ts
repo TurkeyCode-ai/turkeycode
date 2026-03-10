@@ -74,6 +74,11 @@ DONE - Research completed at [timestamp]
 4. Verify files exist: \`ls -la ${REFERENCE_DIR}/\`
 5. Write the done signal
 
+## FEASIBILITY CHECK
+Before finalizing specs, evaluate:
+- **Proprietary dependencies**: Does this require ROMs, licensed firmware, paid APIs with no free tier, or assets the user won't have? If so, document alternatives (e.g., build a calculator UI from scratch instead of emulating proprietary hardware).
+- **Self-contained**: The finished project must work out of the box with NO external files, accounts, or licenses the user hasn't explicitly requested. If the obvious approach requires proprietary assets, pivot to an open alternative and document why.
+
 ## RULES
 - Do NOT write any code
 - Do NOT set up the project
