@@ -254,6 +254,20 @@ export class Orchestrator {
     this.log('='.repeat(60));
     this.log('ORCHESTRATION COMPLETE');
     this.log('='.repeat(60));
+    this.log('');
+    this.log('🦃 Your project is ready! Here\'s what you can do next:');
+    this.log('');
+    this.log('  Run locally (Docker):');
+    this.log('    turkeycode run-local');
+    this.log('');
+    this.log('  Deploy to turkeycode.ai:');
+    this.log('    turkeycode login');
+    this.log('    turkeycode deploy');
+    this.log('');
+    this.log('  Iterate — add features or fix bugs:');
+    this.log('    turkeycode run "add dark mode and user profiles"');
+    this.log('');
+    this.log('  Or just run it yourself — check the README for setup instructions.');
   }
 
   /**
