@@ -15,6 +15,7 @@ export type ProjectType =
   | 'library'          // npm package, pip package, Go module, crate, gem, etc.
   | 'desktop'          // Electron, Tauri, Qt, etc.
   | 'mobile'           // React Native, Flutter, Swift, Kotlin, etc.
+  | 'embedded'         // PlatformIO, Arduino, ESP32, STM32, firmware projects
   | 'monorepo'         // Multiple project types in one repo
   | 'unknown';         // Can't determine — fall back to basic compilation checks
 

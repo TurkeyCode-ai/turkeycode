@@ -58,7 +58,7 @@ function checkExplicitType(cwd: string): ProjectType | null {
 function isValidProjectType(type: string): type is ProjectType {
   return [
     'web-fullstack', 'web-frontend', 'web-api', 'cli',
-    'library', 'desktop', 'mobile', 'monorepo', 'unknown'
+    'library', 'desktop', 'mobile', 'embedded', 'monorepo', 'unknown'
   ].includes(type);
 }
 
@@ -67,6 +67,9 @@ function isValidProjectType(type: string): type is ProjectType {
 function applyHeuristics(cwd: string): ProjectType {
   // Check for monorepo first
   if (isMonorepo(cwd)) return 'monorepo';
+
+  // Check embedded/firmware projects (PlatformIO, Arduino)
+  if (isEmbeddedProject(cwd)) return 'embedded';
 
   // Check Node.js projects
   const pkgPath = join(cwd, 'package.json');
@@ -109,6 +112,14 @@ function applyHeuristics(cwd: string): ProjectType {
     return 'mobile';
   }
 
+  // Check native iOS/macOS (Xcode projects, Swift packages)
+  if (isNativeAppleProject(cwd)) return 'mobile';
+
+  // Check native Android (Gradle + Android manifest)
+  if (existsSync(join(cwd, 'build.gradle')) || existsSync(join(cwd, 'build.gradle.kts'))) {
+    if (existsSync(join(cwd, 'app', 'src', 'main', 'AndroidManifest.xml'))) return 'mobile';
+  }
+
   return 'unknown';
 }
 
@@ -135,6 +146,48 @@ function isMonorepo(cwd: string): boolean {
       if (cargo.includes('[workspace]')) return true;
     } catch { /* ignore */ }
   }
+
+  return false;
+}
+
+// ==================== Native Apple (iOS/macOS) Detection ====================
+
+function isNativeAppleProject(cwd: string): boolean {
+  // .xcodeproj or .xcworkspace in root
+  try {
+    const files = readdirSync(cwd);
+    if (files.some(f => f.endsWith('.xcodeproj') || f.endsWith('.xcworkspace'))) return true;
+  } catch { /* ignore */ }
+
+  // Swift Package with iOS/app targets (Package.swift mentioning .iOS or .executableTarget)
+  const swiftPkg = join(cwd, 'Package.swift');
+  if (existsSync(swiftPkg)) {
+    try {
+      const content = readFileSync(swiftPkg, 'utf-8');
+      if (content.includes('.iOS') || content.includes('.macOS')) return true;
+    } catch { /* ignore */ }
+  }
+
+  return false;
+}
+
+// ==================== Embedded/Firmware Detection ====================
+
+function isEmbeddedProject(cwd: string): boolean {
+  // PlatformIO project
+  if (existsSync(join(cwd, 'platformio.ini'))) return true;
+
+  // Arduino project (.ino file in root or sketch directory)
+  try {
+    const files = readdirSync(cwd);
+    if (files.some(f => f.endsWith('.ino'))) return true;
+  } catch { /* ignore */ }
+
+  // ESP-IDF project
+  if (existsSync(join(cwd, 'sdkconfig')) || existsSync(join(cwd, 'CMakeLists.txt')) && existsSync(join(cwd, 'main', 'CMakeLists.txt'))) return true;
+
+  // Zephyr project
+  if (existsSync(join(cwd, 'prj.conf')) && existsSync(join(cwd, 'CMakeLists.txt'))) return true;
 
   return false;
 }

@@ -63,10 +63,32 @@ npm install && npm run build
     case 'mobile':
       return `### Build the mobile app
 \`\`\`bash
-npm install && npx expo build 2>/dev/null || npx react-native build 2>/dev/null || flutter build 2>/dev/null
+# Detect build system and build
+if ls *.xcodeproj 1>/dev/null 2>&1 || ls *.xcworkspace 1>/dev/null 2>&1; then
+  # Native iOS/Swift — Xcode build
+  xcodebuild -scheme "$(xcodebuild -list -json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['project']['schemes'][0])" 2>/dev/null || echo App)" -sdk iphonesimulator -destination 'platform=iOS Simulator,name=iPhone 16' build 2>&1
+elif [ -f "Package.swift" ]; then
+  swift build 2>&1
+elif [ -f "package.json" ]; then
+  npm install && npx expo build 2>/dev/null || npx react-native build 2>/dev/null
+elif [ -f "pubspec.yaml" ]; then
+  flutter build 2>/dev/null
+fi
 \`\`\`
 
 **If the app won't build, that's a BLOCKER. Write verdict and stop.**`;
+
+    case 'embedded':
+      return `### Build the firmware
+\`\`\`bash
+# PlatformIO
+pio run 2>&1
+
+# Or Arduino CLI
+arduino-cli compile --fqbn esp32:esp32:esp32 . 2>&1
+\`\`\`
+
+**If the firmware won't compile, that's a BLOCKER. Write verdict and stop.**`;
 
     default: // web-fullstack, web-frontend
       return `### Database
@@ -144,6 +166,18 @@ curl -s -X POST http://localhost:5123/api/[endpoint] -H "Content-Type: applicati
 For each endpoint:
 - **DEAD** = 500 error, no response, connection refused
 - **LIVE** = correct status code and response format`;
+
+    case 'embedded':
+      return `Verify the firmware compiles cleanly and code structure is correct:
+
+\`\`\`bash
+# Full build with warnings
+pio run 2>&1 || arduino-cli compile --warnings all --fqbn esp32:esp32:esp32 . 2>&1
+\`\`\`
+
+Check for:
+- **DEAD** = compile errors, missing includes, undefined references, memory overflow
+- **LIVE** = compiles clean, fits in flash/RAM, no warnings`;
 
     default: // web apps
       return `Test every interactive element FOR THIS PHASE'S DELIVERABLES:
@@ -224,6 +258,24 @@ curl -s http://localhost:5123/api/items/nonexistent       # Should 404
 - Verify response status codes and body shapes
 - Verify data persistence (create → read → verify)
 - Test auth guards if applicable (mutating routes without token → 401)`;
+
+    case 'embedded':
+      return `For each deliverable and acceptance criterion, verify the firmware:
+
+\`\`\`bash
+# Compile and check memory usage
+pio run -v 2>&1 | tail -20
+
+# Check flash/RAM usage fits the target
+pio run --target size 2>&1 || true
+\`\`\`
+
+- Verify all source files compile without errors or warnings
+- Verify library dependencies resolve correctly
+- Check that flash usage is under 80% and RAM under 70%
+- Review pin assignments for conflicts (two peripherals on same pin)
+- Verify I2C addresses don't collide
+- Check that ISR-safe functions are used in interrupt contexts`;
 
     default: // web apps
       return `For each deliverable and acceptance criterion, verify correct OUTPUT:

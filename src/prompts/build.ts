@@ -64,12 +64,25 @@ function getTypeSpecificRules(projectType: ProjectType): string {
 
   const mobileRules = `
 8. **Responsive layouts** - Support all screen sizes from small phones to tablets.
-9. **Platform conventions** - Follow iOS HIG / Material Design guidelines as appropriate.
-10. **Permissions** - Request only necessary permissions, explain why, handle denials gracefully.
+9. **Platform conventions** - Follow iOS HIG / Material Design guidelines as appropriate. For native Swift/SwiftUI, use standard SwiftUI patterns (@Observable, NavigationStack, .sheet, .alert). For React Native, follow community conventions.
+10. **Permissions** - Request only necessary permissions, explain why, handle denials gracefully. Request permissions lazily (when first needed), not at launch.
 11. **Offline support** - Cache essential data. Show meaningful offline state.
 12. **Deep linking** - Support URL-based navigation if applicable.
-13. **Accessibility** - Add proper labels, support screen readers, ensure tap targets are 44px+.
-14. **Performance** - Minimize re-renders, lazy load screens, optimize images.`;
+13. **Accessibility** - Add proper labels, support screen readers, ensure tap targets are 44pt+.
+14. **Performance** - Minimize re-renders, lazy load screens, optimize images.
+15. **Secure storage** - Store credentials and tokens in Keychain (iOS) or EncryptedSharedPreferences (Android), never UserDefaults/SharedPreferences.
+16. **Build system** - For Xcode projects, ensure schemes build cleanly with no warnings. For Swift packages, ensure \`swift build\` passes.`;
+
+  const embeddedRules = `
+8. **Non-blocking loops** - Use millis()-based timing, never delay() in the main loop. All animations and I/O must be non-blocking.
+9. **Pin definitions** - Define all GPIO pins as named constants at the top of the file. Never use magic numbers for pins.
+10. **Memory constraints** - Minimize heap allocation. Prefer stack variables and fixed-size buffers. Avoid String concatenation in loops.
+11. **Peripheral init** - Initialize all peripherals (I2C, SPI, UART, PWM) in setup with clear error handling. Log failures to Serial.
+12. **Watchdog** - Enable hardware watchdog timer if supported. Feed it in the main loop.
+13. **Power management** - Release unused peripherals (disable PWM, turn off LEDs) when idle. Support sleep modes if applicable.
+14. **Serial debug** - Include Serial.print debug output gated behind a DEBUG flag. Default baud rate 115200.
+15. **Safe defaults** - Servos to center, LEDs off, outputs low on boot. Never leave pins floating.
+16. **platformio.ini** - Keep board, framework, and lib_deps accurate. Pin library versions to avoid breaking changes.`;
 
   switch (projectType) {
     case 'web-fullstack':
@@ -85,6 +98,8 @@ function getTypeSpecificRules(projectType: ProjectType): string {
       return desktopRules;
     case 'mobile':
       return mobileRules;
+    case 'embedded':
+      return embeddedRules;
     default:
       return webRules; // fallback to web rules
   }
