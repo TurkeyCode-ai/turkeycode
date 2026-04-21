@@ -1,23 +1,47 @@
 /**
  * Plan phase prompt builder
- * Produces phase-plan.json with 1-5 sprints. Each sprint = one build phase = one Claude session.
+ * Produces phase-plan.json with N sprints (one per concern). Each sprint = one build phase = one Claude session.
  * The orchestrator auto-runs all sprints sequentially until the project is complete.
  */
 
 import { ProjectState } from '../types';
 import { PHASE_PLAN_FILE, PLAN_DONE, SPECS_FILE } from '../constants';
 
-export function buildPlanPrompt(state: ProjectState): string {
+export function buildPlanPrompt(
+  state: ProjectState,
+  isIterate: boolean = false,
+  hasTicketList: boolean = false
+): string {
+  let modeBanner: string;
+  if (hasTicketList) {
+    modeBanner = `## MODE: TICKET-LIST (existing codebase, multi-ticket spec)
+A working codebase already exists AND the spec contains a list of N independent work items (tickets/issues). Each ticket is small enough that grouping many into one sprint produces an unverifiable mega-phase.
+
+**HARD RULE: Emit ONE SPRINT PER TICKET.** Do not bundle. Do not group "small ones together." If the spec lists 14 tickets, produce 14 sprints (plus any non-ticket prep sprints the spec requires before them). Each sprint's name must include the ticket ID. Each sprint's scope must reference exactly one ticket.
+
+Sprint 1 is NOT "foundation/scaffolding" — the codebase already exists. Sprint 1 is the first ticket in the list (or the first prep step if the spec requires data-model changes before tickets).`;
+  } else if (isIterate) {
+    modeBanner = `## MODE: ITERATE (existing codebase)
+A working codebase already exists in this directory. You are NOT scaffolding from scratch.
+Before planning, survey the repo (read CLAUDE.md if present, scan top-level dirs, package manifests) so each sprint is grounded in the actual code that exists. Sprint 1 is NOT "foundation/scaffolding" — it's the first chunk of NEW work the spec asks for.`;
+  } else {
+    modeBanner = `## MODE: GREENFIELD (new project)
+There is no existing code. Sprint 1 must establish the foundation (scaffolding, core entities, baseline app that runs end-to-end).`;
+  }
+
   return `
 # PLAN PHASE
 
 ## YOUR SINGLE JOB
-Read the specifications and break the project into as many sprints as needed. Each sprint = one build phase = one Claude session. The orchestrator will auto-run all sprints sequentially — you just plan them.
+Read the specifications and break the work into as many sprints as needed. Each sprint = one build phase = one Claude session. The orchestrator will auto-run all sprints sequentially — you just plan them.
+
+${modeBanner}
 
 ## FIRST: READ THE SPECS
 Read the full specifications file FIRST before planning:
 - File: ${SPECS_FILE}
 - This contains all features, tech stack, compliance requirements, and core flows
+- If the spec uses explicit \`PHASE N\` headers, treat each PHASE as one sprint (skip any marked ✅ COMPLETE / DONE).
 
 ## CONTEXT
 
@@ -46,7 +70,7 @@ Create this file with the following EXACT structure:
 \`\`\`json
 {
   "projectName": "${state.projectDescription}",
-  "totalPhases": 2,
+  "totalPhases": "<number of phases>",
   "phases": [
     {
       "number": 1,
@@ -109,17 +133,22 @@ Create this file with the following EXACT structure:
 
 ## SPRINT SIZING GUIDELINES
 
+### The golden rule: ONE CONCERN PER SPRINT
+Each sprint must be small enough that a QA agent can verify it by reading the git diff and running targeted tests. If you can't describe the sprint's acceptance criteria in 3-5 bullet points, it's too big — split it.
+
 ### Each sprint (phase) should be:
-- **Coherent** — one focused chunk of work built in one Claude session
-- **Self-contained** — after QA passes, the app works with everything built so far
-- **Buildable in one session** — one Claude session builds everything for this sprint
-- **Shippable** — produces a product that could go to production. No placeholder pages, no "coming soon" stubs. If a page exists, it must be functional.
+- **Focused** — one logical concern (one entity, one feature, one migration, one UI page). NOT "backend + frontend + tests" bundled together.
+- **Independently verifiable** — after QA passes, you can prove THIS sprint's deliverables work without testing the entire app end-to-end.
+- **Buildable in one session** — one Claude session builds everything for this sprint.
+- **Non-breaking** — the app still compiles and starts after this sprint. It doesn't have to be feature-complete yet, but it must not crash.
 
 ### How many sprints?
-- **Simple projects** (CLI, landing page, single-feature app): 1-2 sprints
-- **Medium projects** (full-stack app, API + frontend): 3-5 sprints
-- **Complex projects** (multi-feature SaaS, integrations): as many as it takes
-- Each sprint should be a meaningful, coherent chunk — not too small, not too big
+Create as many sprints as the work requires. There is NO upper limit. Guidelines:
+- **1 sprint per distinct feature, entity, or integration point** in the spec.
+- A spec with 5 features = at least 5 sprints. A spec with 14 tickets = 14 sprints.
+- Backend-only work (models, services, controllers) and frontend-only work (components, routes, stores) for the same feature should be ONE sprint — not split across layers.
+- Cross-cutting changes (ripping out a dependency, adding a new framework) should be their own sprint(s), done BEFORE the features that depend on them.
+- **Never bundle unrelated features into one sprint** to "save time." Small sprints pass QA on the first try; mega-sprints fail repeatedly and waste more time overall.
 
 ## CRITICAL REQUIREMENTS
 
@@ -142,8 +171,8 @@ Phases: [count]
 - Read ${SPECS_FILE} FIRST
 - Create as many sprints as the project needs. Each sprint is one build session.
 - Each sprint must have all required fields
-- Sprint 1 is always foundation/core — the app must work after sprint 1
-- Later sprints add features, polish, integrations
+- Greenfield only: Sprint 1 is foundation/core — the app must work after sprint 1. Later sprints add features, polish, integrations.
+- Iterate mode: Sprint 1 is the first chunk of NEW work from the spec. The existing codebase IS the foundation — do NOT re-scaffold.
 - Each sprint builds on top of previous sprints (code persists between sprints)
 - Do NOT write any code
 - Do NOT create tickets — create SPRINTS

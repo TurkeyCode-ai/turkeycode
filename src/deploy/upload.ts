@@ -92,7 +92,7 @@ const STATUS_MESSAGES: Record<string, string> = {
   running: 'Configuring SSL...',
 };
 
-async function pollStatus(deployId: string, token: string, spinner: Spinner): Promise<DeployStatus> {
+async function pollStatus(deployId: string, appName: string, token: string, spinner: Spinner): Promise<DeployStatus> {
   const maxAttempts = 120; // 2 minutes max
   const pollInterval = 3000; // 3 seconds
 
@@ -124,12 +124,25 @@ async function pollStatus(deployId: string, token: string, spinner: Spinner): Pr
 
     if (data.status === 'failed') {
       spinner.stop('✗ Deploy failed');
-      const logs = data.logs?.slice(-10).join('\n') ?? '';
-      throw new Error(`Deploy failed.\n${logs}`);
+      const logs = data.logs?.slice(-10).join('\n').trim() ?? '';
+      if (logs) {
+        throw new Error(`Deploy failed:\n${logs}`);
+      }
+      // Server returned failure with no log lines attached. Tell the user
+      // exactly where to look rather than leaving them with a blank "Deploy
+      // failed." message.
+      throw new Error(
+        `Deploy failed. No error logs returned from the deploy service.\n` +
+        `  Deploy ID: ${deployId}\n` +
+        `  Next steps:\n` +
+        `    • turkey apps logs ${appName}\n` +
+        `    • turkey apps status ${appName}\n` +
+        `    • https://turkeycode.ai/apps/${appName}`
+      );
     }
   }
 
-  throw new Error('Deploy timed out after 2 minutes. Check status with: turkey apps status');
+  throw new Error(`Deploy timed out after 2 minutes. Check status with: turkey apps status ${appName}`);
 }
 
 export async function uploadAndDeploy(
@@ -191,7 +204,7 @@ export async function uploadAndDeploy(
   spinner.update('Provisioning container...');
 
   // Poll until running
-  const status = await pollStatus(deploy.deployId, token, spinner);
+  const status = await pollStatus(deploy.deployId, manifest.name, token, spinner);
 
   spinner.stop(`✅ Live at ${status.url}`);
 

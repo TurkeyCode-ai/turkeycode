@@ -39,6 +39,7 @@ import {
   PLAN_TIMEOUT_MS,
   PHASE_BUILD_TIMEOUT_MS,
   QA_TIMEOUT_MS,
+  AAR_TIMEOUT_MS,
   FIX_TIMEOUT_MS,
   MAX_BUILD_RETRIES,
   MAX_QA_ATTEMPTS,
@@ -49,6 +50,8 @@ import {
   PLAN_DONE,
   PHASES_DIR,
   PHASE_PLAN_FILE,
+  REFERENCE_DIR,
+  SPECS_FILE,
   REVIEWS_DIR,
   AAR_DIR,
   getModelForPhase
@@ -63,6 +66,8 @@ export interface OrchestratorOptions {
   jiraProject?: string;
   githubRepo?: string;
   specFile?: string;
+  noPush?: boolean;
+  noPr?: boolean;
 }
 
 /**
@@ -87,6 +92,8 @@ export class Orchestrator {
     this.jira = createJiraClient(options.jiraProject || this.state.jiraProject);
     this.github = createGitHubClient();
     this.github.workDir = this.workDir;
+    if (options.noPush) this.github.noPush = true;
+    if (options.noPr) this.github.noPr = true;
   }
 
   /**
@@ -146,89 +153,102 @@ export class Orchestrator {
       this.log(`Project type: ${this.state.projectType}`);
     }
 
-    // Load spec file content if provided
+    // Load spec file content if provided. Auto-detect when the description is
+    // itself a path to a markdown file — `turkeycode run my-prompt.md` should
+    // Just Work without requiring `--spec`.
     let specContent: string | undefined;
-    if (options.specFile && existsSync(options.specFile)) {
-      specContent = readFileSync(options.specFile, 'utf-8');
+    let resolvedSpecFile: string | undefined = options.specFile;
+    if (!resolvedSpecFile && /\.(md|txt)$/i.test(description) && existsSync(description)) {
+      resolvedSpecFile = description;
+      this.log(`Auto-detected spec file from description: ${description}`);
+    }
+    if (resolvedSpecFile && existsSync(resolvedSpecFile)) {
+      specContent = readFileSync(resolvedSpecFile, 'utf-8');
     }
 
     // Detect if this is a continuation sprint (workspace already has code)
     const isFirstSprint = !existsSync('package.json') && !existsSync('Dockerfile');
 
     if (isFirstSprint) {
-      // ==================== RESEARCH PHASE (sprint 1 only) ====================
+      // ==================== RESEARCH PHASE (greenfield only) ====================
+      // Research agent reads the spec, surveys the stack, and writes SPECS_FILE.
       if (this.state.currentPhase === 'init' || this.state.currentPhase === 'research') {
         await this.runResearch(specContent);
       }
-
-      // ==================== PLAN PHASE (sprint 1 only) ====================
-      if (this.state.currentPhase === 'research' || this.state.currentPhase === 'plan') {
-        await this.runPlan();
+    } else {
+      // ==================== ITERATE: skip research, seed SPECS_FILE directly ====================
+      // Code already exists, so the planner can read it directly — no research agent needed.
+      // But the plan prompt reads SPECS_FILE, so write the user's spec there verbatim.
+      this.log('Continuation sprint detected — skipping research, planning from spec');
+      if (specContent || description) {
+        if (!existsSync(REFERENCE_DIR)) {
+          mkdirSync(REFERENCE_DIR, { recursive: true });
+        }
+        writeFileSync(SPECS_FILE, specContent || description, 'utf-8');
       }
+      if (this.state.currentPhase === 'init' || this.state.currentPhase === 'research') {
+        this.state.currentPhase = 'research';
+        saveState(this.state);
+      }
+    }
 
-      // Load phase plan — gracefully handle missing file on resume
-      const plan = loadPhasePlan();
-      if (!plan) {
-        if (this.state.buildPhases.length > 0) {
-          this.log('Phase plan file missing but build phases exist in state, continuing...');
-        } else {
-          this.log('Phase plan missing — re-running plan phase...');
-          await this.runPlan();
-          const retryPlan = loadPhasePlan();
-          if (!retryPlan) {
-            this.log('ERROR: Failed to generate phase plan after retry');
-            process.exit(1);
-          }
-          this.state.buildPhases = retryPlan.phases;
-        }
+    // ==================== PLAN PHASE (always) ====================
+    if (this.state.currentPhase === 'research' || this.state.currentPhase === 'plan') {
+      await this.runPlan(!isFirstSprint);
+    }
+
+    // Load phase plan — gracefully handle missing file on resume
+    const plan = loadPhasePlan();
+    if (!plan) {
+      if (this.state.buildPhases.length > 0) {
+        this.log('Phase plan file missing but build phases exist in state, continuing...');
       } else {
-        if (this.state.buildPhases.length > 0) {
-          for (const planPhase of plan.phases) {
-            const existing = this.state.buildPhases.find(p => p.number === planPhase.number);
-            if (existing) {
-              Object.assign(existing, {
-                ...planPhase,
-                jiraTicketKey: existing.jiraTicketKey || planPhase.jiraTicketKey,
-                prNumber: existing.prNumber || planPhase.prNumber,
-                branchName: existing.branchName || planPhase.branchName,
-                status: existing.status !== 'planned' ? existing.status : planPhase.status,
-                buildAttempts: existing.buildAttempts || planPhase.buildAttempts,
-                qaAttempts: existing.qaAttempts || planPhase.qaAttempts,
-                lastQaVerdict: existing.lastQaVerdict || planPhase.lastQaVerdict,
-                startedAt: existing.startedAt || planPhase.startedAt,
-                completedAt: existing.completedAt || planPhase.completedAt,
-              });
-            }
-          }
-        } else {
-          this.state.buildPhases = plan.phases;
+        this.log('Phase plan missing — re-running plan phase...');
+        await this.runPlan(!isFirstSprint);
+        const retryPlan = loadPhasePlan();
+        if (!retryPlan) {
+          this.log('ERROR: Failed to generate phase plan after retry');
+          process.exit(1);
         }
+        this.state.buildPhases = retryPlan.phases;
       }
     } else {
-      // ==================== SPRINT 2+ : skip research & plan ====================
-      this.log('Continuation sprint detected — skipping research & plan, going straight to build');
-      this.state.currentPhase = 'build';
-
-      // Auto-generate a single phase from the spec
-      const sprintPhase: BuildPhase = {
-        number: 1,
-        name: description,
-        scope: specContent || description,
-        deliverables: [],
-        acceptanceCriteria: [],
-        prerequisites: [],
-        specContext: specContent || '',
-        status: 'planned',
-        buildAttempts: 0,
-        qaAttempts: 0,
-      };
-      this.state.buildPhases = [sprintPhase];
+      if (this.state.buildPhases.length > 0) {
+        for (const planPhase of plan.phases) {
+          const existing = this.state.buildPhases.find(p => p.number === planPhase.number);
+          if (existing) {
+            Object.assign(existing, {
+              ...planPhase,
+              jiraTicketKey: existing.jiraTicketKey || planPhase.jiraTicketKey,
+              prNumber: existing.prNumber || planPhase.prNumber,
+              branchName: existing.branchName || planPhase.branchName,
+              status: existing.status !== 'planned' ? existing.status : planPhase.status,
+              buildAttempts: existing.buildAttempts || planPhase.buildAttempts,
+              qaAttempts: existing.qaAttempts || planPhase.qaAttempts,
+              lastQaVerdict: existing.lastQaVerdict || planPhase.lastQaVerdict,
+              startedAt: existing.startedAt || planPhase.startedAt,
+              completedAt: existing.completedAt || planPhase.completedAt,
+            });
+          }
+        }
+      } else {
+        this.state.buildPhases = plan.phases;
+      }
     }
 
     if (this.state.currentBuildPhaseNumber === 0) {
       this.state.currentBuildPhaseNumber = 1;
     }
     saveState(this.state);
+
+    // ==================== RESUME RECONCILIATION ====================
+    // If a previous run died between a git mutation and the state save (e.g.
+    // after merging a phase branch to main but before persisting status='done'),
+    // state and filesystem disagree. Reconcile by scanning non-done phases
+    // whose artifacts indicate they already completed on disk.
+    if (isResume) {
+      this.reconcileResumeState();
+    }
 
     // ==================== PHASE LOOP ====================
     while (this.state.currentBuildPhaseNumber <= this.state.buildPhases.length) {
@@ -313,7 +333,26 @@ export class Orchestrator {
   /**
    * Run plan phase - single session produces phase-plan.json
    */
-  private async runPlan(): Promise<void> {
+  /**
+   * Detect whether the spec contains a numbered ticket list (e.g. `#14`, `#35`, ...).
+   * Heuristic: 5+ lines beginning with a `#NN` or `NN.` pattern within the spec.
+   * When true, the planner is told to emit one sprint per ticket.
+   */
+  private detectTicketList(): boolean {
+    if (!existsSync(SPECS_FILE)) return false;
+    try {
+      const text = readFileSync(SPECS_FILE, 'utf-8');
+      // Match lines like "  #14   Impact aspect" or "- #14 Impact" or "14. Foo"
+      const ticketLines = text.split('\n').filter(line =>
+        /^\s*[-*]?\s*#\d+\b/.test(line) || /^\s*\d{1,4}\.\s+\S/.test(line)
+      );
+      return ticketLines.length >= 5;
+    } catch {
+      return false;
+    }
+  }
+
+  private async runPlan(isIterate: boolean = false): Promise<void> {
     this.log('\n=== PHASE: PLAN ===\n');
     auditPhase('plan', 'started');
     this.state.currentPhase = 'plan';
@@ -329,7 +368,11 @@ export class Orchestrator {
     }
 
     // Single planning session
-    const prompt = buildPlanPrompt(this.state);
+    const hasTicketList = this.detectTicketList();
+    if (hasTicketList) {
+      this.log('Spec contains a numbered ticket list — planning in TICKET-LIST mode (one sprint per ticket)');
+    }
+    const prompt = buildPlanPrompt(this.state, isIterate, hasTicketList);
     const result = await this.spawner.run({
       cwd: this.workDir,
       prompt,
@@ -348,6 +391,87 @@ export class Orchestrator {
     auditGate('plan', finalGate.passed);
     enforceGate(finalGate);
     auditPhase('plan', 'completed', { durationMs: result.durationMs });
+  }
+
+  /**
+   * Reconcile state.json with filesystem truth at the start of a resume.
+   *
+   * State saves are not atomic with git mutations. If a previous run was
+   * killed between (e.g.) merging a phase branch to the default branch and
+   * the subsequent `saveState` marking the phase done, state.json says the
+   * phase is still 'building'/'qa'/'merging' while git has already moved on.
+   *
+   * This reconcile pass walks every non-done phase and checks if its
+   * deliverables are already present on the default branch. If they are —
+   * identified by a commit subject matching `phase-<N>:` reachable from the
+   * default branch HEAD plus the phase's `build.done` artifact — we mark
+   * the phase done and advance state past it. This makes resume idempotent
+   * and prevents the failure mode where turkey re-creates a phase branch
+   * off a main that already contains the work, producing an empty diff that
+   * QA's provenance check then flags as a critical blocker.
+   */
+  private reconcileResumeState(): void {
+    let defaultBranch: string;
+    try {
+      defaultBranch = this.github.getDefaultBranch();
+    } catch {
+      return;
+    }
+
+    let advanced = 0;
+    for (const phase of this.state.buildPhases) {
+      if (phase.status === 'done') continue;
+
+      const buildDonePath = join(this.workDir, PHASES_DIR, `phase-${phase.number}`, 'build.done');
+      if (!existsSync(buildDonePath)) continue;
+
+      // Does a commit for this phase's work exist on the default branch?
+      let phaseCommitOnDefault = false;
+      try {
+        const out = execSync(
+          `git log ${defaultBranch} --grep="^phase-${phase.number}:" --format=%H -n 1`,
+          { cwd: this.workDir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+        ).trim();
+        phaseCommitOnDefault = out.length > 0;
+      } catch {
+        phaseCommitOnDefault = false;
+      }
+      if (!phaseCommitOnDefault) continue;
+
+      this.log(
+        `Reconcile: phase ${phase.number} (status=${phase.status}) has build.done and a phase-${phase.number}: commit on ${defaultBranch} — marking done`
+      );
+      phase.status = 'done';
+      if (!phase.completedAt) phase.completedAt = new Date().toISOString();
+
+      if (!this.state.completedPhases.find(p => p.number === phase.number)) {
+        this.state.completedPhases.push({
+          number: phase.number,
+          name: phase.name,
+          completedAt: phase.completedAt,
+          buildTime: phase.buildTime || '',
+          prNumber: phase.prNumber,
+          aarPath: `docs/aar/phase-${phase.number}.md`
+        });
+      }
+      advanced++;
+    }
+
+    // Advance the phase pointer past any run of now-done phases.
+    while (
+      this.state.currentBuildPhaseNumber <= this.state.buildPhases.length &&
+      this.state.buildPhases.find(p => p.number === this.state.currentBuildPhaseNumber)?.status === 'done'
+    ) {
+      this.state.currentBuildPhaseNumber++;
+      this.state.qaAttempts = 0;
+      this.state.lastQaVerdict = undefined;
+      this.state.lastQaFindings = undefined;
+    }
+
+    if (advanced > 0) {
+      this.log(`Reconcile: advanced ${advanced} phase(s) to done; resuming at phase ${this.state.currentBuildPhaseNumber}`);
+      saveState(this.state);
+    }
   }
 
   /**
@@ -427,7 +551,31 @@ export class Orchestrator {
       this.state.currentPhase = 'build';
       saveState(this.state);
 
+      // Snapshot branches before build so we can detect any sub-branches the
+      // agent creates during the session (specs sometimes instruct branch-per-ticket).
+      const branchesBefore = this.github.listLocalBranches();
+
       await this.runPhaseBuild(phase, phaseBranch);
+
+      // Reconcile any sub-branches the build agent created back onto the phase branch.
+      const recon = this.github.reconcileSubBranches(phaseBranch, branchesBefore);
+      if (recon.reconciled.length > 0) {
+        this.log(`Branch reconciliation: cherry-picked ${recon.reconciled.length} sub-branch(es) onto ${phaseBranch}: ${recon.reconciled.join(', ')}`);
+      }
+      if (recon.failed.length > 0) {
+        this.log(`ERROR: Branch reconciliation failed for: ${recon.failed.join(', ')}. These branches contain commits that could not be cherry-picked onto the phase branch (likely conflicts). Phase cannot proceed without manual intervention.`);
+        saveState(this.state);
+        process.exit(1);
+      }
+    }
+
+    // Safety net: if the build agent staged files but forgot to commit (a known
+    // failure mode), commit them now. Without this, the QA diff check sees an
+    // empty branch, correctly flags "missing deliverables," and the phase fails
+    // after max attempts with all the work sitting in the index.
+    if (this.github.hasUncommittedChanges()) {
+      this.log(`Build agent left uncommitted changes — committing as safety net`);
+      this.github.commit(`phase-${phaseNumber}: ${phase.name}`);
     }
 
     // Create PR for phase (reuse existing if found) — skip if no remote
@@ -471,6 +619,11 @@ export class Orchestrator {
     }
     await this.runQAFast(phaseNumber);
 
+    // ==================== AAR PHASE ====================
+    // Run after QA passes, before merge. Failures here are hard gates — the
+    // user-facing markdown at docs/aar/phase-N.md MUST exist or the phase fails.
+    await this.runAAR(phaseNumber);
+
     // Commit any uncommitted changes
     if (this.github.hasUncommittedChanges()) {
       this.log(`Committing uncommitted changes before merge...`);
@@ -486,6 +639,13 @@ export class Orchestrator {
     // Check if the phase branch actually exists (createBranch may have failed silently)
     const currentBranch = this.github.getCurrentBranch();
     const phaseBranchExists = this.github.branchExists(phaseBranch);
+
+    // Record intent-to-merge *before* the git mutation. If the process dies
+    // between the actual merge and the final saveState below, reconcileResumeState
+    // uses this marker (plus the on-disk git state) to detect that the phase
+    // completed and advance state accordingly.
+    phase.status = 'merging';
+    saveState(this.state);
 
     let merged = false;
     if (!phaseBranchExists) {
@@ -553,6 +713,7 @@ export class Orchestrator {
 
     const durationMs = Date.now() - startTime;
     phase.buildTime = this.formatDuration(durationMs);
+    saveState(this.state);
 
     // Check gate
     let gateResult = this.gates.checkPhaseBuild(phase.number);
@@ -736,10 +897,19 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       this.log(`\n--- QA Attempt ${attempt}/${MAX_FAST_QA_ATTEMPTS} (combined session) ---\n`);
       auditQA(phaseNumber, attempt, 'started');
 
+      // Capture git diff stat vs the phase's base branch so the verdict agent can
+      // ground-check whether the work claimed actually landed. Without this, QA
+      // happily passes a 14-ticket "all done" claim against an empty diff.
+      const baseRef = this.github.getDefaultBranch();
+      let diffStat = '';
+      try {
+        diffStat = execSync(`git diff ${baseRef}...HEAD --stat`, { encoding: 'utf-8' }).trim();
+      } catch { /* base branch may not exist on first run */ }
+
       // Single combined QA session: smoke + functional + verdict
       const qaResult = await this.spawner.run({
         cwd: this.workDir,
-        prompt: buildQaCombinedPrompt(this.state, phaseNumber, attempt),
+        prompt: buildQaCombinedPrompt(this.state, phaseNumber, attempt, diffStat, baseRef),
         timeoutMs: QA_TIMEOUT_MS,
         sessionName: `qa-combined-${attempt}`,
         doneFile: `${QA_DIR}/phase-${phaseNumber}/verdict-${attempt}.done`,
@@ -1151,14 +1321,18 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     await this.spawner.run({
       cwd: this.workDir,
       prompt: buildAarPrompt(this.state, phaseNumber),
-      timeoutMs: QA_TIMEOUT_MS,
+      timeoutMs: AAR_TIMEOUT_MS,
       sessionName: `aar-${phaseNumber}`,
       doneFile: `${AAR_DIR}/phase-${phaseNumber}.done`,
       model: getModelForPhase('aar')
     });
 
-    // Reload state (AAR may have updated tech context)
-    this.state = loadState();
+    // The AAR agent must NOT touch state.json — the prompt explicitly forbids
+    // it. Belt-and-suspenders: re-save the in-memory state to overwrite any
+    // stray edits. We do NOT loadState() here because a corrupted state.json
+    // would fall back to defaults (empty buildPhases) and silently kill the
+    // phase loop with "ORCHESTRATION COMPLETE" after one phase.
+    saveState(this.state);
 
     enforceGate(this.gates.checkAAR(phaseNumber));
   }

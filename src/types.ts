@@ -42,7 +42,7 @@ export type Phase =
   | 'aar'
   | 'done';
 
-export type BuildPhaseStatus = 'planned' | 'building' | 'qa' | 'fixing' | 'done';
+export type BuildPhaseStatus = 'planned' | 'building' | 'qa' | 'fixing' | 'merging' | 'done';
 
 export type QaVerdict = 'CLEAN' | 'NEEDS_FIX' | 'INCOMPLETE';
 

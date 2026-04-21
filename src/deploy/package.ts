@@ -18,7 +18,25 @@ const EXCLUDE_PATTERNS = [
   '.DS_Store',
   'Thumbs.db',
   '*.log',
+  // Build/dev caches — can explode to hundreds of MB and are never needed
+  // at runtime. `.next/dev` is Turbopack's dev-mode cache (observed at 574MB
+  // on a small project); `.next/cache` is the Webpack build cache.
   '.next/cache',
+  '.next/dev',
+  '.next/trace',
+  '.turbo',
+  '.turbopack',
+  '.parcel-cache',
+  '.vite',
+  '.swc',
+  // Test/coverage artifacts — generated, not deployable
+  'coverage',
+  '.nyc_output',
+  'test-results',
+  'playwright-report',
+  // IDE/editor state
+  '.idea',
+  '.vscode',
 ];
 
 // Files/dirs to include in the tarball (if they exist)

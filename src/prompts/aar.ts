@@ -1,10 +1,12 @@
 /**
  * After-Action Review (AAR) prompt builder
- * Job: Summarize phase, update state.json with what was built, write aar.done, STOP
+ * Job: Summarize phase by writing the user-facing AAR markdown, write aar.done, STOP.
+ * The agent must NOT touch state.json — the orchestrator owns that file and concurrent
+ * edits corrupt it, which kills the phase loop with "Could not parse state.json".
  */
 
 import { ProjectState } from '../types';
-import { AAR_DIR, STATE_FILE } from '../constants';
+import { AAR_DIR } from '../constants';
 
 export function buildAarPrompt(
   state: ProjectState,
@@ -30,7 +32,7 @@ export function buildAarPrompt(
 # AFTER-ACTION REVIEW - Phase ${phaseNumber}
 
 ## YOUR SINGLE JOB
-Document what was built and update state.json for future sessions.
+Document what was built in a user-facing markdown report. **DO NOT touch \`.turkey/state.json\`** — the orchestrator owns that file and concurrent edits corrupt it.
 
 ---
 
@@ -68,49 +70,9 @@ Look at the code to identify:
 - New conventions established
 - Known issues discovered
 
-### 3. Update state.json
-
-Read and update ${STATE_FILE} with:
-
-\`\`\`json
-{
-  "tech": {
-    "backend": "Express 4.18",
-    "frontend": "React 18",
-    "database": "PostgreSQL 15",
-    "orm": "Prisma 5",
-    "packageManager": "npm",
-    "dependencies": {
-      "express": "^4.18.0",
-      "react": "^18.2.0"
-    },
-    "ports": {
-      "dev": 3000,
-      "api": 4000
-    },
-    "buildCommands": {
-      "dev": "npm run dev",
-      "build": "npm run build",
-      "test": "npm test"
-    },
-    "conventions": [
-      "REST API uses /api prefix",
-      "Components in PascalCase",
-      "Hooks prefixed with use"
-    ]
-  },
-  "entities": ["User", "Post", "Comment"],
-  "endpoints": ["/api/auth/login", "/api/users", "/api/posts"],
-  "uiPages": ["/", "/login", "/dashboard"],
-  "knownIssues": [
-    "Mobile layout breaks below 320px"
-  ]
-}
-\`\`\`
-
 ---
 
-## OUTPUT 1: ${aarPath}
+## OUTPUT: ${aarPath}
 
 Create this file:
 
@@ -176,20 +138,9 @@ Create this file:
 
 ---
 
-## OUTPUT 2: Update ${STATE_FILE}
-
-Update the following fields based on your analysis:
-- tech (with all discovered context)
-- entities (list all models/entities)
-- endpoints (list all API endpoints)
-- uiPages (list all UI routes)
-- knownIssues (list any issues)
-
----
-
 ## DONE SIGNAL: ${aarDone}
 
-After creating AAR and updating state:
+After creating the AAR markdown:
 \`\`\`bash
 mkdir -p ${AAR_DIR}
 echo "DONE - AAR completed at $(date -Iseconds)" > ${aarDone}
@@ -201,9 +152,8 @@ echo "DONE - AAR completed at $(date -Iseconds)" > ${aarDone}
 
 1. Read ALL code changes for the phase
 2. Be thorough in documenting what was built
-3. Update state.json with ACCURATE tech context
-4. This context SURVIVES compaction - be complete
-5. Do NOT start next phase - just document this one
+3. **DO NOT touch \`.turkey/state.json\`** — concurrent edits corrupt it and break the orchestrator
+4. Do NOT start next phase - just document this one
 
 Then STOP.
 `.trim();

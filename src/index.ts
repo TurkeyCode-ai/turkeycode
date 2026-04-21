@@ -34,6 +34,8 @@ program
   .option('-s, --spec <file>', 'Spec file path')
   .option('-v, --verbose', 'Verbose output')
   .option('-w, --allow-warnings', 'Allow warnings in QA (only blockers must be zero)')
+  .option('--no-push', 'Skip git push (use for local-only repos or no_push remotes)')
+  .option('--no-pr', 'Skip gh pr create (implied by --no-push)')
   .action(async (description: string, options) => {
     console.log('');
     console.log('╔══════════════════════════════════════════════════════════╗');
@@ -50,18 +52,26 @@ program
       console.log('');
     }
 
+    // commander negates: --no-push sets options.push = false
+    const noPush = options.push === false;
+    const noPr = noPush || options.pr === false;
+
     const orchestrator = createOrchestrator({
       verbose: options.verbose,
       jiraProject: options.jira,
       githubRepo: options.github,
-      specFile: options.spec
+      specFile: options.spec,
+      noPush,
+      noPr
     });
 
     try {
       await orchestrator.run(description, {
         jiraProject: options.jira,
         githubRepo: options.github,
-        specFile: options.spec
+        specFile: options.spec,
+        noPush,
+        noPr
       });
     } catch (err) {
       console.error('Orchestration failed:', err);

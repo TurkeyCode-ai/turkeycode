@@ -293,7 +293,9 @@ pio run --target size 2>&1 || true
 export function buildQaCombinedPrompt(
   state: ProjectState,
   phaseNumber: number,
-  attempt: number
+  attempt: number,
+  diffStat: string = '',
+  baseRef: string = 'main'
 ): string {
   const phase = state.buildPhases.find(p => p.number === phaseNumber);
   const phaseName = phase?.name || `Phase ${phaseNumber}`;
@@ -358,6 +360,18 @@ ${acText}
 
 **CRITICAL: Only test features in the deliverables list above.**
 Features not listed are planned for FUTURE phases — do NOT test or flag them.
+
+---
+
+## GROUND TRUTH: GIT DIFF vs ${baseRef}
+
+This is what actually landed on the phase branch (\`git diff ${baseRef}...HEAD --stat\`):
+
+\`\`\`
+${diffStat || '(empty — no files changed on this branch)'}
+\`\`\`
+
+**MANDATORY CROSS-CHECK:** Before declaring CLEAN, verify each deliverable above corresponds to actual file changes in the diff. If a deliverable claims "X is implemented" but no files related to X appear in the diff, that is a **BLOCKER** ("missing deliverable: X — claimed but no code present"). Do not trust WORKITEM_NOTES.md, AAR files, or build agent self-reports — trust the diff. An empty or near-empty diff against a multi-deliverable phase is automatically NEEDS_FIX.
 ${previousContext}
 ---
 

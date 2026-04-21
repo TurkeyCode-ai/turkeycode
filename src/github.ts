@@ -40,11 +40,25 @@ export class GitHubClient {
   private available: boolean;
   private authenticated: boolean;
   workDir: string;
+  /** When true, push() is a silent no-op (set via --no-push or auto-detected). */
+  noPush: boolean = false;
+  /** When true, createPR() is a silent no-op (set via --no-pr or implied by noPush). */
+  noPr: boolean = false;
 
   constructor() {
     this.workDir = process.cwd();
     this.available = isGitHubAvailable();
     this.authenticated = this.available && isGitHubAuthenticated();
+
+    // Auto-detect "no push intended" setups: a remote URL that isn't a real
+    // git URL (no scheme, no SCP form). Covers `git remote add origin no_push`.
+    try {
+      const url = execSync('git remote get-url origin', { stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
+      if (url && !/(:\/\/|@.+:)/.test(url)) {
+        this.noPush = true;
+        this.noPr = true;
+      }
+    } catch { /* no remote at all — push() handles via hasRemote() */ }
 
     if (!this.available) {
       console.log('Warning: gh CLI not found, skipping GitHub integration');
@@ -237,6 +251,104 @@ export class GitHubClient {
   }
 
   /**
+   * List all local branches.
+   */
+  listLocalBranches(): string[] {
+    try {
+      return execSync(`git for-each-ref --format='%(refname:short)' refs/heads/`, { encoding: 'utf-8' })
+        .split('\n')
+        .map(b => b.trim().replace(/^'|'$/g, ''))
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Reconcile sub-branches a build agent created during a phase session.
+   *
+   * Some specs instruct the build agent to "branch per ticket from develop" (or
+   * similar). The agent obeys, but turkeycode's phase wrapper branch ends up
+   * empty and the per-ticket commits are lost when we merge the wrapper into
+   * main. This method finds branches that didn't exist before the session, then
+   * cherry-picks each one's unique commits onto the phase branch in order.
+   *
+   * Returns:
+   *   { reconciled: string[], failed: string[], skipped: string[] }
+   *
+   * On any cherry-pick failure, aborts the cherry-pick and adds that branch to
+   * `failed`. The caller decides whether to fail the phase.
+   */
+  reconcileSubBranches(
+    phaseBranch: string,
+    branchesBefore: string[]
+  ): { reconciled: string[]; failed: string[]; skipped: string[] } {
+    const reconciled: string[] = [];
+    const failed: string[] = [];
+    const skipped: string[] = [];
+
+    const branchesAfter = this.listLocalBranches();
+    const newBranches = branchesAfter.filter(
+      b => !branchesBefore.includes(b) && b !== phaseBranch
+    );
+
+    if (newBranches.length === 0) return { reconciled, failed, skipped };
+
+    console.log(`Branch reconciliation: found ${newBranches.length} sub-branch(es) created during build:`);
+    for (const b of newBranches) console.log(`  - ${b}`);
+
+    // Make sure we're on the phase branch before cherry-picking onto it.
+    try {
+      execSync(`git checkout ${phaseBranch}`, { stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch (err) {
+      console.error(`Reconciliation: failed to checkout ${phaseBranch}: ${err}`);
+      // Can't cherry-pick anywhere — mark all as failed.
+      return { reconciled, failed: newBranches, skipped };
+    }
+
+    for (const branch of newBranches) {
+      // Find the commits unique to this branch (since merge-base with phase branch).
+      let commits: string[];
+      try {
+        const mergeBase = execSync(`git merge-base ${phaseBranch} ${branch}`, { encoding: 'utf-8' }).trim();
+        commits = execSync(`git rev-list --reverse ${mergeBase}..${branch}`, { encoding: 'utf-8' })
+          .split('\n')
+          .map(s => s.trim())
+          .filter(Boolean);
+      } catch (err) {
+        console.error(`Reconciliation: cannot compute commits for ${branch}: ${err}`);
+        failed.push(branch);
+        continue;
+      }
+
+      if (commits.length === 0) {
+        skipped.push(branch);
+        continue;
+      }
+
+      let branchOk = true;
+      for (const sha of commits) {
+        try {
+          // -x records the original SHA in the commit message for traceability.
+          execSync(`git cherry-pick -x ${sha}`, { stdio: ['pipe', 'pipe', 'pipe'] });
+        } catch {
+          console.error(`Reconciliation: cherry-pick conflict on ${sha} from ${branch} — aborting`);
+          try { execSync(`git cherry-pick --abort`, { stdio: ['pipe', 'pipe', 'pipe'] }); } catch { /* ignore */ }
+          failed.push(branch);
+          branchOk = false;
+          break;
+        }
+      }
+      if (branchOk) {
+        console.log(`Reconciled ${commits.length} commit(s) from ${branch} onto ${phaseBranch}`);
+        reconciled.push(branch);
+      }
+    }
+
+    return { reconciled, failed, skipped };
+  }
+
+  /**
    * Check if a branch exists (locally or remote)
    */
   branchExists(branchName: string): boolean {
@@ -293,6 +405,16 @@ export class GitHubClient {
         }
       } catch { /* no unmerged files */ }
       execSync('git add -A', { stdio: 'inherit' });
+      // Skip quietly if nothing is staged. A common false-error is when a fix
+      // session (or another nested agent) already committed its work — the
+      // outer commit call would otherwise noisily fail "nothing to commit."
+      try {
+        execSync('git diff --cached --quiet', { stdio: 'pipe' });
+        // exit 0 → nothing staged, nothing to commit
+        return true;
+      } catch {
+        // exit non-zero → staged changes present, proceed to commit
+      }
       execSync(`git commit -m "${message}"`, { stdio: 'inherit' });
       console.log(`Committed: ${message}`);
       return true;
@@ -306,6 +428,9 @@ export class GitHubClient {
    * Push branch to origin (skips if no remote configured)
    */
   push(branchName: string): boolean {
+    if (this.noPush) {
+      return false;
+    }
     if (!this.hasRemote()) {
       console.log(`Skipping push (no remote configured): ${branchName}`);
       return false;
@@ -354,6 +479,7 @@ export class GitHubClient {
     base?: string;
     head?: string;
   }): number | null {
+    if (this.noPr) return null;
     if (!this.isEnabled()) return null;
 
     // Write body to temp file to avoid shell escaping issues

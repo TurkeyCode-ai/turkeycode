@@ -37,6 +37,7 @@ export const PLAN_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 export const PHASE_BUILD_TIMEOUT_MS = 90 * 60 * 1000; // 90 minutes (phases are bigger than tickets)
 export const QA_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 export const FIX_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+export const AAR_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes (just writing a markdown summary)
 
 // Retry limits
 export const MAX_BUILD_RETRIES = 2;
@@ -78,7 +79,7 @@ export const PHASE_MODELS: Record<string, string> = {
 
   // Post-build — Sonnet for review, Haiku for mechanical summarization
   'code-review': 'sonnet',
-  'aar': 'haiku',
+  'aar': 'sonnet',
 };
 
 /**

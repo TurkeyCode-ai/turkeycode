@@ -223,6 +223,11 @@ export class Gates {
     const aarDonePath = `${AAR_DIR}/phase-${phaseNumber}.done`;
     artifacts.push(this.checkDoneSignal(`aar-phase-${phaseNumber}.done`, aarDonePath));
 
+    // Also require the actual user-facing AAR markdown — the agent must produce
+    // it, not just the signal file. Path matches buildAarPrompt() in prompts/aar.ts.
+    const aarMarkdownPath = `docs/aar/phase-${phaseNumber}.md`;
+    artifacts.push(this.checkFileExists(`aar-phase-${phaseNumber}.md`, aarMarkdownPath));
+
     return this.buildResult(`aar-${phaseNumber}`, artifacts);
   }
 

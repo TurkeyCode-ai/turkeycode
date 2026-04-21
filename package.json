@@ -1,11 +1,11 @@
 {
   "name": "turkeycode",
-  "version": "3.0.8",
+  "version": "3.0.10",
   "description": "Open-source build engine — one prompt to a production-ready, QA-tested app. Any stack, any platform.",
   "main": "dist/index.js",
   "bin": {
-    "turkeycode": "./dist/index.js",
-    "turkey": "./dist/index.js"
+    "turkeycode": "dist/index.js",
+    "turkey": "dist/index.js"
   },
   "files": [
     "dist",
@@ -32,7 +32,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/TurkeyCode-ai/turkeycode.git"
+    "url": "git+https://github.com/TurkeyCode-ai/turkeycode.git"
   },
   "homepage": "https://turkeycode.ai",
   "bugs": {
