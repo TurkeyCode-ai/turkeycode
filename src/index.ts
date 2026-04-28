@@ -664,4 +664,106 @@ appsCmd
     }
   });
 
+// ==================== RUN-TICKET COMMAND ====================
+program
+  .command('run-ticket')
+  .description('Run a single Jira ticket: triage it, then research (non-coding) or build + push branches (coding)')
+  .argument('<key>', 'Jira ticket key (e.g. PROJ-123)')
+  .option('-v, --verbose', 'Verbose output')
+  .option('--manifest <path>', 'Override the repos.yaml manifest path')
+  .option('--mcp-config <path>', 'Override the MCP config path (else uses TURKEYCODE_MCP_CONFIG)')
+  .action(async (key: string, options) => {
+    const { createTicketOrchestrator } = await import('./ticket-orchestrator');
+    try {
+      const orch = createTicketOrchestrator({
+        verbose: options.verbose,
+        manifestPath: options.manifest,
+        mcpConfig: options.mcpConfig,
+      });
+      await orch.runTicket(key);
+      console.log('');
+      console.log(`✅ Ticket ${key} run complete.`);
+    } catch (err) {
+      console.error(`❌ Ticket run failed: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  });
+
+// ==================== MY-TICKETS COMMAND ====================
+program
+  .command('my-tickets')
+  .description('List Jira tickets assigned to you, then pick one to run')
+  .option('-v, --verbose', 'Verbose output')
+  .option('--include-done', 'Include tickets in the Done status category')
+  .option('-k, --key <key>', 'Skip the picker and run the given key directly')
+  .option('--manifest <path>', 'Override the repos.yaml manifest path')
+  .option('--mcp-config <path>', 'Override the MCP config path (else uses TURKEYCODE_MCP_CONFIG)')
+  .action(async (options) => {
+    const { createJiraClient, isJiraConfigured } = await import('./jira');
+    const { createTicketOrchestrator } = await import('./ticket-orchestrator');
+    if (!isJiraConfigured()) {
+      console.error('Jira is not configured. Set JIRA_HOST, JIRA_EMAIL, JIRA_TOKEN.');
+      process.exit(1);
+    }
+
+    let chosenKey: string | undefined = options.key;
+
+    if (!chosenKey) {
+      const jira = createJiraClient();
+      const tickets = await jira.searchAssignedToMe({ includeDone: options.includeDone });
+      if (tickets.length === 0) {
+        console.log('No tickets assigned to you.');
+        return;
+      }
+
+      console.log('');
+      console.log(`Tickets assigned to you (${tickets.length}):`);
+      console.log('');
+      tickets.forEach((t, i) => {
+        const idx = String(i + 1).padStart(2, ' ');
+        const key = t.key.padEnd(12, ' ');
+        const status = `[${t.status}]`.padEnd(16, ' ');
+        console.log(`${idx}. ${key} ${status} ${t.summary}`);
+      });
+      console.log('');
+
+      const answer = await promptLine('Pick a ticket by number (or Enter to cancel): ');
+      if (!answer.trim()) {
+        console.log('Cancelled.');
+        return;
+      }
+      const pick = parseInt(answer.trim(), 10);
+      if (!Number.isInteger(pick) || pick < 1 || pick > tickets.length) {
+        console.error(`Invalid selection: ${answer}`);
+        process.exit(1);
+      }
+      chosenKey = tickets[pick - 1].key;
+    }
+
+    try {
+      const orch = createTicketOrchestrator({
+        verbose: options.verbose,
+        manifestPath: options.manifest,
+        mcpConfig: options.mcpConfig,
+      });
+      await orch.runTicket(chosenKey);
+      console.log('');
+      console.log(`✅ Ticket ${chosenKey} run complete.`);
+    } catch (err) {
+      console.error(`❌ Ticket run failed: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  });
+
+function promptLine(question: string): Promise<string> {
+  return new Promise((resolve) => {
+    const readline = require('readline');
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (answer: string) => {
+      rl.close();
+      resolve(answer);
+    });
+  });
+}
+
 program.parse(process.argv);

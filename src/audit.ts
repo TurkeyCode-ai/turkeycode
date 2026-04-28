@@ -29,7 +29,12 @@ export type AuditEvent =
   | 'jira_time_logged'
   | 'github_branch_created'
   | 'github_pr_created'
-  | 'github_pr_merged';
+  | 'github_pr_merged'
+  | 'ticket_run_started'
+  | 'ticket_triage'
+  | 'ticket_research_posted'
+  | 'ticket_branch_pushed'
+  | 'ticket_run_completed';
 
 export interface AuditEntry {
   timestamp: string;

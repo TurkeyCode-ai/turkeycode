@@ -34,6 +34,8 @@ export class Spawner {
     sessionName?: string;
     doneFile?: string;
     model?: string;
+    /** Path to an MCP config JSON (e.g. for aimem). Defaults to TURKEYCODE_MCP_CONFIG env var. */
+    mcpConfig?: string;
   }): Promise<SpawnResult> {
     const {
       cwd,
@@ -41,7 +43,8 @@ export class Spawner {
       timeoutMs = DEFAULT_TIMEOUT_MS,
       sessionName = 'claude-session',
       doneFile,
-      model
+      model,
+      mcpConfig = process.env.TURKEYCODE_MCP_CONFIG,
     } = options;
 
     const startTime = Date.now();
@@ -87,6 +90,15 @@ export class Spawner {
       if (model) {
         args.push('--model', model);
         this.log(`[${sessionName}] Using model: ${model}`);
+      }
+
+      if (mcpConfig) {
+        if (!existsSync(mcpConfig)) {
+          this.log(`[${sessionName}] WARNING: mcpConfig path not found: ${mcpConfig} — skipping`);
+        } else {
+          args.push('--mcp-config', mcpConfig);
+          this.log(`[${sessionName}] MCP config: ${mcpConfig}`);
+        }
       }
 
       const proc: ChildProcess = spawn('claude', args, {
@@ -249,6 +261,7 @@ export class Spawner {
     sessionName?: string;
     doneFile?: string;
     model?: string;
+    mcpConfig?: string;
   }>): Promise<SpawnResult[]> {
     const results: SpawnResult[] = [];
 
@@ -278,6 +291,7 @@ export class Spawner {
       sessionName?: string;
       doneFile?: string;
       model?: string;
+      mcpConfig?: string;
     }>,
     maxConcurrent: number = DEFAULT_MAX_CONCURRENT
   ): Promise<SpawnResult[]> {

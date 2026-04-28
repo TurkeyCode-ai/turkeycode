@@ -6,7 +6,7 @@ Phase-based orchestrator for Claude Code build workflows. Spawns Claude sessions
 
 A TypeScript CLI that orchestrates multi-phase software builds:
 - **Research** → **Plan** → **Build (1 session per phase)** → **QA (parallel)** → **Review** → **AAR** → **Ship**
-- 2-5 coherent build phases instead of dozens of micro-tickets
+- As many coherent build phases as the work needs — 1 for a small ticket, many for a big project — instead of dozens of micro-tickets
 - QA functional + visual tests run concurrently
 - Blocker fixes run in parallel
 - State persists in `.turkey/state.json`
@@ -35,7 +35,7 @@ turkey-enterprise-v3 reset --force
 
 ```
 research (1 session)
-  → plan (1 session → 2-5 phases)
+  → plan (1 session → N phases — as many as the work needs)
   → PHASE LOOP:
       build (1 session, full phase scope)
       → quick check
@@ -94,7 +94,7 @@ src/
 ├── types.ts          # BuildPhase, PhasePlan, ProjectState
 ├── prompts/          # Prompt builders for each phase
 │   ├── research.ts
-│   ├── plan.ts       # Single session → 2-5 phases
+│   ├── plan.ts       # Single session → N phases (as many as the work needs)
 │   ├── build.ts      # Full phase scope prompt
 │   ├── qa-smoke.ts
 │   ├── qa-functional.ts
@@ -119,7 +119,7 @@ src/
 
 ## Key Design Decisions
 
-1. **Phase-based, not ticket-based**: 2-5 phases instead of 62 tickets = ~20 sessions instead of 118+
+1. **Phase-based, not ticket-based**: N phases (as many as the work needs) instead of dozens of micro-tickets — far fewer sessions, each with enough context to do a good job
 
 2. **Single planning session**: One session produces the full phase plan (not analyze + detail loops)
 
