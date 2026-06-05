@@ -14,3 +14,4 @@ export { buildQaFixPrompt } from './qa-fix';
 export { buildQaCombinedPrompt } from './qa-combined';
 export { buildCodeReviewPrompt } from './code-review';
 export { buildAarPrompt } from './aar';
+export { buildPolishPrompt } from './polish';

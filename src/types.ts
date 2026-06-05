@@ -40,6 +40,7 @@ export type Phase =
   | 'qa'
   | 'review'
   | 'aar'
+  | 'polish'
   | 'done';
 
 export type BuildPhaseStatus = 'planned' | 'building' | 'qa' | 'fixing' | 'merging' | 'done';

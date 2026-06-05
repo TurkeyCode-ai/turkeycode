@@ -14,6 +14,7 @@ describe('prompts', () => {
       'buildQaFixPrompt',
       'buildCodeReviewPrompt',
       'buildAarPrompt',
+      'buildPolishPrompt',
     ];
 
     for (const name of requiredExports) {
@@ -114,6 +115,39 @@ describe('prompts', () => {
 
     it('AAR builder is a function', () => {
       expect(typeof prompts.buildAarPrompt).toBe('function');
+    });
+  });
+
+  describe('buildPolishPrompt', () => {
+    const state: any = {
+      projectType: 'web-fullstack',
+      tech: { backend: 'Express', frontend: 'React', database: 'PostgreSQL' },
+      buildPhases: [],
+    };
+
+    it('returns a non-empty string', () => {
+      const prompt = prompts.buildPolishPrompt(state, 1);
+      expect(typeof prompt).toBe('string');
+      expect(prompt.length).toBeGreaterThan(100);
+    });
+
+    it('instructs zero-warning cleanup and writes an attempt-scoped verdict', () => {
+      const prompt = prompts.buildPolishPrompt(state, 2);
+      expect(prompt).toContain('verdict-2.json');
+      expect(prompt).toContain('polish-2.done');
+      expect(prompt).toMatch(/ZERO/i);
+      // must not encourage mass-suppression
+      expect(prompt).toMatch(/disable|ignore|suppress/i);
+    });
+
+    it('composes the stack summary from tech context', () => {
+      const prompt = prompts.buildPolishPrompt(state, 1);
+      expect(prompt).toContain('Express + React + PostgreSQL');
+    });
+
+    it('falls back to projectType when tech context is empty', () => {
+      const prompt = prompts.buildPolishPrompt({ projectType: 'cli', tech: {}, buildPhases: [] } as any, 1);
+      expect(prompt).toContain('cli');
     });
   });
 });

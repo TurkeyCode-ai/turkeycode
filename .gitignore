@@ -41,3 +41,6 @@ roast-my-repo/
 tsconfig.tsbuildinfo
 next-env.d.ts
 turkey-enterprise-v3-*.tgz
+
+# test scratch repos created by repos.test.ts
+.test-repos/

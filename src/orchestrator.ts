@@ -32,7 +32,8 @@ import {
   buildQaFixPrompt,
   buildQaCombinedPrompt,
   buildCodeReviewPrompt,
-  buildAarPrompt
+  buildAarPrompt,
+  buildPolishPrompt
 } from './prompts';
 import {
   RESEARCH_TIMEOUT_MS,
@@ -54,6 +55,9 @@ import {
   SPECS_FILE,
   REVIEWS_DIR,
   AAR_DIR,
+  POLISH_DIR,
+  POLISH_TIMEOUT_MS,
+  MAX_POLISH_ATTEMPTS,
   getModelForPhase
 } from './constants';
 import { audit, auditGate, auditPhase, auditBuildPhase, auditQA } from './audit';
@@ -68,6 +72,10 @@ export interface OrchestratorOptions {
   specFile?: string;
   noPush?: boolean;
   noPr?: boolean;
+  /** Generate a per-phase After-Action Report (extra LLM session per phase). Off by default — nothing downstream consumes it. */
+  aar?: boolean;
+  /** Run the end-of-build polish pass: one session that drives all warnings to zero across the repo, then verifies the build. On by default (defer-warnings model). */
+  polish?: boolean;
 }
 
 /**
@@ -82,9 +90,13 @@ export class Orchestrator {
   private github: GitHubClient;
   private verbose: boolean;
   private workDir: string;
+  private aar: boolean;
+  private polish: boolean;
 
   constructor(options: OrchestratorOptions = {}) {
     this.verbose = options.verbose ?? false;
+    this.aar = options.aar ?? false;
+    this.polish = options.polish ?? false;
     this.workDir = process.cwd();
     this.state = loadState();
     this.spawner = createSpawner({ verbose: this.verbose });
@@ -259,6 +271,13 @@ export class Orchestrator {
         break;
       }
       saveState(this.state);
+    }
+
+    // ==================== POLISH PASS (defer-warnings model) ====================
+    // Per-phase QA gated on blockers only, so warnings accumulated across phases.
+    // One repo-wide pass cleans them coherently, then we re-verify the build.
+    if (this.polish && this.state.currentPhase !== 'done') {
+      await this.runPolishPhase();
     }
 
     // ==================== DONE ====================
@@ -619,15 +638,21 @@ export class Orchestrator {
     }
     await this.runQAFast(phaseNumber);
 
-    // ==================== AAR PHASE ====================
-    // Run after QA passes, before merge. Failures here are hard gates — the
-    // user-facing markdown at docs/aar/phase-N.md MUST exist or the phase fails.
-    await this.runAAR(phaseNumber);
+    // ==================== AAR PHASE (opt-in) ====================
+    // Off by default: the report is write-only (no downstream prompt reads it,
+    // and QA is told to distrust it), so it's pure cost + a failure surface.
+    // Enable with `--aar` when a human wants the per-phase markdown summary.
+    // When enabled, failures here are hard gates — docs/aar/phase-N.md MUST exist.
+    if (this.aar) {
+      await this.runAAR(phaseNumber);
+    } else {
+      this.log('Skipping AAR (disabled — pass --aar to generate per-phase reports)');
+    }
 
     // Commit any uncommitted changes
     if (this.github.hasUncommittedChanges()) {
       this.log(`Committing uncommitted changes before merge...`);
-      this.github.commit(`chore: commit remaining changes after phase ${phaseNumber} AAR`);
+      this.github.commit(`chore: commit remaining changes for phase ${phaseNumber}`);
       if (phase.prNumber) {
         this.github.push(phaseBranch);
       }
@@ -1335,6 +1360,158 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     saveState(this.state);
 
     enforceGate(this.gates.checkAAR(phaseNumber));
+  }
+
+  /**
+   * Polish pass — end-of-build, repo-wide warning cleanup.
+   *
+   * In the defer-warnings model, per-phase QA gates on blockers only, so warnings
+   * pile up across phases. This single pass discovers and fixes them all coherently,
+   * then RE-VERIFIES the build with the deterministic quick-check (zero LLM tokens)
+   * before merging. The re-verify is what makes "perfect" honest: we never merge a
+   * cleanup that broke compilation or boot.
+   *
+   * Best-effort by design: the build already passed functional QA per phase, so
+   * stubborn warnings never fail the whole run — they're logged and the (verified-safe)
+   * cleanup is merged anyway. Only a regression (broken build) aborts the merge.
+   */
+  private async runPolishPhase(): Promise<void> {
+    this.log('\n' + '='.repeat(60));
+    this.log('POLISH PASS — repo-wide warning cleanup');
+    this.log('='.repeat(60));
+
+    this.state.currentPhase = 'polish';
+    saveState(this.state);
+    auditPhase('polish', 'started');
+
+    // Clean stale polish artifacts so we read this run's verdicts, not last run's.
+    if (existsSync(POLISH_DIR)) {
+      for (const f of readdirSync(POLISH_DIR)) {
+        if (f.endsWith('.json') || f.endsWith('.done')) unlinkSync(join(POLISH_DIR, f));
+      }
+    } else {
+      mkdirSync(POLISH_DIR, { recursive: true });
+    }
+
+    const defaultBranch = this.github.getDefaultBranch();
+    const polishBranch = 'polish/warnings';
+    this.github.createBranch(polishBranch, defaultBranch);
+
+    // Snapshot the pre-polish commit so we can revert if a fix breaks the build.
+    const preSha = this.getGitHead();
+
+    let clean = false;
+    let merged = false;
+
+    for (let attempt = 1; attempt <= MAX_POLISH_ATTEMPTS; attempt++) {
+      this.log(`\n--- Polish attempt ${attempt}/${MAX_POLISH_ATTEMPTS} ---\n`);
+
+      await this.spawner.run({
+        cwd: this.workDir,
+        prompt: buildPolishPrompt(this.state, attempt),
+        timeoutMs: POLISH_TIMEOUT_MS,
+        sessionName: `polish-${attempt}`,
+        doneFile: `${POLISH_DIR}/polish-${attempt}.done`,
+        model: getModelForPhase('polish')
+      });
+
+      // Commit whatever the polish session changed.
+      if (this.github.hasUncommittedChanges()) {
+        this.github.commit(`polish: warning cleanup (attempt ${attempt})`);
+      }
+
+      // Nothing changed AND verdict says clean → no warnings existed. Done.
+      const verdict = this.readPolishVerdict(attempt);
+      const noChanges = this.getGitHead() === preSha;
+      if (noChanges && (!verdict || verdict.remainingWarnings === 0)) {
+        this.log('Polish: no warnings to fix — codebase already clean.');
+        clean = true;
+        break;
+      }
+
+      // Deterministic regression check — did the cleanup break compilation/boot?
+      this.log('Verifying build still passes after cleanup...');
+      const check = await runQuickChecks(this.workDir);
+      for (const c of check.checks) {
+        this.log(`  ${c.passed ? '✓' : '✗'} ${c.name}: ${c.message}`);
+      }
+
+      if (!check.passed) {
+        // The cleanup broke the build. Revert to pre-polish state.
+        this.log('⚠ Polish introduced a regression — reverting cleanup.');
+        if (preSha) {
+          try { execSync(`git reset --hard ${preSha}`, { cwd: this.workDir, stdio: 'pipe' }); } catch { /* best effort */ }
+        }
+        if (attempt < MAX_POLISH_ATTEMPTS) {
+          this.log('Retrying polish from a clean slate...');
+          continue;
+        }
+        this.log('Polish exhausted attempts without a safe result — keeping build as-is, warnings remain.');
+        auditPhase('polish', 'completed', { clean: false, reason: 'regression', attempts: attempt });
+        break;
+      }
+
+      // Build is safe. Accept if warnings hit zero, or if this was the last attempt.
+      if (verdict && verdict.remainingWarnings === 0) {
+        this.log(`Polish CLEAN — ${verdict.fixed ?? 0} warning(s) fixed, zero remaining.`);
+        clean = true;
+      } else {
+        const remaining = verdict?.remainingWarnings ?? 'unknown';
+        if (attempt < MAX_POLISH_ATTEMPTS && verdict) {
+          this.log(`${remaining} warning(s) remain — running another polish attempt...`);
+          continue;
+        }
+        this.log(`Polish best-effort: ${remaining} warning(s) remain but build is verified safe — merging cleanup.`);
+      }
+
+      // Merge the verified cleanup into the default branch.
+      merged = this.mergePolishBranch(polishBranch, defaultBranch);
+      break;
+    }
+
+    if (clean && !merged) {
+      // "no warnings existed" path: nothing was committed, so just drop the branch.
+      this.log('Polish complete — nothing to merge.');
+    }
+
+    auditPhase('polish', 'completed', { clean, merged });
+    this.log('=== POLISH PASS COMPLETE ===\n');
+  }
+
+  /** Read and parse a polish verdict JSON, or null if missing/unparseable. */
+  private readPolishVerdict(attempt: number): { verdict?: string; remainingWarnings?: number; fixed?: number } | null {
+    const path = `${POLISH_DIR}/verdict-${attempt}.json`;
+    if (!existsSync(path)) return null;
+    try {
+      return JSON.parse(readFileSync(path, 'utf-8'));
+    } catch {
+      return null;
+    }
+  }
+
+  /** Merge the polish branch into the default branch (PR when a remote exists, else local). */
+  private mergePolishBranch(polishBranch: string, defaultBranch: string): boolean {
+    if (!this.github.branchExists(polishBranch)) {
+      // Built directly on default — already merged.
+      return true;
+    }
+    if (this.github.hasRemote()) {
+      this.github.push(polishBranch);
+      const existing = this.github.findExistingPR(polishBranch);
+      const pr = existing || this.github.createPR({
+        title: 'Polish: warning cleanup',
+        body: 'Repo-wide warning cleanup (defer-warnings polish pass). Build re-verified after cleanup.',
+        base: defaultBranch,
+        head: polishBranch
+      });
+      let merged = pr ? this.github.mergePR(pr) : false;
+      if (!merged) {
+        merged = this.github.mergeBranch(polishBranch, defaultBranch);
+        if (merged) this.github.push(defaultBranch);
+      }
+      return merged;
+    }
+    return this.github.mergeBranch(polishBranch, defaultBranch);
   }
 
   /**
