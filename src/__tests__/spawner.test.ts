@@ -36,17 +36,33 @@ describe('detectRateLimitSignals', () => {
     }
   });
 
-  it('flags credit/usage exhaustion (and implies rate-limited)', () => {
+  it('flags credit/usage exhaustion only when an API-error marker co-occurs', () => {
+    // Real exhaustion errors carry an API-error context (429 / rate_limit_error / anthropic).
     for (const text of [
-      'Your credit balance is too low to run this request',
-      'insufficient credit for Agent SDK usage',
-      'monthly credit exhausted — enable extra usage to continue',
-      'usage limit reached; resets at the next billing cycle',
-      'Please purchase more credit',
+      'rate_limit_error: Your credit balance is too low to run this request',
+      '429 Too Many Requests — monthly credit exhausted, enable extra usage',
+      'anthropic API: usage limit reached for the Agent SDK credit',
+      'Error from anthropic: please purchase more credit (rate limit)',
     ]) {
       const s = detectRateLimitSignals(text);
       expect(s.creditExhausted, text).toBe(true);
       expect(s.rateLimited, text).toBe(true); // exhaustion is a 429 too
+    }
+  });
+
+  it('does NOT flag banking/fintech domain content as credit exhaustion (regression)', () => {
+    // The bug that killed the deposit-account testbed build: finance apps are full of
+    // "credit", "balance", "billing cycle", "insufficient funds" — none of which is an
+    // API error. Without an API-error marker, these must not trip exhaustion.
+    for (const text of [
+      'POSTINT: account credit balance is too low; insufficient funds for withdrawal',
+      'GENSTMT: statement billing cycle is monthly; applied monthly interest credit',
+      'Test passed: rejects transaction when balance insufficient and credit limit reached',
+      'usage limit reached on the customer card; monthly credit applied to the ledger',
+    ]) {
+      const s = detectRateLimitSignals(text);
+      expect(s.creditExhausted, text).toBe(false);
+      expect(s.rateLimited, text).toBe(false);
     }
   });
 

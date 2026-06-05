@@ -12,36 +12,50 @@ import { DEFAULT_TIMEOUT_MS } from './constants';
 
 const DEFAULT_MAX_CONCURRENT = 3;
 
-// Programmatic-credit exhaustion surfaces as a 429 — same as a transient rate limit —
-// so status alone can't tell them apart. These best-effort patterns look for
-// "won't recover by waiting" wording (Anthropic hasn't published the exact CLI string)
-// so the caller can fail fast instead of looping 5-minute retries until billing resets.
-const CREDIT_EXHAUSTED_PATTERNS: RegExp[] = [
-  /credit balance is too low/i,
-  /insufficient (credit|funds|balance)/i,
-  /out of credit/i,
-  /credit[^.\n]{0,30}exhaust/i,
-  /usage limit reached/i,
-  /monthly (usage )?(credit|limit)/i,
-  /billing cycle/i,
-  /extra usage/i,
-  /quota (has been )?(exceeded|exhausted)/i,
-  /purchase (more )?credit/i,
-];
-
 const TRANSIENT_RATE_LIMIT_PATTERNS: RegExp[] = [
-  /rate limit/i,
+  /rate.?limit/i,
   /\b429\b/,
   /too many requests/i,
 ];
 
+// Markers that the text is an actual Anthropic API error (not application content).
+// Credit wording only counts as exhaustion when it co-occurs with one of these — this
+// is the guardrail: the build/QA agents work on real apps, and finance/fintech domains
+// are saturated with "credit", "balance", "billing cycle", "monthly", "insufficient
+// funds". Without requiring API context, those false-trip exhaustion and kill the build.
+const API_ERROR_CONTEXT: RegExp[] = [
+  /rate.?limit/i,
+  /\b429\b/,
+  /too many requests/i,
+  /rate_limit_error/i,
+  /x-ratelimit/i,
+  /anthropic/i,
+];
+
+// Credit/usage-exhaustion wording. Deliberately omits bare "balance"/"funds"/"billing
+// cycle"/"monthly" — those are ordinary domain words. Even these only fire alongside
+// API_ERROR_CONTEXT (see detectRateLimitSignals).
+const CREDIT_EXHAUSTED_PATTERNS: RegExp[] = [
+  /credit balance is too low/i,
+  /insufficient credit/i,
+  /out of credit/i,
+  /credit[^.\n]{0,30}exhaust/i,
+  /usage limit reached/i,
+  /monthly credit/i,
+  /extra usage/i,
+  /purchase (more )?credit/i,
+];
+
 /**
- * Classify a chunk of CLI output for rate-limit signals. Credit exhaustion implies a
- * rate limit too, but is flagged separately so the orchestrator can fail fast on it
- * (waiting won't help) while still retrying genuine transient limits.
+ * Classify a chunk of CLI output for rate-limit signals. Credit exhaustion is only
+ * declared when credit/usage wording co-occurs with an actual API-error marker —
+ * otherwise application-domain text (e.g. a banking app's "insufficient credit") would
+ * false-trip it and the orchestrator would fail the build for a non-existent rate limit.
  */
 export function detectRateLimitSignals(text: string): { rateLimited: boolean; creditExhausted: boolean } {
-  const creditExhausted = CREDIT_EXHAUSTED_PATTERNS.some(p => p.test(text));
+  const hasApiContext = API_ERROR_CONTEXT.some(p => p.test(text));
+  const hasCreditWording = CREDIT_EXHAUSTED_PATTERNS.some(p => p.test(text));
+  const creditExhausted = hasCreditWording && hasApiContext;
   const rateLimited = creditExhausted || TRANSIENT_RATE_LIMIT_PATTERNS.some(p => p.test(text));
   return { rateLimited, creditExhausted };
 }
