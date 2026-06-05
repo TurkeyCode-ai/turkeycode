@@ -243,6 +243,12 @@ export interface SpawnResult {
   stderr: string;
   /** Duration in milliseconds */
   durationMs: number;
-  /** Whether rate limiting was detected in agent output */
+  /** Whether transient rate limiting (recovers in seconds) was detected in agent output */
   rateLimited?: boolean;
+  /**
+   * Whether a programmatic-credit/usage-limit exhaustion was detected — a 429 that
+   * resets at the next billing cycle, NOT a transient rate limit. Waiting won't help;
+   * the caller should fail fast with guidance to enable "extra usage" or wait for reset.
+   */
+  creditExhausted?: boolean;
 }

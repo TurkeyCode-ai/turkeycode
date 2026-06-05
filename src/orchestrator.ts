@@ -8,7 +8,8 @@ import { execSync } from 'child_process';
 import { join } from 'path';
 import {
   ProjectState,
-  BuildPhase
+  BuildPhase,
+  SpawnResult
 } from './types';
 import {
   loadState,
@@ -45,6 +46,7 @@ import {
   MAX_BUILD_RETRIES,
   MAX_QA_ATTEMPTS,
   MAX_QA_ATTEMPTS_WARNINGS_ONLY,
+  MAX_RATE_LIMIT_RETRIES,
   QA_DIR,
   SCREENSHOTS_DIR,
   RESEARCH_DONE,
@@ -913,6 +915,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     let qaPass = false;
     let preFixSha: string | null = null;
     let prevBlockerCount: number | null = null;
+    let rateLimitRetries = 0;
 
     while (!qaPass && this.state.qaAttempts < MAX_FAST_QA_ATTEMPTS) {
       this.state.qaAttempts++;
@@ -941,9 +944,9 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
         model: getModelForPhase('qa-functional') // Sonnet for combined QA
       });
 
+      this.assertNotCreditExhausted(qaResult);
       if (qaResult.rateLimited) {
-        this.log('Rate limit detected — waiting 5 minutes before retry...');
-        await new Promise(r => setTimeout(r, 5 * 60 * 1000));
+        rateLimitRetries = await this.waitForRateLimit(rateLimitRetries, 'QA');
         this.state.qaAttempts--;
         saveState(this.state);
         continue;
@@ -1073,6 +1076,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     let qaPass = false;
     let preFixSha: string | null = null;  // Git SHA before fix agent runs
     let prevBlockerCount: number | null = null;  // Blocker count from previous verdict
+    let rateLimitRetries = 0;
 
     while (!qaPass && this.state.qaAttempts < MAX_QA_ATTEMPTS) {
       this.state.qaAttempts++;
@@ -1096,9 +1100,9 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       });
 
       // Handle rate limiting — wait and retry without counting this attempt
+      this.assertNotCreditExhausted(smokeResult);
       if (smokeResult.rateLimited) {
-        this.log('Rate limit detected — waiting 5 minutes before retry...');
-        await new Promise(r => setTimeout(r, 5 * 60 * 1000));
+        rateLimitRetries = await this.waitForRateLimit(rateLimitRetries, 'QA smoke');
         this.state.qaAttempts--;
         saveState(this.state);
         continue;
@@ -1187,9 +1191,9 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       const qaResults = await this.spawner.runParallel(qaTasks, skipVisual ? 1 : 2);
 
       // Handle rate limiting in QA sessions
+      this.assertNotCreditExhausted(qaResults);
       if (qaResults.some(r => r.rateLimited)) {
-        this.log('Rate limit detected in QA sessions — waiting 5 minutes before retry...');
-        await new Promise(r => setTimeout(r, 5 * 60 * 1000));
+        rateLimitRetries = await this.waitForRateLimit(rateLimitRetries, 'parallel QA');
         this.state.qaAttempts--;
         saveState(this.state);
         continue;
@@ -1360,6 +1364,43 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     saveState(this.state);
 
     enforceGate(this.gates.checkAAR(phaseNumber));
+  }
+
+  /**
+   * Fail fast if any session was rejected for programmatic-credit exhaustion.
+   * Unlike a transient 429, this won't recover by waiting — retrying just burns
+   * the session timeout until the billing cycle resets. Throwing surfaces a clear,
+   * actionable message (the run aborts via index.ts's top-level catch).
+   */
+  private assertNotCreditExhausted(results: SpawnResult | SpawnResult[]): void {
+    const arr = Array.isArray(results) ? results : [results];
+    if (arr.some(r => r.creditExhausted)) {
+      throw new Error(
+        'Programmatic credit exhausted. The Claude Code session was rejected with a ' +
+        'credit/usage-limit error that resets at the next billing cycle — not a transient ' +
+        'rate limit, so retrying will not help. To continue now, enable "extra usage" in the ' +
+        'Claude Console (Settings → Billing) so overflow bills at pay-as-you-go API rates ' +
+        '(set a spend cap), or wait for the monthly credit to reset. Then run `turkeycode resume`.'
+      );
+    }
+  }
+
+  /**
+   * Handle a rate-limited session: fail fast on credit exhaustion, otherwise wait and
+   * allow a bounded number of transient retries. Returns the next retry count; throws
+   * once MAX_RATE_LIMIT_RETRIES is exceeded so the loop can't spin forever.
+   */
+  private async waitForRateLimit(retries: number, context: string): Promise<number> {
+    if (retries >= MAX_RATE_LIMIT_RETRIES) {
+      throw new Error(
+        `Persistent rate limiting during ${context} after ${MAX_RATE_LIMIT_RETRIES} retries — aborting. ` +
+        `If this recurs, your account may be at its per-minute limit or out of programmatic credit; ` +
+        `check the Claude Console. Resume with \`turkeycode resume\`.`
+      );
+    }
+    this.log(`Rate limit detected during ${context} — waiting 5 minutes before retry (${retries + 1}/${MAX_RATE_LIMIT_RETRIES})...`);
+    await new Promise(r => setTimeout(r, 5 * 60 * 1000));
+    return retries + 1;
   }
 
   /**

@@ -48,6 +48,9 @@ export const MAX_BUILD_RETRIES = 2;
 export const MAX_QA_ATTEMPTS = 5;
 export const MAX_QA_ATTEMPTS_WARNINGS_ONLY = 3;
 export const MAX_POLISH_ATTEMPTS = 2;
+// Transient rate-limit (429) retries before giving up. Credit-exhaustion 429s are
+// detected separately and fail fast — this only bounds genuine per-minute limits.
+export const MAX_RATE_LIMIT_RETRIES = 5;
 
 // Validation thresholds
 export const MIN_SPECS_LENGTH = 200;

@@ -12,6 +12,40 @@ import { DEFAULT_TIMEOUT_MS } from './constants';
 
 const DEFAULT_MAX_CONCURRENT = 3;
 
+// Programmatic-credit exhaustion surfaces as a 429 — same as a transient rate limit —
+// so status alone can't tell them apart. These best-effort patterns look for
+// "won't recover by waiting" wording (Anthropic hasn't published the exact CLI string)
+// so the caller can fail fast instead of looping 5-minute retries until billing resets.
+const CREDIT_EXHAUSTED_PATTERNS: RegExp[] = [
+  /credit balance is too low/i,
+  /insufficient (credit|funds|balance)/i,
+  /out of credit/i,
+  /credit[^.\n]{0,30}exhaust/i,
+  /usage limit reached/i,
+  /monthly (usage )?(credit|limit)/i,
+  /billing cycle/i,
+  /extra usage/i,
+  /quota (has been )?(exceeded|exhausted)/i,
+  /purchase (more )?credit/i,
+];
+
+const TRANSIENT_RATE_LIMIT_PATTERNS: RegExp[] = [
+  /rate limit/i,
+  /\b429\b/,
+  /too many requests/i,
+];
+
+/**
+ * Classify a chunk of CLI output for rate-limit signals. Credit exhaustion implies a
+ * rate limit too, but is flagged separately so the orchestrator can fail fast on it
+ * (waiting won't help) while still retrying genuine transient limits.
+ */
+export function detectRateLimitSignals(text: string): { rateLimited: boolean; creditExhausted: boolean } {
+  const creditExhausted = CREDIT_EXHAUSTED_PATTERNS.some(p => p.test(text));
+  const rateLimited = creditExhausted || TRANSIENT_RATE_LIMIT_PATTERNS.some(p => p.test(text));
+  return { rateLimited, creditExhausted };
+}
+
 /**
  * Spawner class for running Claude Code sessions
  * Each session gets ONE job and exits when done
@@ -59,6 +93,20 @@ export class Spawner {
       let killed = false;
       let doneFileDetected = false;
       let rateLimited = false;
+      let creditExhausted = false;
+
+      // Scan a chunk of output for rate-limit / credit-exhaustion signals.
+      const scanForLimits = (text: string) => {
+        const signal = detectRateLimitSignals(text);
+        if (signal.creditExhausted && !creditExhausted) {
+          creditExhausted = true;
+          this.log(`[${sessionName}] Credit/usage exhaustion detected in output (will not retry)`);
+        }
+        if (signal.rateLimited && !rateLimited) {
+          rateLimited = true;
+          this.log(`[${sessionName}] Rate limit detected in output`);
+        }
+      };
 
       // Spawn claude directly, write prompt to stdin
       // Pass through all env vars including ANTHROPIC_API_KEY
@@ -163,14 +211,7 @@ export class Spawner {
         const text = data.toString();
         stdout += text;
 
-        // Detect rate limiting
-        if (!rateLimited && (
-          text.includes('rate limit') || text.includes('429') ||
-          text.includes('too many requests') || text.includes('Rate limit')
-        )) {
-          this.log(`[${sessionName}] Rate limit detected in output`);
-          rateLimited = true;
-        }
+        scanForLimits(text);
 
         if (this.verbose) {
           process.stdout.write(text);
@@ -181,6 +222,10 @@ export class Spawner {
       proc.stderr?.on('data', (data: Buffer) => {
         const text = data.toString();
         stderr += text;
+
+        // CLI errors (including credit/rate-limit rejections) often land on stderr.
+        scanForLimits(text);
+
         if (this.verbose) {
           process.stderr.write(text);
         }
@@ -215,7 +260,8 @@ export class Spawner {
           stdout,
           stderr,
           durationMs,
-          rateLimited
+          rateLimited,
+          creditExhausted
         });
       });
 
@@ -233,7 +279,8 @@ export class Spawner {
           stdout,
           stderr: stderr + '\n' + err.message,
           durationMs,
-          rateLimited
+          rateLimited,
+          creditExhausted
         });
       });
     });
