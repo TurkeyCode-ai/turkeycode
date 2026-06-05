@@ -16,6 +16,7 @@ export type ProjectType =
   | 'desktop'          // Electron, Tauri, Qt, etc.
   | 'mobile'           // React Native, Flutter, Swift, Kotlin, etc.
   | 'embedded'         // PlatformIO, Arduino, ESP32, STM32, firmware projects
+  | 'legacy'           // Mainframe/legacy: COBOL, JCL, RPG, PL/I, Assembler (batch, no web UI)
   | 'monorepo'         // Multiple project types in one repo
   | 'unknown';         // Can't determine — fall back to basic compilation checks
 

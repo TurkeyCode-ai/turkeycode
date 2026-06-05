@@ -58,7 +58,7 @@ function checkExplicitType(cwd: string): ProjectType | null {
 function isValidProjectType(type: string): type is ProjectType {
   return [
     'web-fullstack', 'web-frontend', 'web-api', 'cli',
-    'library', 'desktop', 'mobile', 'embedded', 'monorepo', 'unknown'
+    'library', 'desktop', 'mobile', 'embedded', 'legacy', 'monorepo', 'unknown'
   ].includes(type);
 }
 
@@ -67,6 +67,11 @@ function isValidProjectType(type: string): type is ProjectType {
 function applyHeuristics(cwd: string): ProjectType {
   // Check for monorepo first
   if (isMonorepo(cwd)) return 'monorepo';
+
+  // Check legacy/mainframe projects (COBOL, JCL, RPG, PL/I) before modern stacks —
+  // these have none of the package.json/go.mod/etc. markers and would otherwise
+  // fall through to the web-fullstack default, giving them a nonsensical web QA strategy.
+  if (isLegacyProject(cwd)) return 'legacy';
 
   // Check embedded/firmware projects (PlatformIO, Arduino)
   if (isEmbeddedProject(cwd)) return 'embedded';
@@ -169,6 +174,50 @@ function isNativeAppleProject(cwd: string): boolean {
   }
 
   return false;
+}
+
+// ==================== Legacy / Mainframe Detection ====================
+
+/** Source extensions that signal a legacy/mainframe codebase. */
+const LEGACY_EXTENSIONS = [
+  '.cbl', '.cob', '.cobol', '.cpy',   // COBOL + copybooks
+  '.jcl',                              // Job Control Language
+  '.pli', '.pl1',                     // PL/I
+  '.rpgle', '.rpg', '.sqlrpgle',      // RPG (IBM i)
+  '.dds',                             // IBM i data description specs
+  '.asm', '.mac',                     // mainframe assembler / macros
+];
+
+function isLegacyProject(cwd: string): boolean {
+  // Walk the root and one level of subdirectories (generated layouts use src/, cobol/,
+  // programs/, copybooks/ etc.). Cheap shallow scan — don't recurse the whole tree.
+  const hasLegacyExt = (dir: string): boolean => {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      return false;
+    }
+    return entries.some(f => LEGACY_EXTENSIONS.includes(extLower(f)));
+  };
+
+  if (hasLegacyExt(cwd)) return true;
+
+  // One level deep
+  try {
+    for (const entry of readdirSync(cwd, { withFileTypes: true })) {
+      if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
+        if (hasLegacyExt(join(cwd, entry.name))) return true;
+      }
+    }
+  } catch { /* ignore */ }
+
+  return false;
+}
+
+function extLower(filename: string): string {
+  const dot = filename.lastIndexOf('.');
+  return dot === -1 ? '' : filename.slice(dot).toLowerCase();
 }
 
 // ==================== Embedded/Firmware Detection ====================

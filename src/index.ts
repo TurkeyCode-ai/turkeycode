@@ -38,6 +38,7 @@ program
   .option('--no-pr', 'Skip gh pr create (implied by --no-push)')
   .option('--aar', 'Generate a per-phase After-Action Report (extra LLM session per phase; off by default)')
   .option('--strict-phases', 'Gate every phase on ZERO warnings (old behavior). Disables the end-of-build polish pass.')
+  .option('--type <type>', 'Force project type (skips auto-detection): web-fullstack, web-frontend, web-api, cli, library, desktop, mobile, embedded, legacy, monorepo')
   .action(async (description: string, options) => {
     console.log('');
     console.log('╔══════════════════════════════════════════════════════════╗');
@@ -64,6 +65,22 @@ program
     }
     console.log('');
 
+    // Validate --type if provided (forces project type for greenfield builds).
+    const VALID_TYPES = [
+      'web-fullstack', 'web-frontend', 'web-api', 'cli', 'library',
+      'desktop', 'mobile', 'embedded', 'legacy', 'monorepo', 'unknown'
+    ];
+    let projectType: any = undefined;
+    if (options.type) {
+      if (!VALID_TYPES.includes(options.type)) {
+        console.error(`Invalid --type "${options.type}". Valid: ${VALID_TYPES.join(', ')}`);
+        process.exit(1);
+      }
+      projectType = options.type;
+      console.log(`Project type forced: ${projectType}`);
+      console.log('');
+    }
+
     // commander negates: --no-push sets options.push = false
     const noPush = options.push === false;
     const noPr = noPush || options.pr === false;
@@ -76,7 +93,8 @@ program
       noPush,
       noPr,
       aar: options.aar,
-      polish
+      polish,
+      projectType
     });
 
     try {
@@ -87,6 +105,7 @@ program
         noPush,
         noPr,
         aar: options.aar,
+        projectType,
         polish
       });
     } catch (err) {

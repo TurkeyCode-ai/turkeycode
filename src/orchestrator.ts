@@ -9,7 +9,8 @@ import { join } from 'path';
 import {
   ProjectState,
   BuildPhase,
-  SpawnResult
+  SpawnResult,
+  ProjectType
 } from './types';
 import {
   loadState,
@@ -78,6 +79,8 @@ export interface OrchestratorOptions {
   aar?: boolean;
   /** Run the end-of-build polish pass: one session that drives all warnings to zero across the repo, then verifies the build. On by default (defer-warnings model). */
   polish?: boolean;
+  /** Force the project type (skips auto-detection). Essential for greenfield builds where the dir is empty. */
+  projectType?: ProjectType;
 }
 
 /**
@@ -159,9 +162,17 @@ export class Orchestrator {
     }
 
     // ==================== DETECT PROJECT TYPE ====================
+    // An explicit --type wins over auto-detection — essential for greenfield builds
+    // (empty dir + spec), where the filesystem has nothing to detect from yet and
+    // detection would otherwise default to web-fullstack (e.g. a COBOL build).
     if (!this.state.projectType) {
-      this.state.projectType = detectProjectType(this.workDir);
-      this.log(`Detected project type: ${this.state.projectType}`);
+      if (options.projectType) {
+        this.state.projectType = options.projectType;
+        this.log(`Project type (forced via --type): ${this.state.projectType}`);
+      } else {
+        this.state.projectType = detectProjectType(this.workDir);
+        this.log(`Detected project type: ${this.state.projectType}`);
+      }
       saveState(this.state);
     } else {
       this.log(`Project type: ${this.state.projectType}`);
