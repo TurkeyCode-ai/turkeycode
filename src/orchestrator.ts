@@ -81,6 +81,12 @@ export interface OrchestratorOptions {
   polish?: boolean;
   /** Force the project type (skips auto-detection). Essential for greenfield builds where the dir is empty. */
   projectType?: ProjectType;
+  /**
+   * When the project is already complete, re-plan a fresh iteration from the provided spec
+   * instead of no-op'ing. Set by the `run` command (which always means "build this spec");
+   * left unset by `resume` (which should report a finished project as done, not rebuild it).
+   */
+  replanIfComplete?: boolean;
 }
 
 /**
@@ -165,6 +171,30 @@ export class Orchestrator {
     // An explicit --type wins over auto-detection — essential for greenfield builds
     // (empty dir + spec), where the filesystem has nothing to detect from yet and
     // detection would otherwise default to web-fullstack (e.g. a COBOL build).
+    // If the project is already complete, decide what a re-invocation means.
+    // `run` (replanIfComplete) → the user wants NEW work from the provided spec, so re-plan a
+    // fresh iteration (keep the code + context, clear phase tracking, regenerate the plan).
+    // Without this, `turkeycode run --spec <new>` on a finished project silently no-ops and
+    // prints "ORCHESTRATION COMPLETE" as if it built something. `resume` → report it as done.
+    if (this.state.currentPhase === 'done') {
+      if (options.replanIfComplete) {
+        this.log('Project already complete — re-planning a new iteration from the provided spec.');
+        this.state.projectDescription = description;
+        this.state.buildPhases = [];
+        this.state.completedPhases = [];
+        this.state.currentBuildPhaseNumber = 1;
+        this.state.currentPhase = 'research'; // continuation skips research; this re-triggers planning
+        try {
+          rmSync(join(this.workDir, PHASE_PLAN_FILE), { force: true });
+          rmSync(join(this.workDir, PLAN_DONE), { force: true });
+        } catch { /* ignore */ }
+        saveState(this.state);
+      } else {
+        this.log('Project already complete — nothing to resume. Run `turkeycode run --spec <file>` to add new work, or `turkeycode reset` to start over.');
+        return;
+      }
+    }
+
     if (!this.state.projectType) {
       if (options.projectType) {
         this.state.projectType = options.projectType;
@@ -300,9 +330,21 @@ export class Orchestrator {
     // ==================== POLISH PASS (defer-warnings model) ====================
     // Per-phase QA gated on blockers only, so warnings accumulated across phases.
     // One repo-wide pass cleans them coherently, then we re-verify the build.
-    if (this.polish && this.state.currentPhase !== 'done') {
+    // (An already-complete project is intercepted earlier, so currentPhase is never 'done' here.)
+    if (this.polish) {
       await this.runPolishPhase();
     }
+
+    // Return the working tree to the default branch — phase merges and the polish pass switch
+    // branches internally, and some paths (e.g. a clean polish pass with nothing to merge) can
+    // otherwise leave the user checked out on a phase/polish branch after the run completes.
+    try {
+      const finalBranch = this.github.getDefaultBranch();
+      if (this.github.getCurrentBranch() !== finalBranch) {
+        this.github.checkoutBranch(finalBranch);
+        this.log(`Returned working tree to ${finalBranch}`);
+      }
+    } catch { /* best effort — never fail the run over this */ }
 
     // ==================== DONE ====================
     this.state.currentPhase = 'done';

@@ -126,7 +126,10 @@ program
         noPr,
         aar: options.aar,
         projectType,
-        polish
+        polish,
+        // `run` always means "build this spec" — if the project is already complete,
+        // re-plan a new iteration rather than silently no-op'ing. (`resume` does not set this.)
+        replanIfComplete: true
       });
     } catch (err) {
       logFatal('orchestration', err);
