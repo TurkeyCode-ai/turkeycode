@@ -178,6 +178,17 @@ export class Orchestrator {
       this.log(`Project type: ${this.state.projectType}`);
     }
 
+    // Ignore + untrack turkeycode's own state on the default branch BEFORE any phase
+    // branch exists. .turkey/state.json mutates every phase; if it's ever git-tracked,
+    // the phase-merge `git checkout` aborts ("local changes would be overwritten") and
+    // the run dies. Doing it here (on main, once) keeps every branch free of it.
+    this.ensureGitignore();
+    try {
+      if (this.github.hasUncommittedChanges()) {
+        this.github.commit('chore: ignore turkeycode runtime state (.turkey/)');
+      }
+    } catch { /* no repo yet / nothing to commit — fine */ }
+
     // Load spec file content if provided. Auto-detect when the description is
     // itself a path to a markdown file — `turkeycode run my-prompt.md` should
     // Just Work without requiring `--spec`.
@@ -1641,7 +1652,18 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
   private ensureGitignore(): void {
     const gitignorePath = join(this.workDir, '.gitignore');
 
-    if (existsSync(gitignorePath)) return;
+    if (existsSync(gitignorePath)) {
+      // Never bail just because a .gitignore already exists (build agents create one) —
+      // we must still guarantee turkeycode's own state dir is ignored, or git checkout
+      // during phase merges fails on the constantly-mutating .turkey/state.json.
+      const content = readFileSync(gitignorePath, 'utf-8');
+      if (!/^\s*\.turkey\/?\s*$/m.test(content)) {
+        writeFileSync(gitignorePath, content.replace(/\s*$/, '') + '\n\n# turkeycode runtime state — never commit\n.turkey/\n');
+        this.log('Added .turkey/ to existing .gitignore');
+      }
+      this.untrackTurkeyState();
+      return;
+    }
 
     const tech = this.state.tech;
     const stack = (tech.frontend || '') + ' ' + (tech.backend || '') + ' ' + ((tech as Record<string, unknown>).framework || '');
@@ -1709,10 +1731,31 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     // Testing
     lines.push('', '# Test artifacts', 'coverage/', 'playwright-report/', 'test-results/');
 
+    // turkeycode runtime state — must never be committed (mutates every phase; a tracked
+    // copy makes `git checkout`/merge fail on branch switches).
+    lines.push('', '# turkeycode runtime state — never commit', '.turkey/');
+
     lines.push('');
 
     writeFileSync(gitignorePath, lines.join('\n'));
     this.log('Created .gitignore based on project type');
+    this.untrackTurkeyState();
+  }
+
+  /**
+   * Untrack .turkey/ if a prior run (or a build agent's `git add -A`) committed it.
+   * turkeycode's state mutates every phase; if it's tracked, `git checkout <target>`
+   * during a phase merge aborts with "local changes would be overwritten", which used
+   * to kill the run on the local-merge path (no remote / --no-push). Files stay on disk.
+   */
+  private untrackTurkeyState(): void {
+    try {
+      const tracked = execSync('git ls-files .turkey', { cwd: this.workDir, encoding: 'utf-8', stdio: 'pipe' }).trim();
+      if (tracked) {
+        execSync('git rm -r --cached --quiet .turkey', { cwd: this.workDir, stdio: 'pipe' });
+        this.log('Untracked .turkey/ from git (turkeycode state must never be committed)');
+      }
+    } catch { /* not a git repo yet, or nothing tracked — fine */ }
   }
 
   /**

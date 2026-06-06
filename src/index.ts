@@ -12,10 +12,30 @@ import { resolve } from 'path';
 config({ path: resolve(__dirname, '..', 'deploy', '.env') });
 
 import { Command } from 'commander';
+import { appendFileSync, mkdirSync } from 'fs';
+import { join } from 'path';
 import { createOrchestrator } from './orchestrator';
 import { loadState, resetState, canResume } from './state';
 import { createGates } from './gates';
 import { setStrictQA } from './constants';
+
+/**
+ * Write a fatal error to .turkey/fatal.log via fs. console output can be lost when
+ * stdout is buffered/redirected under a parent harness, but fs writes survive — so
+ * this is the reliable record of why a long autonomous run died.
+ */
+function logFatal(context: string, err: unknown): void {
+  try {
+    mkdirSync('.turkey', { recursive: true });
+    const e = err as any;
+    const detail = e?.stack || e?.message || String(err);
+    appendFileSync(join('.turkey', 'fatal.log'), `\n[${new Date().toISOString()}] FATAL (${context}):\n${detail}\n`);
+  } catch { /* best effort */ }
+}
+
+// Catch anything that escapes the command handlers (async rejections, etc.).
+process.on('uncaughtException', (err) => { logFatal('uncaughtException', err); console.error('uncaughtException:', err); process.exit(1); });
+process.on('unhandledRejection', (err) => { logFatal('unhandledRejection', err); console.error('unhandledRejection:', err); process.exit(1); });
 
 const program = new Command();
 
@@ -109,6 +129,7 @@ program
         polish
       });
     } catch (err) {
+      logFatal('orchestration', err);
       console.error('Orchestration failed:', err);
       process.exit(1);
     }
@@ -294,6 +315,7 @@ program
     try {
       await orchestrator.run(state.projectDescription, { aar: options.aar, polish });
     } catch (err) {
+      logFatal('orchestration', err);
       console.error('Orchestration failed:', err);
       process.exit(1);
     }
