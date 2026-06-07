@@ -90,6 +90,25 @@ export interface OrchestratorOptions {
 }
 
 /**
+ * A phase's `build.done` marker is stale when the phase plan was regenerated
+ * after it was written — i.e. `phase-plan.json` is newer than `build.done`.
+ * This happens on a replan (a new iteration renumbers its phases 1..N, reusing
+ * the same on-disk paths as the previous iteration). A stale marker must not be
+ * trusted to mean "this phase is built" — doing so is what let a replanned run
+ * "complete" without building anything. Shared by the build-skip check and the
+ * resume reconciler so both apply the identical rule.
+ */
+export function isBuildDoneStale(workDir: string, buildDonePath: string): boolean {
+  try {
+    const planPath = join(workDir, PHASE_PLAN_FILE);
+    if (existsSync(planPath) && existsSync(buildDonePath)) {
+      return statSync(planPath).mtimeMs > statSync(buildDonePath).mtimeMs;
+    }
+  } catch { /* stat error — treat as not-stale, fall through to other checks */ }
+  return false;
+}
+
+/**
  * Main orchestrator class
  * Phase-based: 2-5 build phases, each one Claude session
  */
@@ -187,6 +206,12 @@ export class Orchestrator {
         try {
           rmSync(join(this.workDir, PHASE_PLAN_FILE), { force: true });
           rmSync(join(this.workDir, PLAN_DONE), { force: true });
+          // Clear prior-iteration phase tracking. The new iteration numbers its
+          // phases 1..N again; if the old iteration's `.turkey/phases/phase-N/build.done`
+          // markers survive, reconcileResumeState (and the build-skip check) false-match
+          // the fresh phases against finished work — turkey then "completes" without
+          // building anything. Removing the markers at replan time is the root-cause fix.
+          rmSync(join(this.workDir, PHASES_DIR), { recursive: true, force: true });
         } catch { /* ignore */ }
         saveState(this.state);
       } else {
@@ -510,6 +535,15 @@ export class Orchestrator {
       const buildDonePath = join(this.workDir, PHASES_DIR, `phase-${phase.number}`, 'build.done');
       if (!existsSync(buildDonePath)) continue;
 
+      // Defense-in-depth (mirrors the build-skip guard): a build.done older than
+      // phase-plan.json belongs to a prior iteration's phase of the same number.
+      if (isBuildDoneStale(this.workDir, buildDonePath)) {
+        this.log(
+          `Reconcile: phase ${phase.number} build.done is stale (older than phase-plan.json) — skipping`
+        );
+        continue;
+      }
+
       // Does a commit for this phase's work exist on the default branch?
       let phaseCommitOnDefault = false;
       try {
@@ -616,19 +650,10 @@ export class Orchestrator {
     // Guard: if phase-plan.json is newer than build.done, the plan was regenerated and build.done is stale
     const buildDonePath = join(this.workDir, PHASES_DIR, `phase-${phaseNumber}`, 'build.done');
     let phaseAlreadyBuilt = existsSync(buildDonePath);
-    if (phaseAlreadyBuilt) {
-      try {
-        const planPath = join(this.workDir, PHASE_PLAN_FILE);
-        if (existsSync(planPath)) {
-          const planMtime = statSync(planPath).mtimeMs;
-          const buildDoneMtime = statSync(buildDonePath).mtimeMs;
-          if (planMtime > buildDoneMtime) {
-            this.log(`Phase ${phaseNumber} build.done is stale (older than phase-plan.json), removing...`);
-            unlinkSync(buildDonePath);
-            phaseAlreadyBuilt = false;
-          }
-        }
-      } catch { /* ignore stat errors */ }
+    if (phaseAlreadyBuilt && isBuildDoneStale(this.workDir, buildDonePath)) {
+      this.log(`Phase ${phaseNumber} build.done is stale (older than phase-plan.json), removing...`);
+      try { unlinkSync(buildDonePath); } catch { /* ignore */ }
+      phaseAlreadyBuilt = false;
     }
     if (phaseAlreadyBuilt) {
       this.log(`Phase ${phaseNumber} already built (build.done exists), skipping build...`);
