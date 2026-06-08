@@ -133,8 +133,13 @@ export class Spawner {
         'DATABASE_URL', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET',
         'SENDGRID_API_KEY', 'NEXTAUTH_SECRET', 'SESSION_SECRET',
         'CLAUDECODE',  // Prevent "nested session" error when run inside Claude Code
-        'ANTHROPIC_API_KEY',  // Strip so claude uses Max login instead of API key
       ];
+      // By default strip ANTHROPIC_API_KEY so the CLI uses the Max login session.
+      // In sandboxed/API-key mode (no login session — e.g. the isolated build
+      // jail) set TURKEYCODE_USE_API_KEY=1 to KEEP the key as the auth source.
+      if (process.env.TURKEYCODE_USE_API_KEY !== '1') {
+        NEVER_PASS_VARS.push('ANTHROPIC_API_KEY');
+      }
       for (const key of NEVER_PASS_VARS) {
         delete cleanEnv[key];
       }
