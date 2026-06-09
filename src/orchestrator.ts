@@ -237,12 +237,20 @@ export class Orchestrator {
     // branch exists. .turkey/state.json mutates every phase; if it's ever git-tracked,
     // the phase-merge `git checkout` aborts ("local changes would be overwritten") and
     // the run dies. Doing it here (on main, once) keeps every branch free of it.
+    // Guarantee a local git repo with a BORN default branch exists before any
+    // phase branching — even without a GitHub remote (GITHUB_OWNER unset, e.g.
+    // sandboxed builds). `git init -b main` leaves main unborn until the first
+    // commit, so the first phase's `git checkout main` would otherwise fail and
+    // branch reconciliation breaks. (With GITHUB_OWNER, setupProject already
+    // inited + committed; initRepo/ensureInitialCommit are no-ops then.)
+    this.github.initRepo();
     this.ensureGitignore();
     try {
       if (this.github.hasUncommittedChanges()) {
         this.github.commit('chore: ignore turkeycode runtime state (.turkey/)');
       }
     } catch { /* no repo yet / nothing to commit — fine */ }
+    this.github.ensureInitialCommit();
 
     // Load spec file content if provided. Auto-detect when the description is
     // itself a path to a markdown file — `turkeycode run my-prompt.md` should
