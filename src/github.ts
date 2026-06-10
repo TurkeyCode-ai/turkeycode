@@ -711,7 +711,7 @@ export class GitHubClient {
    *
    * `git init -b main` leaves `main` UNBORN until the first commit. With a
    * GitHub remote, setupProject() makes that first commit; but when GITHUB_OWNER
-   * is unset (e.g. sandboxed builds with no remote), nothing did — so the first
+   * is unset (e.g. headless/CI builds with no remote), nothing did — so the first
    * phase's `git checkout main` failed and the build agent created its own
    * ad-hoc branches that reconciliation could not cleanly merge. Calling this
    * before any phase branching makes the flow deterministic in both cases.
