@@ -12,10 +12,30 @@ import { resolve } from 'path';
 config({ path: resolve(__dirname, '..', 'deploy', '.env') });
 
 import { Command } from 'commander';
+import { appendFileSync, mkdirSync } from 'fs';
+import { join } from 'path';
 import { createOrchestrator } from './orchestrator';
 import { loadState, resetState, canResume } from './state';
 import { createGates } from './gates';
 import { setStrictQA } from './constants';
+
+/**
+ * Write a fatal error to .turkey/fatal.log via fs. console output can be lost when
+ * stdout is buffered/redirected under a parent harness, but fs writes survive — so
+ * this is the reliable record of why a long autonomous run died.
+ */
+function logFatal(context: string, err: unknown): void {
+  try {
+    mkdirSync('.turkey', { recursive: true });
+    const e = err as any;
+    const detail = e?.stack || e?.message || String(err);
+    appendFileSync(join('.turkey', 'fatal.log'), `\n[${new Date().toISOString()}] FATAL (${context}):\n${detail}\n`);
+  } catch { /* best effort */ }
+}
+
+// Catch anything that escapes the command handlers (async rejections, etc.).
+process.on('uncaughtException', (err) => { logFatal('uncaughtException', err); console.error('uncaughtException:', err); process.exit(1); });
+process.on('unhandledRejection', (err) => { logFatal('unhandledRejection', err); console.error('unhandledRejection:', err); process.exit(1); });
 
 const program = new Command();
 
@@ -36,6 +56,9 @@ program
   .option('-w, --allow-warnings', 'Allow warnings in QA (only blockers must be zero)')
   .option('--no-push', 'Skip git push (use for local-only repos or no_push remotes)')
   .option('--no-pr', 'Skip gh pr create (implied by --no-push)')
+  .option('--aar', 'Generate a per-phase After-Action Report (extra LLM session per phase; off by default)')
+  .option('--strict-phases', 'Gate every phase on ZERO warnings (old behavior). Disables the end-of-build polish pass.')
+  .option('--type <type>', 'Force project type (skips auto-detection): web-fullstack, web-frontend, web-api, cli, library, desktop, mobile, embedded, legacy, monorepo')
   .action(async (description: string, options) => {
     console.log('');
     console.log('╔══════════════════════════════════════════════════════════╗');
@@ -45,10 +68,36 @@ program
     console.log('╚══════════════════════════════════════════════════════════╝');
     console.log('');
 
-    // Set QA strictness based on flag
-    if (options.allowWarnings) {
-      setStrictQA(false);
-      console.log('Warning threshold: RELAXED (blockers only, warnings allowed)');
+    // Warning policy (three modes):
+    //  - default        → defer warnings: blockers-only per phase + end-of-build polish pass
+    //  - --strict-phases → ZERO warnings gated at every phase (old behavior), no polish
+    //  - --allow-warnings→ blockers-only per phase, warnings left as-is (no polish)
+    const strictPhases = options.strictPhases === true;
+    const allowWarnings = options.allowWarnings === true;
+    setStrictQA(strictPhases);
+    const polish = !strictPhases && !allowWarnings;
+    if (strictPhases) {
+      console.log('Warning policy: STRICT — every phase gated on ZERO warnings');
+    } else if (allowWarnings) {
+      console.log('Warning policy: RELAXED — blockers only, warnings left as-is (no polish)');
+    } else {
+      console.log('Warning policy: DEFER — blockers-only per phase, warnings cleaned in a final polish pass');
+    }
+    console.log('');
+
+    // Validate --type if provided (forces project type for greenfield builds).
+    const VALID_TYPES = [
+      'web-fullstack', 'web-frontend', 'web-api', 'cli', 'library',
+      'desktop', 'mobile', 'embedded', 'legacy', 'monorepo', 'unknown'
+    ];
+    let projectType: any = undefined;
+    if (options.type) {
+      if (!VALID_TYPES.includes(options.type)) {
+        console.error(`Invalid --type "${options.type}". Valid: ${VALID_TYPES.join(', ')}`);
+        process.exit(1);
+      }
+      projectType = options.type;
+      console.log(`Project type forced: ${projectType}`);
       console.log('');
     }
 
@@ -62,7 +111,10 @@ program
       githubRepo: options.github,
       specFile: options.spec,
       noPush,
-      noPr
+      noPr,
+      aar: options.aar,
+      polish,
+      projectType
     });
 
     try {
@@ -71,9 +123,16 @@ program
         githubRepo: options.github,
         specFile: options.spec,
         noPush,
-        noPr
+        noPr,
+        aar: options.aar,
+        projectType,
+        polish,
+        // `run` always means "build this spec" — if the project is already complete,
+        // re-plan a new iteration rather than silently no-op'ing. (`resume` does not set this.)
+        replanIfComplete: true
       });
     } catch (err) {
+      logFatal('orchestration', err);
       console.error('Orchestration failed:', err);
       process.exit(1);
     }
@@ -224,16 +283,25 @@ program
   .description('Resume from current state')
   .option('-v, --verbose', 'Verbose output')
   .option('-w, --allow-warnings', 'Allow warnings in QA (only blockers must be zero)')
+  .option('--aar', 'Generate a per-phase After-Action Report (extra LLM session per phase; off by default)')
+  .option('--strict-phases', 'Gate every phase on ZERO warnings (old behavior). Disables the end-of-build polish pass.')
   .action(async (options) => {
     if (!canResume()) {
       console.log('Nothing to resume. Use "turkey-enterprise-v3 run" to start.');
       process.exit(1);
     }
 
-    // Set QA strictness based on flag
-    if (options.allowWarnings) {
-      setStrictQA(false);
-      console.log('Warning threshold: RELAXED (blockers only, warnings allowed)');
+    // Warning policy — mirror the `run` command (default: defer + polish).
+    const strictPhases = options.strictPhases === true;
+    const allowWarnings = options.allowWarnings === true;
+    setStrictQA(strictPhases);
+    const polish = !strictPhases && !allowWarnings;
+    if (strictPhases) {
+      console.log('Warning policy: STRICT — every phase gated on ZERO warnings');
+    } else if (allowWarnings) {
+      console.log('Warning policy: RELAXED — blockers only, warnings left as-is (no polish)');
+    } else {
+      console.log('Warning policy: DEFER — blockers-only per phase, warnings cleaned in a final polish pass');
     }
 
     const state = loadState();
@@ -242,12 +310,15 @@ program
     console.log('');
 
     const orchestrator = createOrchestrator({
-      verbose: options.verbose
+      verbose: options.verbose,
+      aar: options.aar,
+      polish
     });
 
     try {
-      await orchestrator.run(state.projectDescription, {});
+      await orchestrator.run(state.projectDescription, { aar: options.aar, polish });
     } catch (err) {
+      logFatal('orchestration', err);
       console.error('Orchestration failed:', err);
       process.exit(1);
     }

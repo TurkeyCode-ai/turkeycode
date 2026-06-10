@@ -30,6 +30,9 @@ export const REVIEWS_DIR = `${STATE_DIR}/reviews`;
 // AAR artifacts
 export const AAR_DIR = `${STATE_DIR}/aar`;
 
+// Polish artifacts (end-of-build warning cleanup pass)
+export const POLISH_DIR = `${STATE_DIR}/polish`;
+
 // Timeouts (in milliseconds)
 export const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 export const RESEARCH_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
@@ -38,11 +41,16 @@ export const PHASE_BUILD_TIMEOUT_MS = 90 * 60 * 1000; // 90 minutes (phases are 
 export const QA_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 export const FIX_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 export const AAR_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes (just writing a markdown summary)
+export const POLISH_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes (repo-wide warning cleanup)
 
 // Retry limits
 export const MAX_BUILD_RETRIES = 2;
 export const MAX_QA_ATTEMPTS = 5;
 export const MAX_QA_ATTEMPTS_WARNINGS_ONLY = 3;
+export const MAX_POLISH_ATTEMPTS = 2;
+// Transient rate-limit (429) retries before giving up. Credit-exhaustion 429s are
+// detected separately and fail fast — this only bounds genuine per-minute limits.
+export const MAX_RATE_LIMIT_RETRIES = 5;
 
 // Validation thresholds
 export const MIN_SPECS_LENGTH = 200;
@@ -80,6 +88,9 @@ export const PHASE_MODELS: Record<string, string> = {
   // Post-build — Sonnet for review, Haiku for mechanical summarization
   'code-review': 'sonnet',
   'aar': 'sonnet',
+
+  // Polish — Sonnet: warning cleanup is mechanical-ish but fixes need judgment
+  'polish': 'sonnet',
 };
 
 /**
@@ -98,5 +109,6 @@ export const ALL_DIRS = [
   QA_DIR,
   SCREENSHOTS_DIR,
   REVIEWS_DIR,
-  AAR_DIR
+  AAR_DIR,
+  POLISH_DIR
 ];

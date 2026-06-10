@@ -3,7 +3,7 @@
  * Wraps gh CLI - skips gracefully if not available
  */
 
-import { execSync } from 'child_process';
+import { execSync, ExecSyncOptions } from 'child_process';
 import fs, { writeFileSync, unlinkSync } from 'fs';
 import path, { join } from 'path';
 import { tmpdir } from 'os';
@@ -685,11 +685,60 @@ export class GitHubClient {
       return true;
     }
     try {
-      execSync('git init -b main', { stdio: 'inherit' });
+      execSync('git init -b main', { stdio: 'inherit', cwd: this.workDir });
       console.log('Initialized git repository (branch: main)');
       return true;
     } catch (err) {
       console.error(`Failed to init repo: ${err}`);
+      return false;
+    }
+  }
+
+  /**
+   * True if the repo has at least one commit (HEAD is "born").
+   */
+  hasCommits(): boolean {
+    try {
+      execSync('git rev-parse --verify HEAD', { stdio: ['pipe', 'pipe', 'pipe'], cwd: this.workDir });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Guarantee the default branch is BORN (has >=1 commit).
+   *
+   * `git init -b main` leaves `main` UNBORN until the first commit. With a
+   * GitHub remote, setupProject() makes that first commit; but when GITHUB_OWNER
+   * is unset (e.g. sandboxed builds with no remote), nothing did — so the first
+   * phase's `git checkout main` failed and the build agent created its own
+   * ad-hoc branches that reconciliation could not cleanly merge. Calling this
+   * before any phase branching makes the flow deterministic in both cases.
+   *
+   * Commits any staged/working changes if present, otherwise an empty commit.
+   * No-op once the branch is born, so it's safe to call on every invocation.
+   */
+  ensureInitialCommit(): boolean {
+    if (this.hasCommits()) return true;
+    this.removeStaleIndexLock();
+    const quiet: ExecSyncOptions = { stdio: 'pipe', cwd: this.workDir };
+    try {
+      execSync('git add -A', quiet);
+      let staged = true;
+      try {
+        // exit 0 → nothing staged; exit non-zero → staged changes present
+        execSync('git diff --cached --quiet', quiet);
+        staged = false;
+      } catch { /* staged changes present */ }
+      execSync(
+        staged ? 'git commit -m "Initial commit"' : 'git commit --allow-empty -m "Initial commit"',
+        quiet
+      );
+      console.log('Created initial commit (born default branch)');
+      return true;
+    } catch (err) {
+      console.error(`Failed to create initial commit: ${err}`);
       return false;
     }
   }
