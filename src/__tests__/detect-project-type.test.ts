@@ -178,6 +178,42 @@ describe('monorepo detection', () => {
   });
 });
 
+// ==================== Legacy / Mainframe Detection ====================
+
+describe('legacy detection', () => {
+  it('detects legacy for COBOL sources in the root', () => {
+    writeFileSync(join(testDir, 'POSTINT.cbl'), 'IDENTIFICATION DIVISION.');
+    expect(detectProjectType(testDir)).toBe('legacy');
+  });
+
+  it('detects legacy for COBOL copybooks', () => {
+    writeFileSync(join(testDir, 'ACCTMAST.cpy'), '01 ACCT-REC.');
+    expect(detectProjectType(testDir)).toBe('legacy');
+  });
+
+  it('detects legacy for JCL', () => {
+    writeFileSync(join(testDir, 'RUNJOB.jcl'), '//RUNJOB JOB');
+    expect(detectProjectType(testDir)).toBe('legacy');
+  });
+
+  it('detects legacy for RPG (IBM i)', () => {
+    writeFileSync(join(testDir, 'INVUPD.rpgle'), '**FREE');
+    expect(detectProjectType(testDir)).toBe('legacy');
+  });
+
+  it('detects legacy when COBOL lives one level deep (src/, cobol/)', () => {
+    mkdirSync(join(testDir, 'src'), { recursive: true });
+    writeFileSync(join(testDir, 'src', 'GENSTMT.cob'), 'IDENTIFICATION DIVISION.');
+    expect(detectProjectType(testDir)).toBe('legacy');
+  });
+
+  it('does not misclassify a modern project with no legacy files', () => {
+    writeFileSync(join(testDir, 'go.mod'), 'module x\n');
+    writeFileSync(join(testDir, 'main.go'), 'package main');
+    expect(detectProjectType(testDir)).toBe('cli');
+  });
+});
+
 // ==================== Fallback ====================
 
 describe('fallback', () => {

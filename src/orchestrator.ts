@@ -8,7 +8,9 @@ import { execSync } from 'child_process';
 import { join } from 'path';
 import {
   ProjectState,
-  BuildPhase
+  BuildPhase,
+  SpawnResult,
+  ProjectType
 } from './types';
 import {
   loadState,
@@ -32,7 +34,8 @@ import {
   buildQaFixPrompt,
   buildQaCombinedPrompt,
   buildCodeReviewPrompt,
-  buildAarPrompt
+  buildAarPrompt,
+  buildPolishPrompt
 } from './prompts';
 import {
   RESEARCH_TIMEOUT_MS,
@@ -44,6 +47,7 @@ import {
   MAX_BUILD_RETRIES,
   MAX_QA_ATTEMPTS,
   MAX_QA_ATTEMPTS_WARNINGS_ONLY,
+  MAX_RATE_LIMIT_RETRIES,
   QA_DIR,
   SCREENSHOTS_DIR,
   RESEARCH_DONE,
@@ -54,6 +58,9 @@ import {
   SPECS_FILE,
   REVIEWS_DIR,
   AAR_DIR,
+  POLISH_DIR,
+  POLISH_TIMEOUT_MS,
+  MAX_POLISH_ATTEMPTS,
   getModelForPhase
 } from './constants';
 import { audit, auditGate, auditPhase, auditBuildPhase, auditQA } from './audit';
@@ -68,6 +75,37 @@ export interface OrchestratorOptions {
   specFile?: string;
   noPush?: boolean;
   noPr?: boolean;
+  /** Generate a per-phase After-Action Report (extra LLM session per phase). Off by default — nothing downstream consumes it. */
+  aar?: boolean;
+  /** Run the end-of-build polish pass: one session that drives all warnings to zero across the repo, then verifies the build. On by default (defer-warnings model). */
+  polish?: boolean;
+  /** Force the project type (skips auto-detection). Essential for greenfield builds where the dir is empty. */
+  projectType?: ProjectType;
+  /**
+   * When the project is already complete, re-plan a fresh iteration from the provided spec
+   * instead of no-op'ing. Set by the `run` command (which always means "build this spec");
+   * left unset by `resume` (which should report a finished project as done, not rebuild it).
+   */
+  replanIfComplete?: boolean;
+}
+
+/**
+ * A phase's `build.done` marker is stale when the phase plan was regenerated
+ * after it was written — i.e. `phase-plan.json` is newer than `build.done`.
+ * This happens on a replan (a new iteration renumbers its phases 1..N, reusing
+ * the same on-disk paths as the previous iteration). A stale marker must not be
+ * trusted to mean "this phase is built" — doing so is what let a replanned run
+ * "complete" without building anything. Shared by the build-skip check and the
+ * resume reconciler so both apply the identical rule.
+ */
+export function isBuildDoneStale(workDir: string, buildDonePath: string): boolean {
+  try {
+    const planPath = join(workDir, PHASE_PLAN_FILE);
+    if (existsSync(planPath) && existsSync(buildDonePath)) {
+      return statSync(planPath).mtimeMs > statSync(buildDonePath).mtimeMs;
+    }
+  } catch { /* stat error — treat as not-stale, fall through to other checks */ }
+  return false;
 }
 
 /**
@@ -82,9 +120,13 @@ export class Orchestrator {
   private github: GitHubClient;
   private verbose: boolean;
   private workDir: string;
+  private aar: boolean;
+  private polish: boolean;
 
   constructor(options: OrchestratorOptions = {}) {
     this.verbose = options.verbose ?? false;
+    this.aar = options.aar ?? false;
+    this.polish = options.polish ?? false;
     this.workDir = process.cwd();
     this.state = loadState();
     this.spawner = createSpawner({ verbose: this.verbose });
@@ -145,13 +187,70 @@ export class Orchestrator {
     }
 
     // ==================== DETECT PROJECT TYPE ====================
+    // An explicit --type wins over auto-detection — essential for greenfield builds
+    // (empty dir + spec), where the filesystem has nothing to detect from yet and
+    // detection would otherwise default to web-fullstack (e.g. a COBOL build).
+    // If the project is already complete, decide what a re-invocation means.
+    // `run` (replanIfComplete) → the user wants NEW work from the provided spec, so re-plan a
+    // fresh iteration (keep the code + context, clear phase tracking, regenerate the plan).
+    // Without this, `turkeycode run --spec <new>` on a finished project silently no-ops and
+    // prints "ORCHESTRATION COMPLETE" as if it built something. `resume` → report it as done.
+    if (this.state.currentPhase === 'done') {
+      if (options.replanIfComplete) {
+        this.log('Project already complete — re-planning a new iteration from the provided spec.');
+        this.state.projectDescription = description;
+        this.state.buildPhases = [];
+        this.state.completedPhases = [];
+        this.state.currentBuildPhaseNumber = 1;
+        this.state.currentPhase = 'research'; // continuation skips research; this re-triggers planning
+        try {
+          rmSync(join(this.workDir, PHASE_PLAN_FILE), { force: true });
+          rmSync(join(this.workDir, PLAN_DONE), { force: true });
+          // Clear prior-iteration phase tracking. The new iteration numbers its
+          // phases 1..N again; if the old iteration's `.turkey/phases/phase-N/build.done`
+          // markers survive, reconcileResumeState (and the build-skip check) false-match
+          // the fresh phases against finished work — turkey then "completes" without
+          // building anything. Removing the markers at replan time is the root-cause fix.
+          rmSync(join(this.workDir, PHASES_DIR), { recursive: true, force: true });
+        } catch { /* ignore */ }
+        saveState(this.state);
+      } else {
+        this.log('Project already complete — nothing to resume. Run `turkeycode run --spec <file>` to add new work, or `turkeycode reset` to start over.');
+        return;
+      }
+    }
+
     if (!this.state.projectType) {
-      this.state.projectType = detectProjectType(this.workDir);
-      this.log(`Detected project type: ${this.state.projectType}`);
+      if (options.projectType) {
+        this.state.projectType = options.projectType;
+        this.log(`Project type (forced via --type): ${this.state.projectType}`);
+      } else {
+        this.state.projectType = detectProjectType(this.workDir);
+        this.log(`Detected project type: ${this.state.projectType}`);
+      }
       saveState(this.state);
     } else {
       this.log(`Project type: ${this.state.projectType}`);
     }
+
+    // Ignore + untrack turkeycode's own state on the default branch BEFORE any phase
+    // branch exists. .turkey/state.json mutates every phase; if it's ever git-tracked,
+    // the phase-merge `git checkout` aborts ("local changes would be overwritten") and
+    // the run dies. Doing it here (on main, once) keeps every branch free of it.
+    // Guarantee a local git repo with a BORN default branch exists before any
+    // phase branching — even without a GitHub remote (GITHUB_OWNER unset, e.g.
+    // sandboxed builds). `git init -b main` leaves main unborn until the first
+    // commit, so the first phase's `git checkout main` would otherwise fail and
+    // branch reconciliation breaks. (With GITHUB_OWNER, setupProject already
+    // inited + committed; initRepo/ensureInitialCommit are no-ops then.)
+    this.github.initRepo();
+    this.ensureGitignore();
+    try {
+      if (this.github.hasUncommittedChanges()) {
+        this.github.commit('chore: ignore turkeycode runtime state (.turkey/)');
+      }
+    } catch { /* no repo yet / nothing to commit — fine */ }
+    this.github.ensureInitialCommit();
 
     // Load spec file content if provided. Auto-detect when the description is
     // itself a path to a markdown file — `turkeycode run my-prompt.md` should
@@ -260,6 +359,25 @@ export class Orchestrator {
       }
       saveState(this.state);
     }
+
+    // ==================== POLISH PASS (defer-warnings model) ====================
+    // Per-phase QA gated on blockers only, so warnings accumulated across phases.
+    // One repo-wide pass cleans them coherently, then we re-verify the build.
+    // (An already-complete project is intercepted earlier, so currentPhase is never 'done' here.)
+    if (this.polish) {
+      await this.runPolishPhase();
+    }
+
+    // Return the working tree to the default branch — phase merges and the polish pass switch
+    // branches internally, and some paths (e.g. a clean polish pass with nothing to merge) can
+    // otherwise leave the user checked out on a phase/polish branch after the run completes.
+    try {
+      const finalBranch = this.github.getDefaultBranch();
+      if (this.github.getCurrentBranch() !== finalBranch) {
+        this.github.checkoutBranch(finalBranch);
+        this.log(`Returned working tree to ${finalBranch}`);
+      }
+    } catch { /* best effort — never fail the run over this */ }
 
     // ==================== DONE ====================
     this.state.currentPhase = 'done';
@@ -425,6 +543,15 @@ export class Orchestrator {
       const buildDonePath = join(this.workDir, PHASES_DIR, `phase-${phase.number}`, 'build.done');
       if (!existsSync(buildDonePath)) continue;
 
+      // Defense-in-depth (mirrors the build-skip guard): a build.done older than
+      // phase-plan.json belongs to a prior iteration's phase of the same number.
+      if (isBuildDoneStale(this.workDir, buildDonePath)) {
+        this.log(
+          `Reconcile: phase ${phase.number} build.done is stale (older than phase-plan.json) — skipping`
+        );
+        continue;
+      }
+
       // Does a commit for this phase's work exist on the default branch?
       let phaseCommitOnDefault = false;
       try {
@@ -531,19 +658,10 @@ export class Orchestrator {
     // Guard: if phase-plan.json is newer than build.done, the plan was regenerated and build.done is stale
     const buildDonePath = join(this.workDir, PHASES_DIR, `phase-${phaseNumber}`, 'build.done');
     let phaseAlreadyBuilt = existsSync(buildDonePath);
-    if (phaseAlreadyBuilt) {
-      try {
-        const planPath = join(this.workDir, PHASE_PLAN_FILE);
-        if (existsSync(planPath)) {
-          const planMtime = statSync(planPath).mtimeMs;
-          const buildDoneMtime = statSync(buildDonePath).mtimeMs;
-          if (planMtime > buildDoneMtime) {
-            this.log(`Phase ${phaseNumber} build.done is stale (older than phase-plan.json), removing...`);
-            unlinkSync(buildDonePath);
-            phaseAlreadyBuilt = false;
-          }
-        }
-      } catch { /* ignore stat errors */ }
+    if (phaseAlreadyBuilt && isBuildDoneStale(this.workDir, buildDonePath)) {
+      this.log(`Phase ${phaseNumber} build.done is stale (older than phase-plan.json), removing...`);
+      try { unlinkSync(buildDonePath); } catch { /* ignore */ }
+      phaseAlreadyBuilt = false;
     }
     if (phaseAlreadyBuilt) {
       this.log(`Phase ${phaseNumber} already built (build.done exists), skipping build...`);
@@ -619,15 +737,21 @@ export class Orchestrator {
     }
     await this.runQAFast(phaseNumber);
 
-    // ==================== AAR PHASE ====================
-    // Run after QA passes, before merge. Failures here are hard gates — the
-    // user-facing markdown at docs/aar/phase-N.md MUST exist or the phase fails.
-    await this.runAAR(phaseNumber);
+    // ==================== AAR PHASE (opt-in) ====================
+    // Off by default: the report is write-only (no downstream prompt reads it,
+    // and QA is told to distrust it), so it's pure cost + a failure surface.
+    // Enable with `--aar` when a human wants the per-phase markdown summary.
+    // When enabled, failures here are hard gates — docs/aar/phase-N.md MUST exist.
+    if (this.aar) {
+      await this.runAAR(phaseNumber);
+    } else {
+      this.log('Skipping AAR (disabled — pass --aar to generate per-phase reports)');
+    }
 
     // Commit any uncommitted changes
     if (this.github.hasUncommittedChanges()) {
       this.log(`Committing uncommitted changes before merge...`);
-      this.github.commit(`chore: commit remaining changes after phase ${phaseNumber} AAR`);
+      this.github.commit(`chore: commit remaining changes for phase ${phaseNumber}`);
       if (phase.prNumber) {
         this.github.push(phaseBranch);
       }
@@ -888,6 +1012,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     let qaPass = false;
     let preFixSha: string | null = null;
     let prevBlockerCount: number | null = null;
+    let rateLimitRetries = 0;
 
     while (!qaPass && this.state.qaAttempts < MAX_FAST_QA_ATTEMPTS) {
       this.state.qaAttempts++;
@@ -916,9 +1041,9 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
         model: getModelForPhase('qa-functional') // Sonnet for combined QA
       });
 
+      this.assertNotCreditExhausted(qaResult);
       if (qaResult.rateLimited) {
-        this.log('Rate limit detected — waiting 5 minutes before retry...');
-        await new Promise(r => setTimeout(r, 5 * 60 * 1000));
+        rateLimitRetries = await this.waitForRateLimit(rateLimitRetries, 'QA');
         this.state.qaAttempts--;
         saveState(this.state);
         continue;
@@ -1048,6 +1173,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     let qaPass = false;
     let preFixSha: string | null = null;  // Git SHA before fix agent runs
     let prevBlockerCount: number | null = null;  // Blocker count from previous verdict
+    let rateLimitRetries = 0;
 
     while (!qaPass && this.state.qaAttempts < MAX_QA_ATTEMPTS) {
       this.state.qaAttempts++;
@@ -1071,9 +1197,9 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       });
 
       // Handle rate limiting — wait and retry without counting this attempt
+      this.assertNotCreditExhausted(smokeResult);
       if (smokeResult.rateLimited) {
-        this.log('Rate limit detected — waiting 5 minutes before retry...');
-        await new Promise(r => setTimeout(r, 5 * 60 * 1000));
+        rateLimitRetries = await this.waitForRateLimit(rateLimitRetries, 'QA smoke');
         this.state.qaAttempts--;
         saveState(this.state);
         continue;
@@ -1162,9 +1288,9 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       const qaResults = await this.spawner.runParallel(qaTasks, skipVisual ? 1 : 2);
 
       // Handle rate limiting in QA sessions
+      this.assertNotCreditExhausted(qaResults);
       if (qaResults.some(r => r.rateLimited)) {
-        this.log('Rate limit detected in QA sessions — waiting 5 minutes before retry...');
-        await new Promise(r => setTimeout(r, 5 * 60 * 1000));
+        rateLimitRetries = await this.waitForRateLimit(rateLimitRetries, 'parallel QA');
         this.state.qaAttempts--;
         saveState(this.state);
         continue;
@@ -1338,6 +1464,195 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
   }
 
   /**
+   * Fail fast if any session was rejected for programmatic-credit exhaustion.
+   * Unlike a transient 429, this won't recover by waiting — retrying just burns
+   * the session timeout until the billing cycle resets. Throwing surfaces a clear,
+   * actionable message (the run aborts via index.ts's top-level catch).
+   */
+  private assertNotCreditExhausted(results: SpawnResult | SpawnResult[]): void {
+    const arr = Array.isArray(results) ? results : [results];
+    if (arr.some(r => r.creditExhausted)) {
+      throw new Error(
+        'Programmatic credit exhausted. The Claude Code session was rejected with a ' +
+        'credit/usage-limit error that resets at the next billing cycle — not a transient ' +
+        'rate limit, so retrying will not help. To continue now, enable "extra usage" in the ' +
+        'Claude Console (Settings → Billing) so overflow bills at pay-as-you-go API rates ' +
+        '(set a spend cap), or wait for the monthly credit to reset. Then run `turkeycode resume`.'
+      );
+    }
+  }
+
+  /**
+   * Handle a rate-limited session: fail fast on credit exhaustion, otherwise wait and
+   * allow a bounded number of transient retries. Returns the next retry count; throws
+   * once MAX_RATE_LIMIT_RETRIES is exceeded so the loop can't spin forever.
+   */
+  private async waitForRateLimit(retries: number, context: string): Promise<number> {
+    if (retries >= MAX_RATE_LIMIT_RETRIES) {
+      throw new Error(
+        `Persistent rate limiting during ${context} after ${MAX_RATE_LIMIT_RETRIES} retries — aborting. ` +
+        `If this recurs, your account may be at its per-minute limit or out of programmatic credit; ` +
+        `check the Claude Console. Resume with \`turkeycode resume\`.`
+      );
+    }
+    this.log(`Rate limit detected during ${context} — waiting 5 minutes before retry (${retries + 1}/${MAX_RATE_LIMIT_RETRIES})...`);
+    await new Promise(r => setTimeout(r, 5 * 60 * 1000));
+    return retries + 1;
+  }
+
+  /**
+   * Polish pass — end-of-build, repo-wide warning cleanup.
+   *
+   * In the defer-warnings model, per-phase QA gates on blockers only, so warnings
+   * pile up across phases. This single pass discovers and fixes them all coherently,
+   * then RE-VERIFIES the build with the deterministic quick-check (zero LLM tokens)
+   * before merging. The re-verify is what makes "perfect" honest: we never merge a
+   * cleanup that broke compilation or boot.
+   *
+   * Best-effort by design: the build already passed functional QA per phase, so
+   * stubborn warnings never fail the whole run — they're logged and the (verified-safe)
+   * cleanup is merged anyway. Only a regression (broken build) aborts the merge.
+   */
+  private async runPolishPhase(): Promise<void> {
+    this.log('\n' + '='.repeat(60));
+    this.log('POLISH PASS — repo-wide warning cleanup');
+    this.log('='.repeat(60));
+
+    this.state.currentPhase = 'polish';
+    saveState(this.state);
+    auditPhase('polish', 'started');
+
+    // Clean stale polish artifacts so we read this run's verdicts, not last run's.
+    if (existsSync(POLISH_DIR)) {
+      for (const f of readdirSync(POLISH_DIR)) {
+        if (f.endsWith('.json') || f.endsWith('.done')) unlinkSync(join(POLISH_DIR, f));
+      }
+    } else {
+      mkdirSync(POLISH_DIR, { recursive: true });
+    }
+
+    const defaultBranch = this.github.getDefaultBranch();
+    const polishBranch = 'polish/warnings';
+    this.github.createBranch(polishBranch, defaultBranch);
+
+    // Snapshot the pre-polish commit so we can revert if a fix breaks the build.
+    const preSha = this.getGitHead();
+
+    let clean = false;
+    let merged = false;
+
+    for (let attempt = 1; attempt <= MAX_POLISH_ATTEMPTS; attempt++) {
+      this.log(`\n--- Polish attempt ${attempt}/${MAX_POLISH_ATTEMPTS} ---\n`);
+
+      await this.spawner.run({
+        cwd: this.workDir,
+        prompt: buildPolishPrompt(this.state, attempt),
+        timeoutMs: POLISH_TIMEOUT_MS,
+        sessionName: `polish-${attempt}`,
+        doneFile: `${POLISH_DIR}/polish-${attempt}.done`,
+        model: getModelForPhase('polish')
+      });
+
+      // Commit whatever the polish session changed.
+      if (this.github.hasUncommittedChanges()) {
+        this.github.commit(`polish: warning cleanup (attempt ${attempt})`);
+      }
+
+      // Nothing changed AND verdict says clean → no warnings existed. Done.
+      const verdict = this.readPolishVerdict(attempt);
+      const noChanges = this.getGitHead() === preSha;
+      if (noChanges && (!verdict || verdict.remainingWarnings === 0)) {
+        this.log('Polish: no warnings to fix — codebase already clean.');
+        clean = true;
+        break;
+      }
+
+      // Deterministic regression check — did the cleanup break compilation/boot?
+      this.log('Verifying build still passes after cleanup...');
+      const check = await runQuickChecks(this.workDir);
+      for (const c of check.checks) {
+        this.log(`  ${c.passed ? '✓' : '✗'} ${c.name}: ${c.message}`);
+      }
+
+      if (!check.passed) {
+        // The cleanup broke the build. Revert to pre-polish state.
+        this.log('⚠ Polish introduced a regression — reverting cleanup.');
+        if (preSha) {
+          try { execSync(`git reset --hard ${preSha}`, { cwd: this.workDir, stdio: 'pipe' }); } catch { /* best effort */ }
+        }
+        if (attempt < MAX_POLISH_ATTEMPTS) {
+          this.log('Retrying polish from a clean slate...');
+          continue;
+        }
+        this.log('Polish exhausted attempts without a safe result — keeping build as-is, warnings remain.');
+        auditPhase('polish', 'completed', { clean: false, reason: 'regression', attempts: attempt });
+        break;
+      }
+
+      // Build is safe. Accept if warnings hit zero, or if this was the last attempt.
+      if (verdict && verdict.remainingWarnings === 0) {
+        this.log(`Polish CLEAN — ${verdict.fixed ?? 0} warning(s) fixed, zero remaining.`);
+        clean = true;
+      } else {
+        const remaining = verdict?.remainingWarnings ?? 'unknown';
+        if (attempt < MAX_POLISH_ATTEMPTS && verdict) {
+          this.log(`${remaining} warning(s) remain — running another polish attempt...`);
+          continue;
+        }
+        this.log(`Polish best-effort: ${remaining} warning(s) remain but build is verified safe — merging cleanup.`);
+      }
+
+      // Merge the verified cleanup into the default branch.
+      merged = this.mergePolishBranch(polishBranch, defaultBranch);
+      break;
+    }
+
+    if (clean && !merged) {
+      // "no warnings existed" path: nothing was committed, so just drop the branch.
+      this.log('Polish complete — nothing to merge.');
+    }
+
+    auditPhase('polish', 'completed', { clean, merged });
+    this.log('=== POLISH PASS COMPLETE ===\n');
+  }
+
+  /** Read and parse a polish verdict JSON, or null if missing/unparseable. */
+  private readPolishVerdict(attempt: number): { verdict?: string; remainingWarnings?: number; fixed?: number } | null {
+    const path = `${POLISH_DIR}/verdict-${attempt}.json`;
+    if (!existsSync(path)) return null;
+    try {
+      return JSON.parse(readFileSync(path, 'utf-8'));
+    } catch {
+      return null;
+    }
+  }
+
+  /** Merge the polish branch into the default branch (PR when a remote exists, else local). */
+  private mergePolishBranch(polishBranch: string, defaultBranch: string): boolean {
+    if (!this.github.branchExists(polishBranch)) {
+      // Built directly on default — already merged.
+      return true;
+    }
+    if (this.github.hasRemote()) {
+      this.github.push(polishBranch);
+      const existing = this.github.findExistingPR(polishBranch);
+      const pr = existing || this.github.createPR({
+        title: 'Polish: warning cleanup',
+        body: 'Repo-wide warning cleanup (defer-warnings polish pass). Build re-verified after cleanup.',
+        base: defaultBranch,
+        head: polishBranch
+      });
+      let merged = pr ? this.github.mergePR(pr) : false;
+      if (!merged) {
+        merged = this.github.mergeBranch(polishBranch, defaultBranch);
+        if (merged) this.github.push(defaultBranch);
+      }
+      return merged;
+    }
+    return this.github.mergeBranch(polishBranch, defaultBranch);
+  }
+
+  /**
    * Create a fallback verdict when the verdict agent fails
    */
   private createFallbackVerdict(qaDir: string, phaseNumber: number, attempt: number): void {
@@ -1412,7 +1727,18 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
   private ensureGitignore(): void {
     const gitignorePath = join(this.workDir, '.gitignore');
 
-    if (existsSync(gitignorePath)) return;
+    if (existsSync(gitignorePath)) {
+      // Never bail just because a .gitignore already exists (build agents create one) —
+      // we must still guarantee turkeycode's own state dir is ignored, or git checkout
+      // during phase merges fails on the constantly-mutating .turkey/state.json.
+      const content = readFileSync(gitignorePath, 'utf-8');
+      if (!/^\s*\.turkey\/?\s*$/m.test(content)) {
+        writeFileSync(gitignorePath, content.replace(/\s*$/, '') + '\n\n# turkeycode runtime state — never commit\n.turkey/\n');
+        this.log('Added .turkey/ to existing .gitignore');
+      }
+      this.untrackTurkeyState();
+      return;
+    }
 
     const tech = this.state.tech;
     const stack = (tech.frontend || '') + ' ' + (tech.backend || '') + ' ' + ((tech as Record<string, unknown>).framework || '');
@@ -1480,10 +1806,31 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     // Testing
     lines.push('', '# Test artifacts', 'coverage/', 'playwright-report/', 'test-results/');
 
+    // turkeycode runtime state — must never be committed (mutates every phase; a tracked
+    // copy makes `git checkout`/merge fail on branch switches).
+    lines.push('', '# turkeycode runtime state — never commit', '.turkey/');
+
     lines.push('');
 
     writeFileSync(gitignorePath, lines.join('\n'));
     this.log('Created .gitignore based on project type');
+    this.untrackTurkeyState();
+  }
+
+  /**
+   * Untrack .turkey/ if a prior run (or a build agent's `git add -A`) committed it.
+   * turkeycode's state mutates every phase; if it's tracked, `git checkout <target>`
+   * during a phase merge aborts with "local changes would be overwritten", which used
+   * to kill the run on the local-merge path (no remote / --no-push). Files stay on disk.
+   */
+  private untrackTurkeyState(): void {
+    try {
+      const tracked = execSync('git ls-files .turkey', { cwd: this.workDir, encoding: 'utf-8', stdio: 'pipe' }).trim();
+      if (tracked) {
+        execSync('git rm -r --cached --quiet .turkey', { cwd: this.workDir, stdio: 'pipe' });
+        this.log('Untracked .turkey/ from git (turkeycode state must never be committed)');
+      }
+    } catch { /* not a git repo yet, or nothing tracked — fine */ }
   }
 
   /**
@@ -1638,15 +1985,28 @@ Generated by turkey-enterprise-v3 (phase-based)
       process.exit(1);
     }
 
-    // 2. Quick smoke test — verify --print and --dangerously-skip-permissions work
-    const testResult = await this.spawner.run({
+    // 2. Quick smoke test — verify --print and --dangerously-skip-permissions work.
+    // Prompt must elicit a TEXT reply, not an action: phrasing like "write X to
+    // stdout" makes claude run a tool (echo) instead of replying, leaving --print
+    // output empty. Retry guards against a transient blank response.
+    const PREFLIGHT_PROMPT = 'Reply with only the word TURKEY as plain text. Do not use any tools.';
+    let testResult = await this.spawner.run({
       cwd: this.workDir,
-      prompt: 'Write the word "TURKEY" to stdout and nothing else.',
+      prompt: PREFLIGHT_PROMPT,
       timeoutMs: 30000,
       sessionName: 'preflight',
     });
+    for (let attempt = 2; attempt <= 3 && (testResult.exitCode !== 0 || testResult.stdout.trim().length < 3); attempt++) {
+      this.log(`Preflight smoke test inconclusive (exit ${testResult.exitCode}, ${testResult.stdout.trim().length} chars) — retry ${attempt}/3...`);
+      testResult = await this.spawner.run({
+        cwd: this.workDir,
+        prompt: PREFLIGHT_PROMPT,
+        timeoutMs: 30000,
+        sessionName: 'preflight',
+      });
+    }
 
-    if (testResult.exitCode !== 0 || testResult.stdout.length < 3) {
+    if (testResult.exitCode !== 0 || testResult.stdout.trim().length < 3) {
       console.error('\n❌ Claude Code preflight failed.');
       console.error(`Exit code: ${testResult.exitCode}`);
       if (testResult.stdout.length > 0) {

@@ -16,6 +16,7 @@ export type ProjectType =
   | 'desktop'          // Electron, Tauri, Qt, etc.
   | 'mobile'           // React Native, Flutter, Swift, Kotlin, etc.
   | 'embedded'         // PlatformIO, Arduino, ESP32, STM32, firmware projects
+  | 'legacy'           // Mainframe/legacy: COBOL, JCL, RPG, PL/I, Assembler (batch, no web UI)
   | 'monorepo'         // Multiple project types in one repo
   | 'unknown';         // Can't determine — fall back to basic compilation checks
 
@@ -40,6 +41,7 @@ export type Phase =
   | 'qa'
   | 'review'
   | 'aar'
+  | 'polish'
   | 'done';
 
 export type BuildPhaseStatus = 'planned' | 'building' | 'qa' | 'fixing' | 'merging' | 'done';
@@ -242,6 +244,12 @@ export interface SpawnResult {
   stderr: string;
   /** Duration in milliseconds */
   durationMs: number;
-  /** Whether rate limiting was detected in agent output */
+  /** Whether transient rate limiting (recovers in seconds) was detected in agent output */
   rateLimited?: boolean;
+  /**
+   * Whether a programmatic-credit/usage-limit exhaustion was detected — a 429 that
+   * resets at the next billing cycle, NOT a transient rate limit. Waiting won't help;
+   * the caller should fail fast with guidance to enable "extra usage" or wait for reset.
+   */
+  creditExhausted?: boolean;
 }

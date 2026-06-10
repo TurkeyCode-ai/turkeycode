@@ -39,12 +39,13 @@ research (1 session)
   → PHASE LOOP:
       build (1 session, full phase scope)
       → quick check
-      → QA (smoke + functional||visual + verdict)
+      → QA (smoke + functional||visual + verdict)   [blockers-only gate by default]
       → fix loop if needed
       → code review
-      → AAR
+      → AAR (opt-in: --aar)
       → merge to main
       → next phase
+  → POLISH PASS (default): repo-wide warning cleanup → re-verify build → merge
 ```
 
 ## Phase Model
@@ -64,7 +65,15 @@ Each phase goes through:
 4. **Verdict** — CLEAN or NEEDS_FIX
 5. **Fix loop** — if NEEDS_FIX, parallel blocker fixes, then re-test (max 3 attempts)
 
-CLEAN = ZERO issues (blockers AND warnings). Not "acceptable". ZERO.
+### Warning policy (three modes)
+
+The end state is always ZERO warnings — the question is *when* they get fixed.
+
+- **DEFER (default)** — phases gate on **blockers only**, so a functionally-correct phase merges immediately without stalling on lint/style. Warnings accumulate, then a single **polish pass** after the last phase fixes them all coherently across the repo and **re-verifies the build** (deterministic quick-check) before merging. The re-verify is what keeps "perfect" honest — a cleanup that breaks compilation/boot is reverted, never merged. Stubborn warnings never fail the run (the build already passed functional QA per phase); they're logged and the verified-safe cleanup is merged anyway.
+- **`--strict-phases`** — old behavior: every phase gated on ZERO warnings (blockers AND warnings), no polish pass.
+- **`--allow-warnings` / `-w`** — blockers only per phase, warnings left as-is, no polish.
+
+Why defer-by-default: phases merge faster, and one repo-wide pass fixes a lint rule everywhere at once (better than each phase patching its slice). Warning fixes can be latent bugs, so the polish session treats them as real and never mass-suppresses.
 
 ## After Context Clear / Compact
 
@@ -102,7 +111,8 @@ src/
 │   ├── qa-verdict.ts
 │   ├── qa-fix.ts
 │   ├── code-review.ts
-│   └── aar.ts
+│   ├── aar.ts
+│   └── polish.ts     # Repo-wide warning cleanup (defer-warnings pass)
 ├── github.ts         # GitHub/git integration
 ├── jira.ts           # Jira integration
 ├── audit.ts          # Audit log (phase events)
@@ -127,7 +137,7 @@ src/
 
 4. **Stack-agnostic QA**: Discovers project type and uses appropriate tools
 
-5. **CLEAN = ZERO issues**: Both blockers AND warnings must be fixed (unless `--allow-warnings`)
+5. **Defer warnings, polish once**: phases gate on blockers only (fast merges); a final repo-wide polish pass drives warnings to zero and re-verifies the build before merging. End state is still ZERO warnings — just batched and verified at the end instead of gated per phase. Use `--strict-phases` for the old per-phase-zero behavior, `--allow-warnings` to skip warning cleanup entirely.
 
 6. **State survives compaction**: Tech context, entities, endpoints persisted in state.json
 

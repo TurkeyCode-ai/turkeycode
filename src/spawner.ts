@@ -12,6 +12,54 @@ import { DEFAULT_TIMEOUT_MS } from './constants';
 
 const DEFAULT_MAX_CONCURRENT = 3;
 
+const TRANSIENT_RATE_LIMIT_PATTERNS: RegExp[] = [
+  /rate.?limit/i,
+  /\b429\b/,
+  /too many requests/i,
+];
+
+// Markers that the text is an actual Anthropic API error (not application content).
+// Credit wording only counts as exhaustion when it co-occurs with one of these — this
+// is the guardrail: the build/QA agents work on real apps, and finance/fintech domains
+// are saturated with "credit", "balance", "billing cycle", "monthly", "insufficient
+// funds". Without requiring API context, those false-trip exhaustion and kill the build.
+const API_ERROR_CONTEXT: RegExp[] = [
+  /rate.?limit/i,
+  /\b429\b/,
+  /too many requests/i,
+  /rate_limit_error/i,
+  /x-ratelimit/i,
+  /anthropic/i,
+];
+
+// Credit/usage-exhaustion wording. Deliberately omits bare "balance"/"funds"/"billing
+// cycle"/"monthly" — those are ordinary domain words. Even these only fire alongside
+// API_ERROR_CONTEXT (see detectRateLimitSignals).
+const CREDIT_EXHAUSTED_PATTERNS: RegExp[] = [
+  /credit balance is too low/i,
+  /insufficient credit/i,
+  /out of credit/i,
+  /credit[^.\n]{0,30}exhaust/i,
+  /usage limit reached/i,
+  /monthly credit/i,
+  /extra usage/i,
+  /purchase (more )?credit/i,
+];
+
+/**
+ * Classify a chunk of CLI output for rate-limit signals. Credit exhaustion is only
+ * declared when credit/usage wording co-occurs with an actual API-error marker —
+ * otherwise application-domain text (e.g. a banking app's "insufficient credit") would
+ * false-trip it and the orchestrator would fail the build for a non-existent rate limit.
+ */
+export function detectRateLimitSignals(text: string): { rateLimited: boolean; creditExhausted: boolean } {
+  const hasApiContext = API_ERROR_CONTEXT.some(p => p.test(text));
+  const hasCreditWording = CREDIT_EXHAUSTED_PATTERNS.some(p => p.test(text));
+  const creditExhausted = hasCreditWording && hasApiContext;
+  const rateLimited = creditExhausted || TRANSIENT_RATE_LIMIT_PATTERNS.some(p => p.test(text));
+  return { rateLimited, creditExhausted };
+}
+
 /**
  * Spawner class for running Claude Code sessions
  * Each session gets ONE job and exits when done
@@ -59,6 +107,20 @@ export class Spawner {
       let killed = false;
       let doneFileDetected = false;
       let rateLimited = false;
+      let creditExhausted = false;
+
+      // Scan a chunk of output for rate-limit / credit-exhaustion signals.
+      const scanForLimits = (text: string) => {
+        const signal = detectRateLimitSignals(text);
+        if (signal.creditExhausted && !creditExhausted) {
+          creditExhausted = true;
+          this.log(`[${sessionName}] Credit/usage exhaustion detected in output (will not retry)`);
+        }
+        if (signal.rateLimited && !rateLimited) {
+          rateLimited = true;
+          this.log(`[${sessionName}] Rate limit detected in output`);
+        }
+      };
 
       // Spawn claude directly, write prompt to stdin
       // Pass through all env vars including ANTHROPIC_API_KEY
@@ -71,8 +133,13 @@ export class Spawner {
         'DATABASE_URL', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET',
         'SENDGRID_API_KEY', 'NEXTAUTH_SECRET', 'SESSION_SECRET',
         'CLAUDECODE',  // Prevent "nested session" error when run inside Claude Code
-        'ANTHROPIC_API_KEY',  // Strip so claude uses Max login instead of API key
       ];
+      // By default strip ANTHROPIC_API_KEY so the CLI uses the Max login session.
+      // In sandboxed/API-key mode (no login session — e.g. the isolated build
+      // jail) set TURKEYCODE_USE_API_KEY=1 to KEEP the key as the auth source.
+      if (process.env.TURKEYCODE_USE_API_KEY !== '1') {
+        NEVER_PASS_VARS.push('ANTHROPIC_API_KEY');
+      }
       for (const key of NEVER_PASS_VARS) {
         delete cleanEnv[key];
       }
@@ -163,14 +230,7 @@ export class Spawner {
         const text = data.toString();
         stdout += text;
 
-        // Detect rate limiting
-        if (!rateLimited && (
-          text.includes('rate limit') || text.includes('429') ||
-          text.includes('too many requests') || text.includes('Rate limit')
-        )) {
-          this.log(`[${sessionName}] Rate limit detected in output`);
-          rateLimited = true;
-        }
+        scanForLimits(text);
 
         if (this.verbose) {
           process.stdout.write(text);
@@ -181,6 +241,10 @@ export class Spawner {
       proc.stderr?.on('data', (data: Buffer) => {
         const text = data.toString();
         stderr += text;
+
+        // CLI errors (including credit/rate-limit rejections) often land on stderr.
+        scanForLimits(text);
+
         if (this.verbose) {
           process.stderr.write(text);
         }
@@ -215,7 +279,8 @@ export class Spawner {
           stdout,
           stderr,
           durationMs,
-          rateLimited
+          rateLimited,
+          creditExhausted
         });
       });
 
@@ -233,7 +298,8 @@ export class Spawner {
           stdout,
           stderr: stderr + '\n' + err.message,
           durationMs,
-          rateLimited
+          rateLimited,
+          creditExhausted
         });
       });
     });
