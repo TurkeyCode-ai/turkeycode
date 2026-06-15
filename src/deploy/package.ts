@@ -159,10 +159,8 @@ export async function packageApp(
     }
   }
 
-  // Collect files to include
-  const includes = getIncludeFiles(cwd);
-
-  if (includes.length === 0) {
+  // Guard: make sure there's something deployable at the root.
+  if (getIncludeFiles(cwd).length === 0) {
     throw new Error('No deployable files found. Run your build first (npm run build).');
   }
 
@@ -173,13 +171,21 @@ export async function packageApp(
   const tarballPath = join(tmpdir(), tarballName);
 
   const excludeArgs = getExcludeArgs();
-  const includeArgs = includes.join(' ');
 
-  console.log(`  Packaging: ${includes.join(', ')}`);
+  // Package the WHOLE project tree (minus excludes), not a root-only allowlist.
+  // The previous allowlist matched only top-level paths, so npm-workspace
+  // monorepos (source in backend/, frontend/, …) shipped a near-empty tarball
+  // that failed to build server-side. Excludes already drop
+  // node_modules/.git/caches, and the 500MB cap below guards runaway size.
+  const included = readdirSync(cwd)
+    .filter(entry => !EXCLUDE_PATTERNS.includes(entry))
+    .sort();
+
+  console.log(`  Packaging: ${included.join(', ')}`);
 
   try {
     execSync(
-      `tar -czf ${tarballPath} ${excludeArgs} ${includeArgs}`,
+      `tar -czf ${tarballPath} ${excludeArgs} .`,
       { cwd, stdio: 'pipe' }
     );
   } catch (err) {

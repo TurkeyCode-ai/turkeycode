@@ -3,7 +3,7 @@
  * Detects runtime, framework, database, features, and estimates hosting tier
  */
 
-import { existsSync, readFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 
 // ==================== Types ====================
@@ -487,6 +487,43 @@ function detectStaticProject(cwd: string): ProjectDetection {
 
 // ==================== Docker Detection ====================
 
+/**
+ * A custom Dockerfile hides the stack, so we can't infer a database from
+ * dependencies. Sniff the repo instead — a compose file or a Prisma schema
+ * (at root or one level deep, e.g. in a workspace) — so DB-backed apps still
+ * get a database provisioned.
+ */
+function detectDatabaseFromFiles(cwd: string): DatabaseType {
+  for (const f of ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml']) {
+    const p = join(cwd, f);
+    if (existsSync(p)) {
+      const c = readFileSync(p, 'utf-8');
+      if (/postgres/i.test(c)) return 'postgres';
+      if (/mysql|mariadb/i.test(c)) return 'mysql';
+      if (/mongo/i.test(c)) return 'mongodb';
+    }
+  }
+
+  const prismaCandidates = [join(cwd, 'prisma', 'schema.prisma')];
+  try {
+    for (const entry of readdirSync(cwd, { withFileTypes: true })) {
+      if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
+        prismaCandidates.push(join(cwd, entry.name, 'prisma', 'schema.prisma'));
+      }
+    }
+  } catch { /* ignore unreadable dirs */ }
+
+  for (const p of prismaCandidates) {
+    if (existsSync(p)) {
+      const m = readFileSync(p, 'utf-8').match(/provider\s*=\s*"(postgresql|mysql|sqlite|mongodb)"/);
+      if (m) return m[1] === 'postgresql' ? 'postgres' : (m[1] as DatabaseType);
+      return 'postgres';
+    }
+  }
+
+  return false;
+}
+
 function detectDockerProject(cwd: string): ProjectDetection {
   const dockerfile = readFileSync(join(cwd, 'Dockerfile'), 'utf-8');
 
@@ -510,7 +547,7 @@ function detectDockerProject(cwd: string): ProjectDetection {
     stack: 'docker',
     hasDockerfile: true,
     features: {
-      database: false, // can't auto-detect from Dockerfile
+      database: detectDatabaseFromFiles(cwd),
       redis: false,
       stripe: false,
       auth: false,
