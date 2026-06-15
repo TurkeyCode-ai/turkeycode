@@ -239,7 +239,7 @@ export class Orchestrator {
     // the run dies. Doing it here (on main, once) keeps every branch free of it.
     // Guarantee a local git repo with a BORN default branch exists before any
     // phase branching — even without a GitHub remote (GITHUB_OWNER unset, e.g.
-    // sandboxed builds). `git init -b main` leaves main unborn until the first
+    // headless/CI builds). `git init -b main` leaves main unborn until the first
     // commit, so the first phase's `git checkout main` would otherwise fail and
     // branch reconciliation breaks. (With GITHUB_OWNER, setupProject already
     // inited + committed; initRepo/ensureInitialCommit are no-ops then.)

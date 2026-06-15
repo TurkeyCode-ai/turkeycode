@@ -44,7 +44,7 @@ async function validateToken(token: string): Promise<{ email: string; tier: stri
 
   if (!response.ok) {
     if (response.status === 401) {
-      throw new Error('Invalid token. Check your API key at https://turkeycode.ai/settings');
+      throw new Error('Invalid token. Check your API key at https://turkeycode.ai/settings/api-keys');
     }
     throw new Error(`Auth failed: ${response.status} ${response.statusText}`);
   }
