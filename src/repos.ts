@@ -17,15 +17,29 @@ export interface RepoEntry {
   healthcheck?: string;
 }
 
+/**
+ * Read-only reference path. May or may not be a git repo — turkeycode never
+ * runs git operations against it. Only purpose: build sessions can `Read`/`Grep`
+ * it for research (e.g. legacy code being ported).
+ */
+export interface ReferenceEntry {
+  path: string;
+  role?: string;
+}
+
 export interface RepoManifest {
   defaultBase: string;
   branchPattern: string;
   repos: RepoEntry[];
+  references: ReferenceEntry[];
+  /** Jira status to transition the ticket to after a successful coding push. */
+  transitionAfterPush: string;
 }
 
 export const DEFAULT_MANIFEST_PATH = join(homedir(), '.turkeycode', 'repos.yaml');
 export const DEFAULT_BRANCH_PATTERN = 'ticket/{key}';
 export const DEFAULT_BASE = 'develop';
+export const DEFAULT_TRANSITION_AFTER_PUSH = 'In Review';
 
 export function loadRepoManifest(manifestPath: string = DEFAULT_MANIFEST_PATH): RepoManifest | null {
   if (!existsSync(manifestPath)) return null;
@@ -40,6 +54,8 @@ export function loadRepoManifest(manifestPath: string = DEFAULT_MANIFEST_PATH): 
   const p = parsed as Record<string, unknown>;
   const defaultBase = typeof p.defaultBase === 'string' ? p.defaultBase : DEFAULT_BASE;
   const branchPattern = typeof p.branchPattern === 'string' ? p.branchPattern : DEFAULT_BRANCH_PATTERN;
+  const transitionAfterPush =
+    typeof p.transitionAfterPush === 'string' ? p.transitionAfterPush : DEFAULT_TRANSITION_AFTER_PUSH;
 
   if (!Array.isArray(p.repos) || p.repos.length === 0) {
     throw new Error(`Invalid repos.yaml at ${manifestPath}: 'repos' must be a non-empty array`);
@@ -53,11 +69,8 @@ export function loadRepoManifest(manifestPath: string = DEFAULT_MANIFEST_PATH): 
     if (typeof entry.path !== 'string' || !entry.path) {
       throw new Error(`repos.yaml: entry at index ${idx} is missing required 'path'`);
     }
-    const expanded = entry.path.startsWith('~')
-      ? join(homedir(), entry.path.slice(1))
-      : entry.path;
     return {
-      path: resolve(expanded),
+      path: resolvePath(entry.path),
       role: typeof entry.role === 'string' ? entry.role : undefined,
       base: typeof entry.base === 'string' ? entry.base : defaultBase,
       start: typeof entry.start === 'string' ? entry.start : undefined,
@@ -65,7 +78,38 @@ export function loadRepoManifest(manifestPath: string = DEFAULT_MANIFEST_PATH): 
     };
   });
 
-  return { defaultBase, branchPattern, repos };
+  const references: ReferenceEntry[] = Array.isArray(p.references)
+    ? p.references.map((r, idx) => {
+        if (!r || typeof r !== 'object') {
+          throw new Error(`repos.yaml: references[${idx}] is not an object`);
+        }
+        const entry = r as Record<string, unknown>;
+        if (typeof entry.path !== 'string' || !entry.path) {
+          throw new Error(`repos.yaml: references[${idx}] is missing required 'path'`);
+        }
+        return {
+          path: resolvePath(entry.path),
+          role: typeof entry.role === 'string' ? entry.role : undefined,
+        };
+      })
+    : [];
+
+  return { defaultBase, branchPattern, repos, references, transitionAfterPush };
+}
+
+function resolvePath(p: string): string {
+  const expanded = p.startsWith('~') ? join(homedir(), p.slice(1)) : p;
+  return resolve(expanded);
+}
+
+export function slugify(text: string, maxLen: number = 50): string {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, maxLen)
+    .replace(/-+$/, '');
 }
 
 export function renderBranchName(pattern: string, params: { key: string; slug?: string }): string {

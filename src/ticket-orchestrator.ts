@@ -11,7 +11,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
-import { createJiraClient, JiraClient, TicketDetail, isJiraConfigured } from './jira';
+import { createJiraClient, JiraClient, TicketDetail, isJiraConfigured, formatJiraDuration } from './jira';
 import { createSpawner, Spawner } from './spawner';
 import {
   loadRepoManifest,
@@ -24,6 +24,7 @@ import {
   abortRebase,
   pushBranch,
   renderBranchName,
+  slugify,
   RepoEntry,
   RepoManifest,
   DEFAULT_MANIFEST_PATH,
@@ -48,6 +49,8 @@ export interface TicketRunOptions {
   mcpConfig?: string;
   /** Skip the preflight dirty-tree check across repos. */
   allowDirty?: boolean;
+  /** Stop after triage. No branches cut, no build session, no Jira comment/worklog. */
+  triageOnly?: boolean;
 }
 
 export interface TriageVerdict {
@@ -55,6 +58,16 @@ export interface TriageVerdict {
   confidence: 'high' | 'medium' | 'low';
   reason: string;
   summary: string;
+  /** Exact manifest paths the triage session believes need code changes. Empty for non-coding. */
+  repos: string[];
+}
+
+interface PhaseTimings {
+  triage?: number;
+  research?: number;
+  build?: number;
+  merge_fix?: number;
+  rebase_push?: number;
 }
 
 const IMAGE_MIME_PREFIX = 'image/';
@@ -65,12 +78,14 @@ export class TicketOrchestrator {
   private manifest: RepoManifest | null;
   private mcpConfig: string | undefined;
   private verbose: boolean;
+  private triageOnly: boolean;
 
   constructor(options: TicketRunOptions = {}) {
     if (!isJiraConfigured()) {
       throw new Error('Jira is not configured. Set JIRA_HOST, JIRA_EMAIL, JIRA_TOKEN.');
     }
     this.verbose = options.verbose ?? false;
+    this.triageOnly = options.triageOnly ?? false;
     this.jira = createJiraClient();
     this.spawner = createSpawner({ verbose: this.verbose });
     this.manifest = loadRepoManifest(options.manifestPath ?? DEFAULT_MANIFEST_PATH);
@@ -88,45 +103,98 @@ export class TicketOrchestrator {
     console.log(`\n[ticket] Starting run for ${ticketKey}`);
     audit('ticket_run_started', { details: { ticket: ticketKey } });
 
-    const ticket = await this.jira.getTicket(ticketKey);
-    if (!ticket) {
-      throw new Error(`Could not fetch ticket ${ticketKey} from Jira`);
+    const runStart = Date.now();
+    const timings: PhaseTimings = {};
+
+    try {
+      const ticket = await this.jira.getTicket(ticketKey);
+      if (!ticket) {
+        throw new Error(`Could not fetch ticket ${ticketKey} from Jira`);
+      }
+      console.log(`[ticket] ${ticket.key}: ${ticket.summary}`);
+      console.log(`[ticket] Type=${ticket.issueType} Status=${ticket.status} Attachments=${ticket.attachments.length}`);
+
+      const ticketDir = this.prepareTicketDir(ticketKey);
+      writeFileSync(join(ticketDir, 'ticket.json'), JSON.stringify(ticket, null, 2));
+
+      const imagePaths = await this.downloadImageAttachments(ticket, ticketDir);
+      if (imagePaths.length > 0) {
+        console.log(`[ticket] Downloaded ${imagePaths.length} image attachment(s)`);
+      }
+
+      const triageStart = Date.now();
+      const verdict = await this.runTriage(ticket, imagePaths, ticketDir);
+      timings.triage = Date.now() - triageStart;
+      console.log(`[ticket] Triage verdict: ${verdict.classification} (${verdict.confidence}) — ${verdict.reason}`);
+      audit('ticket_triage', {
+        details: {
+          ticket: ticketKey,
+          classification: verdict.classification,
+          confidence: verdict.confidence,
+        },
+      });
+
+      if (this.triageOnly) {
+        console.log('');
+        console.log(`[ticket] --triage-only: stopping after triage.`);
+        console.log(`[ticket]   Classification: ${verdict.classification}`);
+        console.log(`[ticket]   Confidence: ${verdict.confidence}`);
+        console.log(`[ticket]   Reason: ${verdict.reason}`);
+        if (verdict.repos.length > 0) {
+          console.log(`[ticket]   Scoped repos:`);
+          verdict.repos.forEach((r) => console.log(`[ticket]     - ${r}`));
+        } else {
+          console.log(`[ticket]   Scoped repos: (none)`);
+        }
+        console.log(`[ticket]   Verdict file: ${join(ticketDir, 'triage.json')}`);
+        return;
+      }
+
+      if (verdict.classification === 'non-coding') {
+        const researchStart = Date.now();
+        await this.runNonCodingPath(ticket, imagePaths, ticketDir, verdict);
+        timings.research = Date.now() - researchStart;
+        return;
+      }
+
+      if (!this.manifest) {
+        throw new Error(
+          `Ticket ${ticketKey} was classified as coding, but no repo manifest is loaded. ` +
+            `Create ~/.turkeycode/repos.yaml first.`,
+        );
+      }
+
+      await this.runCodingPath(ticket, imagePaths, ticketDir, verdict, this.manifest, timings);
+      audit('ticket_run_completed', { details: { ticket: ticketKey } });
+    } finally {
+      const totalMs = Date.now() - runStart;
+      await this.logTicketTime(ticketKey, totalMs, timings);
     }
-    console.log(`[ticket] ${ticket.key}: ${ticket.summary}`);
-    console.log(`[ticket] Type=${ticket.issueType} Status=${ticket.status} Attachments=${ticket.attachments.length}`);
+  }
 
-    const ticketDir = this.prepareTicketDir(ticketKey);
-    writeFileSync(join(ticketDir, 'ticket.json'), JSON.stringify(ticket, null, 2));
-
-    const imagePaths = await this.downloadImageAttachments(ticket, ticketDir);
-    if (imagePaths.length > 0) {
-      console.log(`[ticket] Downloaded ${imagePaths.length} image attachment(s)`);
-    }
-
-    const verdict = await this.runTriage(ticket, imagePaths, ticketDir);
-    console.log(`[ticket] Triage verdict: ${verdict.classification} (${verdict.confidence}) — ${verdict.reason}`);
-    audit('ticket_triage', {
-      details: {
-        ticket: ticketKey,
-        classification: verdict.classification,
-        confidence: verdict.confidence,
-      },
-    });
-
-    if (verdict.classification === 'non-coding') {
-      await this.runNonCodingPath(ticket, imagePaths, ticketDir, verdict);
+  private async logTicketTime(ticketKey: string, totalMs: number, timings: PhaseTimings): Promise<void> {
+    if (this.triageOnly) {
+      console.log(`[ticket] (triage-only) Skipping Jira worklog. Wall clock: ${formatJiraDuration(totalMs)}`);
       return;
     }
-
-    if (!this.manifest) {
-      throw new Error(
-        `Ticket ${ticketKey} was classified as coding, but no repo manifest is loaded. ` +
-          `Create ~/.turkeycode/repos.yaml first.`,
-      );
+    const totalStr = formatJiraDuration(totalMs);
+    const breakdown: string[] = [`turkeycode automated run — ${totalStr} total`];
+    const labels: Array<[keyof PhaseTimings, string]> = [
+      ['triage', 'Triage'],
+      ['research', 'Research'],
+      ['build', 'Build'],
+      ['merge_fix', 'Merge fix'],
+      ['rebase_push', 'Rebase + push'],
+    ];
+    for (const [key, label] of labels) {
+      const ms = timings[key];
+      if (ms && ms > 0) breakdown.push(`- ${label}: ${formatJiraDuration(ms)}`);
     }
-
-    await this.runCodingPath(ticket, imagePaths, ticketDir, verdict, this.manifest);
-    audit('ticket_run_completed', { details: { ticket: ticketKey } });
+    const comment = breakdown.join('\n');
+    const ok = await this.jira.logWork(ticketKey, totalStr, comment);
+    if (!ok) {
+      console.warn(`[ticket] Could not log worklog for ${ticketKey} (${totalStr}). Continuing.`);
+    }
   }
 
   private prepareTicketDir(ticketKey: string): string {
@@ -190,11 +258,13 @@ export class TicketOrchestrator {
     if (parsed.classification !== 'coding' && parsed.classification !== 'non-coding') {
       throw new Error(`Triage verdict has invalid classification: ${parsed.classification}`);
     }
+    const repos = Array.isArray(parsed.repos) ? parsed.repos.filter((r): r is string => typeof r === 'string') : [];
     return {
       classification: parsed.classification,
       confidence: parsed.confidence ?? 'medium',
       reason: parsed.reason ?? '',
       summary: parsed.summary ?? '',
+      repos,
     };
   }
 
@@ -257,33 +327,52 @@ export class TicketOrchestrator {
     ticketDir: string,
     verdict: TriageVerdict,
     manifest: RepoManifest,
+    timings: PhaseTimings,
   ): Promise<void> {
-    const branchName = renderBranchName(manifest.branchPattern, { key: ticket.key });
+    // Scope the run to just the repos triage flagged. Avoids cutting branches in
+    // microservices that have nothing to do with this ticket.
+    const scopedManifest = scopeManifestToTriage(manifest, verdict.repos, ticket.key);
+    console.log(
+      `[ticket] Triage scoped to ${scopedManifest.repos.length}/${manifest.repos.length} repo(s): ` +
+        `${scopedManifest.repos.map((r) => r.path).join(', ')}`,
+    );
+    audit('ticket_scope_resolved', {
+      details: {
+        ticket: ticket.key,
+        scoped: scopedManifest.repos.map((r) => r.path),
+        total: manifest.repos.length,
+      },
+    });
+
+    const branchName = renderBranchName(manifest.branchPattern, {
+      key: ticket.key,
+      slug: slugify(ticket.summary),
+    });
     console.log(`[ticket] Coding path — branch name: ${branchName}`);
 
     // 1. Preflight
-    const preflight = preflightRepos(manifest, { allowDirty: false });
+    const preflight = preflightRepos(scopedManifest, { allowDirty: false });
     if (!preflight.ok) {
       const summary = preflight.issues.map((i) => `  - [${i.kind}] ${i.repo}: ${i.detail}`).join('\n');
       throw new Error(`Preflight failed:\n${summary}`);
     }
 
-    // 2. Sync base + cut branch in every repo; record base SHAs for touched-repo detection
+    // 2. Sync base + cut branch in scoped repos; record base SHAs for touched-repo detection
     const baseShas = new Map<string, string>();
-    for (const repo of manifest.repos) {
+    for (const repo of scopedManifest.repos) {
       console.log(`[ticket] Syncing ${repo.path} (base=${repo.base})`);
       const sha = syncBase(repo);
       baseShas.set(repo.path, sha);
       cutTicketBranch(repo, branchName);
     }
 
-    // 3. Run the build session (one session, sees all repos)
+    // 3. Run the build session (one session, sees all scoped repos)
     const buildDoneFile = join(ticketDir, 'build.done');
     if (existsSync(buildDoneFile)) unlinkSafe(buildDoneFile);
 
     const buildPrompt = buildTicketBuildPrompt({
       ticket,
-      manifest,
+      manifest: scopedManifest,
       branchName,
       imagePaths,
       triageSummary: verdict.summary,
@@ -291,7 +380,8 @@ export class TicketOrchestrator {
     });
 
     console.log(`[ticket] Running build session...`);
-    const buildCwd = manifest.repos[0].path;
+    const buildCwd = scopedManifest.repos[0].path;
+    const buildStart = Date.now();
     const buildResult = await this.spawner.run({
       cwd: buildCwd,
       prompt: buildPrompt,
@@ -301,6 +391,7 @@ export class TicketOrchestrator {
       model: getModelForPhase('build') ?? 'sonnet',
       mcpConfig: this.mcpConfig,
     });
+    timings.build = Date.now() - buildStart;
 
     if (buildResult.exitCode !== 0) {
       throw new Error(`Build session failed for ${ticket.key} (exit ${buildResult.exitCode})`);
@@ -308,7 +399,7 @@ export class TicketOrchestrator {
 
     // 4. Detect touched repos — repos with commits beyond their base SHA
     const touched: RepoEntry[] = [];
-    for (const repo of manifest.repos) {
+    for (const repo of scopedManifest.repos) {
       const baseSha = baseShas.get(repo.path)!;
       if (repoHasCommits(repo, branchName, baseSha)) {
         touched.push(repo);
@@ -329,13 +420,19 @@ export class TicketOrchestrator {
     const pushed: { repo: RepoEntry; remoteUrl?: string }[] = [];
     const failed: { repo: RepoEntry; reason: string }[] = [];
 
+    let mergeFixMs = 0;
+    let rebasePushMs = 0;
+
     for (const repo of touched) {
+      const repoStart = Date.now();
       console.log(`[ticket] Rebasing ${repo.path} onto origin/${repo.base}...`);
       let rebase = rebaseOntoBase(repo);
 
       while (rebase.status === 'conflict') {
         console.log(`[ticket] Conflict(s) in ${repo.path}: ${rebase.conflictedPaths?.join(', ')}`);
+        const mergeFixStart = Date.now();
         const resolved = await this.runMergeFix(ticket, repo, branchName, rebase.conflictedPaths ?? [], ticketDir, verdict);
+        mergeFixMs += Date.now() - mergeFixStart;
         if (!resolved) {
           abortRebase(repo.path);
           failed.push({ repo, reason: 'rebase conflict could not be resolved' });
@@ -347,6 +444,7 @@ export class TicketOrchestrator {
       }
 
       if (rebase.status === 'error') {
+        rebasePushMs += Date.now() - repoStart;
         if (!failed.find((f) => f.repo.path === repo.path)) {
           failed.push({ repo, reason: rebase.detail ?? 'rebase error' });
         }
@@ -361,7 +459,12 @@ export class TicketOrchestrator {
       } else {
         failed.push({ repo, reason: push.detail ?? 'push failed' });
       }
+      rebasePushMs += Date.now() - repoStart;
     }
+
+    // Subtract merge-fix from rebase_push so the two don't overlap in the worklog comment.
+    timings.merge_fix = mergeFixMs;
+    timings.rebase_push = Math.max(0, rebasePushMs - mergeFixMs);
 
     // 6. Post outcome to Jira
     const commentLines: string[] = [`turkeycode built ${ticket.key} on branch \`${branchName}\`.`, ''];
@@ -385,8 +488,9 @@ export class TicketOrchestrator {
       );
     }
 
-    // 7. Transition the ticket. 'In Review' is common; if the project uses a different name, this logs and moves on.
-    await this.jira.transitionTicket(ticket.key, 'In Review');
+    // 7. Transition the ticket to the manifest-configured target status.
+    //    transitionTicket logs and moves on if the status name doesn't match the project's workflow.
+    await this.jira.transitionTicket(ticket.key, manifest.transitionAfterPush);
   }
 
   private async runMergeFix(
@@ -434,7 +538,45 @@ export class TicketOrchestrator {
 }
 
 function emptyManifest(): RepoManifest {
-  return { defaultBase: 'develop', branchPattern: 'ticket/{key}', repos: [] };
+  return {
+    defaultBase: 'develop',
+    branchPattern: 'ticket/{key}',
+    repos: [],
+    references: [],
+    transitionAfterPush: 'In Review',
+  };
+}
+
+/**
+ * Reduce the manifest to just the repos triage flagged. Throws if the triage
+ * output is empty or names paths not present in the manifest — we'd rather
+ * stop the run than silently fall back to "branch every repo".
+ */
+export function scopeManifestToTriage(
+  manifest: RepoManifest,
+  triageRepos: string[],
+  ticketKey: string,
+): RepoManifest {
+  if (triageRepos.length === 0) {
+    throw new Error(
+      `Ticket ${ticketKey}: triage classified this as coding but did not name any repos. ` +
+        `Refusing to run a build across all ${manifest.repos.length} manifest repos. ` +
+        `Re-run after the triage prompt produces a non-empty 'repos' list, or update the ticket so the target repo is unambiguous.`,
+    );
+  }
+
+  const manifestPaths = new Set(manifest.repos.map((r) => r.path));
+  const unknown = triageRepos.filter((p) => !manifestPaths.has(p));
+  if (unknown.length > 0) {
+    throw new Error(
+      `Ticket ${ticketKey}: triage named repos that are not in the manifest: ${unknown.join(', ')}. ` +
+        `Manifest paths: ${[...manifestPaths].join(', ')}.`,
+    );
+  }
+
+  const wanted = new Set(triageRepos);
+  const scoped = manifest.repos.filter((r) => wanted.has(r.path));
+  return { ...manifest, repos: scoped };
 }
 
 function sanitizeFilename(name: string): string {

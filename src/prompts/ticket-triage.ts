@@ -26,7 +26,11 @@ export function buildTicketTriagePrompt(input: TriagePromptInput): string {
     : '';
 
   const repoBlock = manifest.repos.length > 0
-    ? `\n## REPOS ON DISK\nThese are the repos in scope for this user's work. You do NOT need to read them in detail — use aimem (MCP) for repo context if you want to confirm whether this ticket would touch code:\n${manifest.repos.map((r) => `- ${r.path}${r.role ? ` (${r.role})` : ''}`).join('\n')}\n`
+    ? `\n## AVAILABLE REPOS (writable — these are the only candidates for the \`repos\` output field)\nThese are every git repo this user can change. Each \`role\` describes what that repo owns. If you classify the ticket as **coding**, you must also pick the SUBSET of these repos whose source code actually needs to change to deliver the ticket. Use aimem (MCP) for repo context if you want to confirm. List repos by their EXACT path string from below — do not paraphrase.\n${manifest.repos.map((r) => `- ${r.path}${r.role ? ` — ${r.role}` : ''}`).join('\n')}\n`
+    : '';
+
+  const referenceBlock = manifest.references.length > 0
+    ? `\n## REFERENCE FILES (read-only — DO NOT include in \`repos\` output)\nThese paths exist for research only (e.g. legacy code being ported). They may not even be git repos. The build session can read from them, but they are NEVER targets for change. Do not list any of these paths in your \`repos\` field.\n${manifest.references.map((r) => `- ${r.path}${r.role ? ` — ${r.role}` : ''}`).join('\n')}\n`
     : '';
 
   return `
@@ -51,7 +55,7 @@ ${ticket.description || '(no description)'}
 </ticket_description>
 
 ${ticket.comments.length > 0 ? `<ticket_comments>\n${ticket.comments.map((c) => `[${c.author} @ ${c.created}]\n${c.body}`).join('\n---\n')}\n</ticket_comments>` : ''}
-${imageBlock}${repoBlock}
+${imageBlock}${repoBlock}${referenceBlock}
 ## CLASSIFICATION RULES
 - **coding** = the ticket's acceptance criteria require changes to source code, tests, build config, or infrastructure-as-code files in one or more of the listed repos.
 - **non-coding** = research, investigation, documentation, process, planning, stakeholder questions, access requests, meeting prep, spikes with no code deliverable, or anything that can be resolved with a written response rather than a code change.
@@ -67,9 +71,15 @@ Schema:
   "classification": "coding" | "non-coding",
   "confidence": "high" | "medium" | "low",
   "reason": "one-sentence rationale",
-  "summary": "one-paragraph restatement of what this ticket is asking for, in your own words"
+  "summary": "one-paragraph restatement of what this ticket is asking for, in your own words",
+  "repos": ["/exact/path/from/list/above", "..."]
 }
 \`\`\`
+
+For \`repos\`:
+- If \`classification\` is **coding**: list ONLY the repos whose source code must change. Tickets typically touch a single service. Be conservative — do not include a repo "just in case".
+- If \`classification\` is **non-coding**: use \`[]\`.
+- Use the exact path strings shown in the AVAILABLE REPOS list. The orchestrator matches by string equality and will fail the run if any path doesn't match.
 
 Then create ${doneFile} with any content to signal completion.
 

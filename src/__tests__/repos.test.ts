@@ -6,9 +6,11 @@ import { join } from 'path';
 import {
   loadRepoManifest,
   renderBranchName,
+  slugify,
   preflightRepos,
   DEFAULT_BASE,
   DEFAULT_BRANCH_PATTERN,
+  DEFAULT_TRANSITION_AFTER_PUSH,
 } from '../repos';
 
 let TEST_ROOT: string;
@@ -63,6 +65,46 @@ repos:
     expect(m.repos).toHaveLength(1);
     expect(m.repos[0].path).toBe('/tmp/api');
     expect(m.repos[0].base).toBe(DEFAULT_BASE);
+    expect(m.references).toEqual([]);
+    expect(m.transitionAfterPush).toBe(DEFAULT_TRANSITION_AFTER_PUSH);
+  });
+
+  it('honors a custom transitionAfterPush', () => {
+    const path = writeYaml(join(TEST_ROOT, 'repos.yaml'), `
+transitionAfterPush: Code Review
+repos:
+  - path: /tmp/api
+`);
+    const m = loadRepoManifest(path)!;
+    expect(m.transitionAfterPush).toBe('Code Review');
+  });
+
+  it('parses references with role and ~ expansion', () => {
+    const path = writeYaml(join(TEST_ROOT, 'repos.yaml'), `
+repos:
+  - path: /tmp/api
+references:
+  - path: ~/legacy/code
+    role: legacy reference
+  - path: /abs/old-system
+`);
+    const m = loadRepoManifest(path)!;
+    expect(m.references).toHaveLength(2);
+    expect(m.references[0].path).toMatch(/\/legacy\/code$/);
+    expect(m.references[0].path.startsWith('~')).toBe(false);
+    expect(m.references[0].role).toBe('legacy reference');
+    expect(m.references[1].path).toBe('/abs/old-system');
+    expect(m.references[1].role).toBeUndefined();
+  });
+
+  it('throws when a reference is missing path', () => {
+    const path = writeYaml(join(TEST_ROOT, 'repos.yaml'), `
+repos:
+  - path: /tmp/api
+references:
+  - role: nope
+`);
+    expect(() => loadRepoManifest(path)).toThrow(/references\[0\] is missing required 'path'/);
   });
 
   it('expands ~ in repo paths and applies per-repo base override', () => {
@@ -112,6 +154,30 @@ describe('renderBranchName', () => {
   });
 });
 
+describe('slugify', () => {
+  it('lowercases and hyphenates', () => {
+    expect(slugify('Add new login flow')).toBe('add-new-login-flow');
+  });
+
+  it('collapses runs of non-alphanumerics', () => {
+    expect(slugify('Fix:  bug!! in   API///handler')).toBe('fix-bug-in-api-handler');
+  });
+
+  it('trims leading/trailing separators', () => {
+    expect(slugify('  ---hello world---  ')).toBe('hello-world');
+  });
+
+  it('truncates to maxLen and trims trailing dash', () => {
+    const out = slugify('one two three four five six seven eight nine ten', 20);
+    expect(out.length).toBeLessThanOrEqual(20);
+    expect(out.endsWith('-')).toBe(false);
+  });
+
+  it('returns empty string for input with no alphanumerics', () => {
+    expect(slugify('!!!---!!!')).toBe('');
+  });
+});
+
 describe('preflightRepos', () => {
   beforeEach(() => {
     TEST_ROOT = freshRoot();
@@ -123,7 +189,7 @@ describe('preflightRepos', () => {
 
   it('flags missing path', () => {
     const result = preflightRepos(
-      { defaultBase: 'develop', branchPattern: 'ticket/{key}', repos: [{ path: '/nope/does/not/exist', base: 'develop' }] },
+      { defaultBase: 'develop', branchPattern: 'ticket/{key}', repos: [{ path: '/nope/does/not/exist', base: 'develop' }], references: [], transitionAfterPush: 'In Review' },
       { skipFetch: true },
     );
     expect(result.ok).toBe(false);
@@ -134,7 +200,7 @@ describe('preflightRepos', () => {
     const dir = join(TEST_ROOT, 'not-a-repo');
     mkdirSync(dir, { recursive: true });
     const result = preflightRepos(
-      { defaultBase: 'develop', branchPattern: 'ticket/{key}', repos: [{ path: dir, base: 'develop' }] },
+      { defaultBase: 'develop', branchPattern: 'ticket/{key}', repos: [{ path: dir, base: 'develop' }], references: [], transitionAfterPush: 'In Review' },
       { skipFetch: true },
     );
     expect(result.ok).toBe(false);
@@ -145,7 +211,7 @@ describe('preflightRepos', () => {
     const dir = join(TEST_ROOT, 'api');
     initRepo(dir, 'develop');
     const result = preflightRepos(
-      { defaultBase: 'develop', branchPattern: 'ticket/{key}', repos: [{ path: dir, base: 'develop' }] },
+      { defaultBase: 'develop', branchPattern: 'ticket/{key}', repos: [{ path: dir, base: 'develop' }], references: [], transitionAfterPush: 'In Review' },
       { skipFetch: true },
     );
     expect(result.ok).toBe(true);
@@ -157,7 +223,7 @@ describe('preflightRepos', () => {
     initRepo(dir, 'develop');
     writeFileSync(join(dir, 'dirty.txt'), 'uncommitted\n');
     const result = preflightRepos(
-      { defaultBase: 'develop', branchPattern: 'ticket/{key}', repos: [{ path: dir, base: 'develop' }] },
+      { defaultBase: 'develop', branchPattern: 'ticket/{key}', repos: [{ path: dir, base: 'develop' }], references: [], transitionAfterPush: 'In Review' },
       { skipFetch: true },
     );
     expect(result.ok).toBe(false);
@@ -169,7 +235,7 @@ describe('preflightRepos', () => {
     initRepo(dir, 'develop');
     writeFileSync(join(dir, 'dirty.txt'), 'uncommitted\n');
     const result = preflightRepos(
-      { defaultBase: 'develop', branchPattern: 'ticket/{key}', repos: [{ path: dir, base: 'develop' }] },
+      { defaultBase: 'develop', branchPattern: 'ticket/{key}', repos: [{ path: dir, base: 'develop' }], references: [], transitionAfterPush: 'In Review' },
       { skipFetch: true, allowDirty: true },
     );
     expect(result.ok).toBe(true);
@@ -179,7 +245,7 @@ describe('preflightRepos', () => {
     const dir = join(TEST_ROOT, 'api');
     initRepo(dir, 'develop');
     const result = preflightRepos(
-      { defaultBase: 'no-such-branch', branchPattern: 'ticket/{key}', repos: [{ path: dir, base: 'no-such-branch' }] },
+      { defaultBase: 'no-such-branch', branchPattern: 'ticket/{key}', repos: [{ path: dir, base: 'no-such-branch' }], references: [], transitionAfterPush: 'In Review' },
       { skipFetch: true },
     );
     expect(result.ok).toBe(false);

@@ -36,6 +36,10 @@ export function buildTicketBuildPrompt(input: TicketBuildPromptInput): string {
     return parts.join(' ');
   }).join('\n');
 
+  const referenceBlock = manifest.references.length > 0
+    ? `\n## READ-ONLY REFERENCE FILES\nThe paths below exist for research only (e.g. legacy code being ported). They are NOT git repos in turkeycode's view — do NOT \`git\` against them, do NOT modify their files, do NOT commit anything inside them. Use Read/Grep to study them as you plan and implement the change.\n${manifest.references.map((r) => `- ${r.path}${r.role ? ` — ${r.role}` : ''}`).join('\n')}\n`
+    : '';
+
   return `
 # TICKET BUILD
 
@@ -63,6 +67,7 @@ ${imageBlock}
 ${repoLines}
 
 All repos are on branch \`${branchName}\` (cut off their configured base branch). You may \`cd\` between them with the Bash tool as needed. Use aimem (MCP) for cross-repo understanding before making changes.
+${referenceBlock}
 
 ## PROCESS
 1. **Understand** the ticket: re-read description and comments. Consult aimem for repo context, conventions, and related prior work.
@@ -74,7 +79,7 @@ All repos are on branch \`${branchName}\` (cut off their configured base branch)
 
 ## RULES
 - Do NOT switch branches. Do NOT delete branches. Do NOT push.
-- Do NOT modify repos that aren't in the list above.
+- Do NOT modify repos that aren't in the "REPOS IN SCOPE" list above.${manifest.references.length > 0 ? '\n- Do NOT modify or commit anything inside the "READ-ONLY REFERENCE FILES" paths.' : ''}
 - Do NOT create new branches.
 - All commits must land on \`${branchName}\` in their respective repos.
 - If the ticket turns out to be unbuildable as specified (missing info, blocked by external dependency), STOP, write a short explanation to ${doneFile}, and exit. Do not push broken code just to satisfy the done signal.

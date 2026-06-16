@@ -44,6 +44,12 @@ export class GitHubClient {
   noPush: boolean = false;
   /** When true, createPR() is a silent no-op (set via --no-pr or implied by noPush). */
   noPr: boolean = false;
+  /**
+   * Base branch override (set via --base on the orchestrator).
+   * When set, getDefaultBranch() returns this instead of detecting main/master.
+   * Use this for develop-based gitflow repos.
+   */
+  baseBranch?: string;
 
   constructor() {
     this.workDir = process.cwd();
@@ -617,6 +623,22 @@ export class GitHubClient {
   ensureMainBranch(cwd?: string): void {
     const opts = { encoding: 'utf-8' as const, cwd: cwd || process.cwd() };
     try {
+      // SAFETY: never auto-rename in a repo that has an `origin` remote.
+      // Real teams treat `master` as a tracked, named branch; silently
+      // renaming it to `main` corrupts everyone else's clone state.
+      // This rename is only safe in greenfield, pre-`git init` setups.
+      try {
+        const remote = execSync('git remote', opts).trim();
+        if (remote) {
+          // We have a remote — the rename is destructive. Skip it.
+          return;
+        }
+      } catch { /* no remote → safe to continue */ }
+
+      // SAFETY: never rename if --base override is set; the operator has told
+      // us which branch is canonical, so don't touch master.
+      if (this.baseBranch) return;
+
       const branches = execSync('git branch --list', opts);
       const hasMaster = branches.split('\n').some(b => b.trim() === 'master' || b.trim() === '* master');
       const hasMain = branches.split('\n').some(b => b.trim() === 'main' || b.trim() === '* main');
@@ -631,6 +653,9 @@ export class GitHubClient {
   }
 
   getDefaultBranch(): string {
+    // Explicit override (--base) wins. Used by develop-based gitflow repos
+    // and any caller that doesn't want main/master auto-detection.
+    if (this.baseBranch) return this.baseBranch;
     try {
       const opts = { encoding: 'utf-8' as const, cwd: this.workDir || process.cwd() };
       const branches = execSync('git branch --list', opts);
@@ -640,6 +665,46 @@ export class GitHubClient {
       if (configured) return configured;
     } catch { /* ignore */ }
     return 'main'; // default fallback
+  }
+
+  /**
+   * Ensure a feature branch exists, creating it off `base` if it doesn't.
+   * Used when the orchestrator is invoked with --feature: phase branches
+   * branch off this feature branch and merge back into it; the base branch
+   * stays untouched.
+   *
+   * Safe to call when the branch already exists — switches to it without
+   * modifying its contents.
+   */
+  ensureFeatureBranch(name: string, base: string): void {
+    const opts = { encoding: 'utf-8' as const, cwd: this.workDir || process.cwd() };
+    let exists = false;
+    try {
+      const branches = execSync('git branch --list', opts);
+      exists = branches
+        .split('\n')
+        .some(b => b.trim() === name || b.trim() === '* ' + name);
+    } catch { /* no git repo yet — let the checkout below fail */ }
+
+    const stashed = this.stashIfDirty();
+    try {
+      if (exists) {
+        try { execSync(`git checkout ${name}`, { ...opts, stdio: 'pipe' }); } catch { /* may already be on it */ }
+        console.log(`Feature branch already exists: ${name}`);
+      } else {
+        try { execSync(`git checkout ${base}`, { ...opts, stdio: 'pipe' }); } catch { /* may already be on it */ }
+        execSync(`git checkout -b ${name}`, { ...opts, stdio: 'inherit' });
+        console.log(`Created feature branch: ${name} (off ${base})`);
+      }
+    } finally {
+      if (stashed) {
+        try {
+          execSync('git stash pop', { stdio: 'inherit' });
+        } catch {
+          try { execSync('git stash drop', { stdio: 'inherit' }); } catch { /* ignore */ }
+        }
+      }
+    }
   }
 
   /**

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { flattenAdf } from '../jira';
+import { flattenAdf, formatJiraDuration } from '../jira';
 
 describe('flattenAdf', () => {
   it('returns empty string for null/undefined', () => {
@@ -75,5 +75,29 @@ describe('flattenAdf', () => {
     const out = flattenAdf(doc);
     expect(out).toContain('one');
     expect(out).toContain('two');
+  });
+});
+
+describe('formatJiraDuration', () => {
+  it('clamps sub-minute durations to 1m', () => {
+    expect(formatJiraDuration(0)).toBe('1m');
+    expect(formatJiraDuration(15_000)).toBe('1m');
+    expect(formatJiraDuration(59_000)).toBe('1m');
+  });
+
+  it('formats minute-only durations', () => {
+    expect(formatJiraDuration(60_000)).toBe('1m');
+    expect(formatJiraDuration(5 * 60_000)).toBe('5m');
+    expect(formatJiraDuration(45 * 60_000)).toBe('45m');
+  });
+
+  it('formats hour-only durations without an empty minutes segment', () => {
+    expect(formatJiraDuration(3600_000)).toBe('1h');
+    expect(formatJiraDuration(2 * 3600_000)).toBe('2h');
+  });
+
+  it('formats hour+minute durations', () => {
+    expect(formatJiraDuration(3600_000 + 23 * 60_000)).toBe('1h 23m');
+    expect(formatJiraDuration(2 * 3600_000 + 5 * 60_000)).toBe('2h 5m');
   });
 });

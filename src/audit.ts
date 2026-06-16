@@ -32,6 +32,7 @@ export type AuditEvent =
   | 'github_pr_merged'
   | 'ticket_run_started'
   | 'ticket_triage'
+  | 'ticket_scope_resolved'
   | 'ticket_research_posted'
   | 'ticket_branch_pushed'
   | 'ticket_run_completed';

@@ -858,3 +858,17 @@ export class JiraClient {
 export function createJiraClient(project?: string): JiraClient {
   return new JiraClient(project);
 }
+
+/**
+ * Format a millisecond duration into a Jira-worklog-compatible string ("1h 23m", "5m").
+ * Rounds up to a 1-minute floor so sub-minute work still registers in Jira reports.
+ */
+export function formatJiraDuration(ms: number): string {
+  const totalSeconds = Math.max(60, Math.round(ms / 1000));
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const parts: string[] = [];
+  if (h > 0) parts.push(`${h}h`);
+  if (m > 0 || h === 0) parts.push(`${m}m`);
+  return parts.join(' ');
+}
