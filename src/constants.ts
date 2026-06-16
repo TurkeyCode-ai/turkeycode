@@ -40,7 +40,7 @@ export const PLAN_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 export const PHASE_BUILD_TIMEOUT_MS = 90 * 60 * 1000; // 90 minutes (phases are bigger than tickets)
 export const QA_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 export const FIX_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
-export const AAR_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes (just writing a markdown summary)
+export const AAR_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes (writing markdown summary; large phases need headroom)
 export const POLISH_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes (repo-wide warning cleanup)
 
 // Retry limits

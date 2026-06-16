@@ -1,6 +1,7 @@
 /**
- * Plan phase prompt builder
- * Produces phase-plan.json with N sprints (one per concern). Each sprint = one build phase = one Claude session.
+ * Plan phase prompt builder.
+ * Produces phase-plan.json with N sprints — exactly as many as the work requires,
+ * no forced minimum or maximum. Each sprint = one build phase = one Claude session.
  * The orchestrator auto-runs all sprints sequentially until the project is complete.
  */
 
@@ -61,7 +62,7 @@ You are NOT creating tickets for human developers. You are creating PHASES for a
 - Loses all context between sessions (every new session = cold start)
 - Doesn't need coordination overhead (no ticket branches, no merging)
 
-**Each sprint is one focused session. Small projects = 1 sprint. Bigger projects = 2-5 sprints, auto-chained.**
+**Each sprint is one focused session. Use as many sprints as the work truly needs — 1 for a small ticket, many for a big project. Do not force a fixed number; do not pad.**
 
 ## OUTPUT: ${PHASE_PLAN_FILE}
 

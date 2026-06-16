@@ -59,6 +59,8 @@ program
   .option('--aar', 'Generate a per-phase After-Action Report (extra LLM session per phase; off by default)')
   .option('--strict-phases', 'Gate every phase on ZERO warnings (old behavior). Disables the end-of-build polish pass.')
   .option('--type <type>', 'Force project type (skips auto-detection): web-fullstack, web-frontend, web-api, cli, library, desktop, mobile, embedded, legacy, monorepo')
+  .option('--base <branch>', 'Base branch override (e.g. develop). Defaults to detected main/master.')
+  .option('--feature <branch>', 'Feature branch — phase branches branch off this and merge back into it; the base branch stays untouched. Required for established gitflow repos.')
   .action(async (description: string, options) => {
     console.log('');
     console.log('╔══════════════════════════════════════════════════════════╗');
@@ -114,7 +116,9 @@ program
       noPr,
       aar: options.aar,
       polish,
-      projectType
+      projectType,
+      base: options.base,
+      feature: options.feature
     });
 
     try {
@@ -129,7 +133,9 @@ program
         polish,
         // `run` always means "build this spec" — if the project is already complete,
         // re-plan a new iteration rather than silently no-op'ing. (`resume` does not set this.)
-        replanIfComplete: true
+        replanIfComplete: true,
+        base: options.base,
+        feature: options.feature
       });
     } catch (err) {
       logFatal('orchestration', err);
@@ -285,6 +291,10 @@ program
   .option('-w, --allow-warnings', 'Allow warnings in QA (only blockers must be zero)')
   .option('--aar', 'Generate a per-phase After-Action Report (extra LLM session per phase; off by default)')
   .option('--strict-phases', 'Gate every phase on ZERO warnings (old behavior). Disables the end-of-build polish pass.')
+  .option('--no-push', 'Skip git push (use for local-only repos or no_push remotes)')
+  .option('--no-pr', 'Skip gh pr create (implied by --no-push)')
+  .option('--base <branch>', 'Base branch override (seed/override; persisted to state)')
+  .option('--feature <branch>', 'Feature branch (seed/override; persisted to state)')
   .action(async (options) => {
     if (!canResume()) {
       console.log('Nothing to resume. Use "turkey-enterprise-v3 run" to start.');
@@ -312,7 +322,11 @@ program
     const orchestrator = createOrchestrator({
       verbose: options.verbose,
       aar: options.aar,
-      polish
+      polish,
+      noPush: options.push === false,
+      noPr: options.pr === false,
+      base: options.base,
+      feature: options.feature
     });
 
     try {
@@ -734,5 +748,111 @@ appsCmd
       process.exit(1);
     }
   });
+
+// ==================== RUN-TICKET COMMAND ====================
+program
+  .command('run-ticket')
+  .description('Run a single Jira ticket: triage it, then research (non-coding) or build + push branches (coding)')
+  .argument('<key>', 'Jira ticket key (e.g. PROJ-123)')
+  .option('-v, --verbose', 'Verbose output')
+  .option('--manifest <path>', 'Override the repos.yaml manifest path')
+  .option('--mcp-config <path>', 'Override the MCP config path (else uses TURKEYCODE_MCP_CONFIG)')
+  .option('--triage-only', 'Stop after triage. No branches cut, no build session, no Jira comment/worklog.')
+  .action(async (key: string, options) => {
+    const { createTicketOrchestrator } = await import('./ticket-orchestrator');
+    try {
+      const orch = createTicketOrchestrator({
+        verbose: options.verbose,
+        manifestPath: options.manifest,
+        mcpConfig: options.mcpConfig,
+        triageOnly: options.triageOnly,
+      });
+      await orch.runTicket(key);
+      console.log('');
+      console.log(`✅ Ticket ${key} ${options.triageOnly ? 'triage' : 'run'} complete.`);
+    } catch (err) {
+      console.error(`❌ Ticket run failed: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  });
+
+// ==================== MY-TICKETS COMMAND ====================
+program
+  .command('my-tickets')
+  .description('List Jira tickets assigned to you, then pick one to run')
+  .option('-v, --verbose', 'Verbose output')
+  .option('--include-done', 'Include tickets in the Done status category')
+  .option('-k, --key <key>', 'Skip the picker and run the given key directly')
+  .option('--manifest <path>', 'Override the repos.yaml manifest path')
+  .option('--mcp-config <path>', 'Override the MCP config path (else uses TURKEYCODE_MCP_CONFIG)')
+  .option('--triage-only', 'Stop after triage. No branches cut, no build session, no Jira comment/worklog.')
+  .action(async (options) => {
+    const { createJiraClient, isJiraConfigured } = await import('./jira');
+    const { createTicketOrchestrator } = await import('./ticket-orchestrator');
+    if (!isJiraConfigured()) {
+      console.error('Jira is not configured. Set JIRA_HOST, JIRA_EMAIL, JIRA_TOKEN.');
+      process.exit(1);
+    }
+
+    let chosenKey: string | undefined = options.key;
+
+    if (!chosenKey) {
+      const jira = createJiraClient();
+      const tickets = await jira.searchAssignedToMe({ includeDone: options.includeDone });
+      if (tickets.length === 0) {
+        console.log('No tickets assigned to you.');
+        return;
+      }
+
+      console.log('');
+      console.log(`Tickets assigned to you (${tickets.length}):`);
+      console.log('');
+      tickets.forEach((t, i) => {
+        const idx = String(i + 1).padStart(2, ' ');
+        const key = t.key.padEnd(12, ' ');
+        const status = `[${t.status}]`.padEnd(16, ' ');
+        console.log(`${idx}. ${key} ${status} ${t.summary}`);
+      });
+      console.log('');
+
+      const answer = await promptLine('Pick a ticket by number (or Enter to cancel): ');
+      if (!answer.trim()) {
+        console.log('Cancelled.');
+        return;
+      }
+      const pick = parseInt(answer.trim(), 10);
+      if (!Number.isInteger(pick) || pick < 1 || pick > tickets.length) {
+        console.error(`Invalid selection: ${answer}`);
+        process.exit(1);
+      }
+      chosenKey = tickets[pick - 1].key;
+    }
+
+    try {
+      const orch = createTicketOrchestrator({
+        verbose: options.verbose,
+        manifestPath: options.manifest,
+        mcpConfig: options.mcpConfig,
+        triageOnly: options.triageOnly,
+      });
+      await orch.runTicket(chosenKey);
+      console.log('');
+      console.log(`✅ Ticket ${chosenKey} ${options.triageOnly ? 'triage' : 'run'} complete.`);
+    } catch (err) {
+      console.error(`❌ Ticket run failed: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  });
+
+function promptLine(question: string): Promise<string> {
+  return new Promise((resolve) => {
+    const readline = require('readline');
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (answer: string) => {
+      rl.close();
+      resolve(answer);
+    });
+  });
+}
 
 program.parse(process.argv);

@@ -1,6 +1,6 @@
 /**
  * Main orchestrator for turkey-enterprise-v3
- * Phase-based model: 2-5 build phases, each one Claude session
+ * Phase-based model: N build phases (as many as the work needs), each one Claude session
  */
 
 import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, unlinkSync, rmSync, statSync } from 'fs';
@@ -87,6 +87,17 @@ export interface OrchestratorOptions {
    * left unset by `resume` (which should report a finished project as done, not rebuild it).
    */
   replanIfComplete?: boolean;
+  /**
+   * Base branch override. Defaults to detected main/master.
+   * Use this when working on a develop-based gitflow repo.
+   */
+  base?: string;
+  /**
+   * Feature branch. When set, phase branches branch off this and merge
+   * back into this. The base branch is never touched. Use for established
+   * repos where direct commits to develop/main aren't allowed.
+   */
+  feature?: string;
 }
 
 /**
@@ -110,7 +121,7 @@ export function isBuildDoneStale(workDir: string, buildDonePath: string): boolea
 
 /**
  * Main orchestrator class
- * Phase-based: 2-5 build phases, each one Claude session
+ * Phase-based: N build phases (as many as the work needs), each one Claude session
  */
 export class Orchestrator {
   private state: ProjectState;
@@ -122,6 +133,8 @@ export class Orchestrator {
   private workDir: string;
   private aar: boolean;
   private polish: boolean;
+  private baseBranch?: string;
+  private featureBranch?: string;
 
   constructor(options: OrchestratorOptions = {}) {
     this.verbose = options.verbose ?? false;
@@ -136,6 +149,31 @@ export class Orchestrator {
     this.github.workDir = this.workDir;
     if (options.noPush) this.github.noPush = true;
     if (options.noPr) this.github.noPr = true;
+
+    // Persist base/feature into state on first use; on resume, restore from
+    // state if not explicitly overridden by CLI flags. Without this, resume
+    // forgets the gitflow target and tries to merge into "main".
+    this.baseBranch = options.base ?? this.state.baseBranch;
+    this.featureBranch = options.feature ?? this.state.featureBranch;
+    if (options.base !== undefined) this.state.baseBranch = options.base;
+    if (options.feature !== undefined) this.state.featureBranch = options.feature;
+    if (this.state.baseBranch !== undefined || this.state.featureBranch !== undefined) {
+      saveState(this.state);
+    }
+    if (this.baseBranch) this.github.baseBranch = this.baseBranch;
+  }
+
+  /**
+   * The branch that phase branches branch off of, and merge back into.
+   * - If `--feature` is set, phase work lands on the feature branch
+   * - Else if `--base` is set, phase work lands on the base branch directly
+   * - Else falls back to detected default (main/master)
+   *
+   * Established gitflow repos should pass `--base develop --feature feature/x`
+   * so phase work lands on a feature branch and develop stays untouched.
+   */
+  private getMergeTarget(): string {
+    return this.featureBranch ?? this.baseBranch ?? this.github.getDefaultBranch();
   }
 
   /**
@@ -161,6 +199,13 @@ export class Orchestrator {
         githubRepo: options.githubRepo,
         specFile: options.specFile
       });
+      // initState replaced state with a fresh default — re-apply the
+      // gitflow targets the constructor captured so they survive into
+      // .turkey/state.json. Without this, resume forgets --feature/--base
+      // and the merge step falls back to "main".
+      if (this.baseBranch) this.state.baseBranch = this.baseBranch;
+      if (this.featureBranch) this.state.featureBranch = this.featureBranch;
+      if (this.state.baseBranch || this.state.featureBranch) saveState(this.state);
       this.log(`Initialized project: ${description}`);
 
       // Auto-setup GitHub repo if GITHUB_OWNER is set
@@ -184,6 +229,16 @@ export class Orchestrator {
           this.log(`Jira project ready: ${projectKey}`);
         }
       }
+    }
+
+    // Ensure feature branch exists if specified (branched off base).
+    // Phase work will land on the feature branch; the base stays untouched.
+    if (this.featureBranch) {
+      const base = this.baseBranch ?? this.github.getDefaultBranch();
+      this.github.ensureFeatureBranch(this.featureBranch, base);
+      this.log(`Feature branch: ${this.featureBranch} (off ${base}) — base will not be modified`);
+    } else if (this.baseBranch) {
+      this.log(`Base branch override: ${this.baseBranch}`);
     }
 
     // ==================== DETECT PROJECT TYPE ====================
@@ -531,7 +586,7 @@ export class Orchestrator {
   private reconcileResumeState(): void {
     let defaultBranch: string;
     try {
-      defaultBranch = this.github.getDefaultBranch();
+      defaultBranch = this.getMergeTarget();
     } catch {
       return;
     }
@@ -644,10 +699,11 @@ export class Orchestrator {
       await this.jira.transitionTicket(jiraTicketKey, 'In Progress');
     }
 
-    // Create phase branch
+    // Create phase branch off the merge target (feature branch if set,
+    // else base branch if set, else detected default).
     const phaseBranch = `phase-${phaseNumber}/${slugify(phase.name)}`;
     phase.branchName = phaseBranch;
-    const defaultBranch = this.github.getDefaultBranch();
+    const defaultBranch = this.getMergeTarget();
     this.github.createBranch(phaseBranch, defaultBranch);
 
     // Ensure .gitignore exists (prevents node_modules/.next etc from being committed)
@@ -757,8 +813,9 @@ export class Orchestrator {
       }
     }
 
-    // Re-read default branch right before merge (repo now guaranteed to exist)
-    const mergeTarget = this.github.getDefaultBranch();
+    // Re-read merge target right before merge (repo now guaranteed to exist).
+    // Honors --base / --feature; falls back to detected default branch.
+    const mergeTarget = this.getMergeTarget();
 
     // Check if the phase branch actually exists (createBranch may have failed silently)
     const currentBranch = this.github.getCurrentBranch();
@@ -1022,10 +1079,10 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       this.log(`\n--- QA Attempt ${attempt}/${MAX_FAST_QA_ATTEMPTS} (combined session) ---\n`);
       auditQA(phaseNumber, attempt, 'started');
 
-      // Capture git diff stat vs the phase's base branch so the verdict agent can
+      // Capture git diff stat vs the phase's merge target so the verdict agent can
       // ground-check whether the work claimed actually landed. Without this, QA
       // happily passes a 14-ticket "all done" claim against an empty diff.
-      const baseRef = this.github.getDefaultBranch();
+      const baseRef = this.getMergeTarget();
       let diffStat = '';
       try {
         diffStat = execSync(`git diff ${baseRef}...HEAD --stat`, { encoding: 'utf-8' }).trim();

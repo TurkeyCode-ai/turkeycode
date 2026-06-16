@@ -15,3 +15,7 @@ export { buildQaCombinedPrompt } from './qa-combined';
 export { buildCodeReviewPrompt } from './code-review';
 export { buildAarPrompt } from './aar';
 export { buildPolishPrompt } from './polish';
+export { buildTicketTriagePrompt } from './ticket-triage';
+export { buildTicketResearchPrompt } from './ticket-research';
+export { buildTicketBuildPrompt } from './ticket-build';
+export { buildMergeFixPrompt } from './merge-fix';

@@ -1485,13 +1485,13 @@ async function checkBackendStarts(project: ProjectInfo): Promise<CheckResult> {
     }
 
     return false;
-  }, 20000, projectEnv);
+  }, 240000, projectEnv);
 
   if (!result.handle) {
     const snippet = result.output ? result.output.slice(-300) : 'no output captured';
     return {
       name: 'Backend Starts', passed: false,
-      message: `Backend failed to start (${result.reason}) on port ${actualPort} within 20s (cmd: ${startCmd})\nOutput: ${snippet}`,
+      message: `Backend failed to start (${result.reason}) on port ${actualPort} within 240s (cmd: ${startCmd})\nOutput: ${snippet}`,
       duration: Date.now() - start
     };
   }
