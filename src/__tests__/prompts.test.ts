@@ -150,4 +150,117 @@ describe('prompts', () => {
       expect(prompt).toContain('cli');
     });
   });
+
+  describe('buildTicketTriagePrompt', () => {
+    const baseInput: any = {
+      ticket: {
+        key: 'PROJ-1',
+        summary: 'Inventory count off by one',
+        description: 'desc',
+        status: 'To Do',
+        issueType: 'Bug',
+        labels: [],
+        attachments: [],
+        comments: [],
+      },
+      manifest: {
+        defaultBase: 'develop',
+        branchPattern: 'ticket/{key}-{slug}',
+        repos: [
+          { path: '/r/orders-api', role: 'orders-api — checkout', base: 'develop' },
+          { path: '/r/inventory-api', role: 'inventory-api — stock levels', base: 'develop' },
+        ],
+        references: [],
+        transitionAfterPush: 'In Review',
+      },
+      imagePaths: [],
+      verdictPath: '/tmp/verdict.json',
+      doneFile: '/tmp/triage.done',
+    };
+
+    it('asks the LLM to emit a repos[] field', () => {
+      const out = prompts.buildTicketTriagePrompt(baseInput);
+      expect(out).toContain('"repos"');
+      expect(out).toContain('AVAILABLE REPOS');
+      expect(out).toContain('/r/orders-api');
+      expect(out).toContain('/r/inventory-api');
+    });
+
+    it('instructs the LLM to use exact paths and warns about run failure on mismatch', () => {
+      const out = prompts.buildTicketTriagePrompt(baseInput);
+      expect(out).toMatch(/exact path/i);
+      expect(out).toMatch(/string equality|fail the run/i);
+    });
+
+    it('omits the reference-files block when no references are configured', () => {
+      const out = prompts.buildTicketTriagePrompt(baseInput);
+      expect(out).not.toMatch(/REFERENCE FILES/);
+    });
+
+    it('lists references and forbids them in the repos[] output', () => {
+      const input = {
+        ...baseInput,
+        manifest: {
+          ...baseInput.manifest,
+          references: [
+            { path: '/legacy/app', role: 'legacy code being ported' },
+          ],
+        },
+      };
+      const out = prompts.buildTicketTriagePrompt(input);
+      expect(out).toMatch(/REFERENCE FILES/);
+      expect(out).toContain('/legacy/app');
+      expect(out).toContain('legacy code being ported');
+      expect(out).toMatch(/DO NOT include/i);
+    });
+  });
+
+  describe('buildTicketBuildPrompt', () => {
+    const baseInput: any = {
+      ticket: {
+        key: 'PROJ-1',
+        summary: 'Port masterfile feature',
+        description: 'desc',
+        status: 'In Progress',
+        issueType: 'Story',
+        labels: [],
+        attachments: [],
+        comments: [],
+      },
+      manifest: {
+        defaultBase: 'develop',
+        branchPattern: 'ticket/{key}-{slug}',
+        repos: [
+          { path: '/r/app-masterfile', role: 'masterfile backend', base: 'develop' },
+        ],
+        references: [],
+        transitionAfterPush: 'In Review',
+      },
+      branchName: 'ticket/PROJ-1-port-masterfile-feature',
+      imagePaths: [],
+      triageSummary: 'Port a feature from legacy code',
+      doneFile: '/tmp/build.done',
+    };
+
+    it('omits the reference-files block when no references are configured', () => {
+      const out = prompts.buildTicketBuildPrompt(baseInput);
+      expect(out).not.toMatch(/READ-ONLY REFERENCE FILES/);
+    });
+
+    it('lists references and forbids modifying or committing inside them', () => {
+      const input = {
+        ...baseInput,
+        manifest: {
+          ...baseInput.manifest,
+          references: [
+            { path: '/legacy/app', role: 'legacy code being ported' },
+          ],
+        },
+      };
+      const out = prompts.buildTicketBuildPrompt(input);
+      expect(out).toMatch(/READ-ONLY REFERENCE FILES/);
+      expect(out).toContain('/legacy/app');
+      expect(out).toMatch(/Do NOT modify or commit/);
+    });
+  });
 });

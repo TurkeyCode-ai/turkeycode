@@ -178,6 +178,13 @@ export interface ProjectState {
   lastQaVerdict?: QaVerdict;
   lastQaFindings?: string;
 
+  // Gitflow targets — persisted so `turkeycode resume` knows where phase
+  // branches should merge to without needing the original CLI flags. Without
+  // this, resume falls back to getDefaultBranch() and tries to merge into
+  // "main" even on repos that explicitly opted into --feature/--base.
+  baseBranch?: string;
+  featureBranch?: string;
+
   // Timestamps
   startedAt: string;
   lastUpdatedAt: string;
