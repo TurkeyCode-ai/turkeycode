@@ -20,6 +20,48 @@ import {
   SCOPE_TURN_TIMEOUT_MS,
 } from './constants';
 
+// Color only when writing to an interactive terminal that hasn't opted out via
+// NO_COLOR (https://no-color.org). Piped/redirected output stays plain so the
+// working model reads cleanly in logs and the SaaS chat shell.
+const USE_COLOR = !!process.stdout.isTTY && !process.env.NO_COLOR;
+const sgr = (open: string, text: string, close = '0'): string =>
+  USE_COLOR ? `\x1b[${open}m${text}\x1b[${close}m` : text;
+
+/**
+ * Render the markdown subset the scope working-model emits (ATX headers,
+ * **bold**, `code`, `-`/`*` bullets, `---` rules) as ANSI for the terminal.
+ * Dependency-free and a no-op for color when output isn't a TTY.
+ */
+export function renderScopeMarkdown(md: string): string {
+  // Inline spans: bold (**x**) then code (`x`). Order matters so backticks
+  // inside bold still render. Bold uses 1m/22m so it nests inside a colored line.
+  const inline = (s: string): string =>
+    s
+      .replace(/\*\*(.+?)\*\*/g, (_m, t) => sgr('1', t, '22'))
+      .replace(/`([^`]+?)`/g, (_m, t) => sgr('36', t)); // cyan for code
+
+  return md
+    .split('\n')
+    .map((line) => {
+      const header = line.match(/^(#{1,6})\s+(.*)$/);
+      if (header) {
+        const text = inline(header[2].trim());
+        // h1 = bold underline, h2+ = bold. Keeps the hierarchy without color noise.
+        return header[1].length === 1 ? sgr('1;4', text) : sgr('1', text);
+      }
+      // Horizontal rule (--- / *** / ___) → a dim divider.
+      if (/^\s*([-*_])\1{2,}\s*$/.test(line)) {
+        return sgr('2', '─'.repeat(40));
+      }
+      const bullet = line.match(/^(\s*)[-*]\s+(.*)$/);
+      if (bullet) {
+        return `${bullet[1]}${sgr('2', '•')} ${inline(bullet[2])}`;
+      }
+      return inline(line);
+    })
+    .join('\n');
+}
+
 export interface ScopeSessionOptions {
   description: string;
   /** Seed spec/notes content to start the working model from. */
@@ -153,7 +195,7 @@ export async function runScopeSession(opts: ScopeSessionOptions): Promise<ScopeS
       emptyStreak = 0;
 
       console.log('\n────────────────────────────────────────────────────────────');
-      console.log(workingModel.trim());
+      console.log(renderScopeMarkdown(workingModel.trim()));
       console.log('────────────────────────────────────────────────────────────');
 
       // The final allowed turn is reserved for processing the last input (the spawn
