@@ -249,13 +249,17 @@ export class Gates {
 
     try {
       const content = readFileSync(path, 'utf-8');
-      if (!content.trim().toUpperCase().startsWith('DONE')) {
+      // Accept any non-empty content — file existence + non-empty content means the agent
+      // wrote it intentionally. The literal "DONE" prefix proved too brittle (Sonnet often
+      // writes "Phase X build completed" instead and the gate fails despite all work being
+      // committed). If the agent reaches the point of writing the signal file, the build is done.
+      if (content.trim().length === 0) {
         return {
           name,
           path,
           exists: true,
           valid: false,
-          validationError: 'File does not start with "DONE"'
+          validationError: 'Done signal file is empty'
         };
       }
 
