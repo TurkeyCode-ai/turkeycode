@@ -9,16 +9,47 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, rmSync, statSync, mkdirSync } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
 import { createInterface } from 'readline/promises';
 import { Spawner } from './spawner';
 import { buildScopePrompt, ScopeTurn } from './prompts/scope';
 import {
   getModelForPhase,
   REFERENCE_DIR,
+  PERSONA_PROJECT,
   SCOPE_DONE,
   SCOPE_WORKING_FILE,
   SCOPE_TURN_TIMEOUT_MS,
 } from './constants';
+
+// Global default persona, alongside the ~/.turkeycode/ convention repos.ts and the
+// ticket orchestrator use (deliberately NOT ~/.turkey/, which is project-local state).
+const PERSONA_GLOBAL = join(homedir(), '.turkeycode', 'persona.md');
+
+/**
+ * Resolve the human's operating manual (persona.md) by precedence: an explicit
+ * --persona path, then the project-level ./.turkey/persona.md, then the global
+ * ~/.turkeycode/persona.md. Returns the file content + which path it came from, or
+ * null content when nothing is found (→ the agent falls back to in-context inference).
+ *
+ * An explicit --persona that doesn't exist is a user error and throws (mirrors the
+ * --spec fail-loud check); a missing implicit tier silently falls through.
+ */
+export function resolvePersona(explicitPath?: string): { content: string | null; source: string } {
+  if (explicitPath) {
+    if (!existsSync(explicitPath)) {
+      throw new Error(`Persona file not found: ${explicitPath}`);
+    }
+    return { content: readFileSync(explicitPath, 'utf-8'), source: explicitPath };
+  }
+  for (const candidate of [PERSONA_PROJECT, PERSONA_GLOBAL]) {
+    if (existsSync(candidate)) {
+      return { content: readFileSync(candidate, 'utf-8'), source: candidate };
+    }
+  }
+  return { content: null, source: '' };
+}
 
 // Color only when writing to an interactive terminal that hasn't opted out via
 // NO_COLOR (https://no-color.org). Piped/redirected output stays plain so the
@@ -70,6 +101,8 @@ export interface ScopeSessionOptions {
   model?: string;
   /** Stream the underlying session output. */
   verbose?: boolean;
+  /** Explicit persona.md path (--persona). Falls back to project/global if unset. */
+  personaPath?: string;
 }
 
 export interface ScopeSessionResult {
@@ -90,6 +123,16 @@ export interface ScopeSessionResult {
  */
 export async function runScopeSession(opts: ScopeSessionOptions): Promise<ScopeSessionResult> {
   const { description, seedSpec, verbose } = opts;
+
+  // Resolve the persona once (an explicit --persona that's missing throws — fail loud).
+  // The content is injected into every turn's prompt so the agent embodies the human.
+  const persona = resolvePersona(opts.personaPath);
+  if (persona.content) {
+    console.log(`Persona: ${persona.source} — generating options in your voice.`);
+  } else {
+    console.log('Persona: none — using in-context inference. (Add ~/.turkeycode/persona.md to mimic you.)');
+  }
+  console.log('');
 
   mkdirSync(REFERENCE_DIR, { recursive: true });
 
@@ -143,7 +186,13 @@ export async function runScopeSession(opts: ScopeSessionOptions): Promise<ScopeS
       // Timestamp before the spawn so we can tell a scope.done written BY THIS turn
       // apart from a stale one left by a prior run (which we must not honor or destroy).
       const turnStartMs = Date.now();
-      const prompt = buildScopePrompt({ description, seedSpec, transcript, workingModel });
+      const prompt = buildScopePrompt({
+        description,
+        seedSpec,
+        transcript,
+        workingModel,
+        persona: persona.content ?? undefined,
+      });
       const result = await spawner.run({
         cwd: process.cwd(),
         prompt,
@@ -205,7 +254,8 @@ export async function runScopeSession(opts: ScopeSessionOptions): Promise<ScopeS
         break;
       }
 
-      process.stdout.write('\nYou › ');
+      console.log(sgr('2', '\npick a number · type a correction · "yes" to ship · "abort" to quit'));
+      process.stdout.write('You › ');
       const raw = await nextLine();
       if (raw === null) {
         aborted = true; // Ctrl-D / EOF / closed stream
@@ -218,8 +268,17 @@ export async function runScopeSession(opts: ScopeSessionOptions): Promise<ScopeS
         break;
       }
 
-      // Empty input is not confirmation — record it as "no change" and keep refining.
-      transcript.push({ role: 'human', content: answer || '(no change — keep refining)' });
+      // Record the human turn. A bare integer is a SELECTION from the working model's
+      // numbered "## Next decision" list, not a freeform requirement — annotate it so the
+      // agent (which re-reads its own prior options from the transcript) can't mistake the
+      // digit for a literal value. Empty input is "no change", not confirmation. We stay
+      // parser-free: the CLI never decodes which option N is — the agent resolves it.
+      const content = !answer
+        ? '(no change — keep refining)'
+        : /^\d+$/.test(answer)
+          ? `[picking option ${answer} from your last "## Next decision" list]`
+          : answer;
+      transcript.push({ role: 'human', content });
     }
   } finally {
     rl.close();

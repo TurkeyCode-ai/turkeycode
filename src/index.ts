@@ -59,6 +59,7 @@ program
   .option('-j, --jira <project>', 'Jira project key')
   .option('-g, --github <repo>', 'GitHub repo (owner/repo)')
   .option('-s, --spec <file>', 'Spec file path')
+  .option('--persona <file>', 'Operating-manual persona the scope agent embodies (else ./.turkey/persona.md or ~/.turkeycode/persona.md)')
   .option('-v, --verbose', 'Verbose output')
   .option('-w, --allow-warnings', 'Allow warnings in QA (only blockers must be zero)')
   .option('--no-push', 'Skip git push (use for local-only repos or no_push remotes)')
@@ -127,6 +128,11 @@ program
     const alreadyScoped = existsSync(SCOPE_DONE) && existsSync(SPECS_FILE);
     const wantScope = !options.spec && !descriptionIsSpecFile && !alreadyScoped;
 
+    if (options.persona && !existsSync(options.persona)) {
+      console.error(`Persona file not found: ${options.persona}`);
+      process.exit(1);
+    }
+
     if (wantScope) {
       if (process.stdin.isTTY) {
         console.log('No confirmed scope found — let\'s converge on what to build first.');
@@ -137,6 +143,7 @@ program
         const { emitted, aborted } = await runScopeSession({
           description,
           verbose: options.verbose === true,
+          personaPath: options.persona,
         });
 
         if (aborted) {
@@ -272,6 +279,7 @@ program
   .description('Interactively scope a build into a spec (reflect-and-correct loop) before running')
   .argument('<description>', 'One-line description of what to build')
   .option('-s, --spec <file>', 'Seed spec/notes file to start the working model from')
+  .option('--persona <file>', 'Operating-manual persona the scope agent embodies (else ./.turkey/persona.md or ~/.turkeycode/persona.md)')
   .option('--model <model>', 'Override the model used for the scoping agent')
   .option('-v, --verbose', 'Stream the underlying session output')
   .action(async (description: string, options) => {
@@ -296,11 +304,17 @@ program
       seedSpec = readFileSync(options.spec, 'utf-8');
     }
 
+    if (options.persona && !existsSync(options.persona)) {
+      console.error(`Persona file not found: ${options.persona}`);
+      process.exit(1);
+    }
+
     const { emitted, aborted } = await runScopeSession({
       description,
       seedSpec,
       model: options.model,
       verbose: options.verbose === true,
+      personaPath: options.persona,
     });
 
     console.log('');
