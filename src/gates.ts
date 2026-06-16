@@ -8,6 +8,7 @@ import { existsSync, readFileSync } from 'fs';
 import { GateResult, ArtifactCheck, PhasePlan } from './types';
 import {
   SPECS_FILE,
+  SCOPE_DONE,
   RESEARCH_DONE,
   PHASE_PLAN_FILE,
   PLAN_DONE,
@@ -25,6 +26,32 @@ import {
  * On failure: log details and call process.exit(1)
  */
 export class Gates {
+  /**
+   * Check the scope gate
+   * - scope.done exists and starts with "DONE"
+   * - specs.md exists and is > MIN_SPECS_LENGTH chars
+   * The scope step is interactive and standalone (run before `run`); this verifies it
+   * left a usable intent spec that the research/plan pipeline can consume.
+   */
+  checkScope(): GateResult {
+    const artifacts: ArtifactCheck[] = [];
+
+    artifacts.push(this.checkDoneSignal('scope.done', SCOPE_DONE));
+
+    artifacts.push(this.checkFile(
+      'specs.md',
+      SPECS_FILE,
+      (content) => {
+        if (content.length < MIN_SPECS_LENGTH) {
+          return `Content too short: ${content.length} chars (minimum: ${MIN_SPECS_LENGTH})`;
+        }
+        return null;
+      }
+    ));
+
+    return this.buildResult('scope', artifacts);
+  }
+
   /**
    * Check the research gate
    * - research.done exists and starts with "DONE"

@@ -8,9 +8,16 @@ export const STATE_DIR = '.turkey';
 export const STATE_FILE = `${STATE_DIR}/state.json`;
 export const AUDIT_LOG = `${STATE_DIR}/audit.log`;
 
-// Research artifacts
+// Scope artifacts (interactive "How I Scope" correction loop — runs before research)
 export const REFERENCE_DIR = `${STATE_DIR}/reference`;
 export const SPECS_FILE = `${REFERENCE_DIR}/specs.md`;
+// The living working-model the scope agent rewrites every turn (shown to the human).
+export const SCOPE_WORKING_FILE = `${REFERENCE_DIR}/scope-working.md`;
+// The decision/correction log emitted on convergence — provenance now, training corpus later.
+export const SCOPE_DECISIONS_FILE = `${REFERENCE_DIR}/scope-decisions.md`;
+export const SCOPE_DONE = `${REFERENCE_DIR}/scope.done`;
+
+// Research artifacts
 export const RESEARCH_DONE = `${REFERENCE_DIR}/research.done`;
 
 // Plan artifacts
@@ -35,6 +42,7 @@ export const POLISH_DIR = `${STATE_DIR}/polish`;
 
 // Timeouts (in milliseconds)
 export const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+export const SCOPE_TURN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per correction turn (interactive)
 export const RESEARCH_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
 export const PLAN_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 export const PHASE_BUILD_TIMEOUT_MS = 90 * 60 * 1000; // 90 minutes (phases are bigger than tickets)
@@ -68,6 +76,9 @@ export function setStrictQA(strict: boolean): void {
 // Model selection per phase
 // Maps each phase/sub-phase to the optimal model for cost vs quality
 export const PHASE_MODELS: Record<string, string> = {
+  // Scope — Opus: point-of-view-heavy reasoning (reflect, surface forks, catch tensions)
+  'scope': 'opus',
+
   // Planning phases — Opus for architecture decisions, Sonnet for extraction
   'research': 'sonnet',
   'plan': 'opus',

@@ -12,12 +12,24 @@ import { resolve } from 'path';
 config({ path: resolve(__dirname, '..', 'deploy', '.env') });
 
 import { Command } from 'commander';
-import { appendFileSync, mkdirSync } from 'fs';
+import { appendFileSync, mkdirSync, existsSync, readFileSync, rmSync } from 'fs';
 import { join } from 'path';
+import { createInterface } from 'readline/promises';
 import { createOrchestrator } from './orchestrator';
 import { loadState, resetState, canResume } from './state';
 import { createGates } from './gates';
-import { setStrictQA } from './constants';
+import { Spawner } from './spawner';
+import { buildScopePrompt, ScopeTurn } from './prompts/scope';
+import {
+  setStrictQA,
+  getModelForPhase,
+  REFERENCE_DIR,
+  SPECS_FILE,
+  SCOPE_DONE,
+  SCOPE_WORKING_FILE,
+  SCOPE_DECISIONS_FILE,
+  SCOPE_TURN_TIMEOUT_MS,
+} from './constants';
 
 /**
  * Write a fatal error to .turkey/fatal.log via fs. console output can be lost when
@@ -214,11 +226,175 @@ program
     console.log('Orchestration state reset.');
   });
 
+// ==================== SCOPE COMMAND ====================
+// Interactive "How I Scope" correction loop. Produces .turkey/reference/specs.md
+// (the intent spec the build pipeline consumes) before any code is written.
+program
+  .command('scope')
+  .description('Interactively scope a build into a spec (reflect-and-correct loop) before running')
+  .argument('<description>', 'One-line description of what to build')
+  .option('-s, --spec <file>', 'Seed spec/notes file to start the working model from')
+  .option('--model <model>', 'Override the model used for the scoping agent')
+  .option('-v, --verbose', 'Stream the underlying session output')
+  .action(async (description: string, options) => {
+    console.log('');
+    console.log('╔══════════════════════════════════════════════════════════╗');
+    console.log('║                    SCOPE  (How I Scope)                  ║');
+    console.log('║                                                          ║');
+    console.log('║  I restate what I think you want. You correct me.        ║');
+    console.log('║  The spec falls out when corrections peter out.          ║');
+    console.log('╚══════════════════════════════════════════════════════════╝');
+    console.log('');
+    console.log('Type your correction after each restatement.');
+    console.log('Confirm (e.g. "yes, ship it") to emit the spec. Type "abort" to quit without saving.');
+    console.log('');
+
+    mkdirSync(REFERENCE_DIR, { recursive: true });
+
+    // Start a fresh scope session: clear our own stale markers so done-detection is
+    // meaningful and the working model starts empty. specs.md is left alone (the agent
+    // overwrites it only on an explicit confirmation).
+    for (const stale of [SCOPE_DONE, SCOPE_WORKING_FILE]) {
+      if (existsSync(stale)) rmSync(stale);
+    }
+
+    let seedSpec: string | undefined;
+    if (options.spec) {
+      if (!existsSync(options.spec)) {
+        console.error(`Seed spec not found: ${options.spec}`);
+        process.exit(1);
+      }
+      seedSpec = readFileSync(options.spec, 'utf-8');
+    }
+
+    const spawner = new Spawner({ verbose: options.verbose === true });
+    const model = options.model || getModelForPhase('scope');
+    const transcript: ScopeTurn[] = [];
+    let workingModel = '';
+    const MAX_TURNS = 50; // backstop against a runaway loop
+
+    // Buffered line reader: lines typed/piped while a turn's session is running are
+    // queued (not lost), so both interactive TTY and piped stdin work. nextLine()
+    // resolves null on EOF.
+    const rl = createInterface({ input: process.stdin });
+    const lineQueue: string[] = [];
+    const waiters: Array<(v: string | null) => void> = [];
+    let stdinClosed = false;
+    rl.on('line', (l) => {
+      const w = waiters.shift();
+      if (w) w(l);
+      else lineQueue.push(l);
+    });
+    rl.on('close', () => {
+      stdinClosed = true;
+      while (waiters.length) waiters.shift()!(null);
+    });
+    const nextLine = (): Promise<string | null> => {
+      if (lineQueue.length) return Promise.resolve(lineQueue.shift()!);
+      if (stdinClosed) return Promise.resolve(null);
+      return new Promise((res) => waiters.push(res));
+    };
+
+    let emitted = false;
+    let aborted = false;
+
+    try {
+      for (let turn = 0; turn < MAX_TURNS; turn++) {
+        const prompt = buildScopePrompt({ description, seedSpec, transcript, workingModel });
+        const result = await spawner.run({
+          cwd: process.cwd(),
+          prompt,
+          timeoutMs: SCOPE_TURN_TIMEOUT_MS,
+          sessionName: 'scope',
+          doneFile: SCOPE_DONE,
+          model,
+        });
+
+        if (result.creditExhausted) {
+          console.error('\nCredit/usage exhausted — stopping. Re-run `scope` when credit is available.');
+          break;
+        }
+
+        // The agent rewrites the working model every turn; read it back to show the human.
+        if (existsSync(SCOPE_WORKING_FILE)) {
+          workingModel = readFileSync(SCOPE_WORKING_FILE, 'utf-8');
+        }
+
+        // The agent only writes scope.done after an explicit confirmation.
+        if (existsSync(SCOPE_DONE)) {
+          emitted = true;
+          break;
+        }
+
+        if (!workingModel.trim()) {
+          console.log('\n(The session produced no working model this turn. Retrying — rephrase if this repeats.)');
+          if (result.exitCode !== 0) {
+            console.log(`(session exit code ${result.exitCode})`);
+          }
+          continue;
+        }
+
+        console.log('\n────────────────────────────────────────────────────────────');
+        console.log(workingModel.trim());
+        console.log('────────────────────────────────────────────────────────────');
+
+        process.stdout.write('\nYou › ');
+        const raw = await nextLine();
+        if (raw === null) {
+          aborted = true; // Ctrl-D / EOF / closed stream
+          break;
+        }
+        const answer = raw.trim();
+
+        if (answer.toLowerCase() === 'abort' || answer.toLowerCase() === '/quit') {
+          aborted = true;
+          break;
+        }
+
+        // Empty input is not confirmation — record it as "no change" and keep refining.
+        transcript.push({ role: 'human', content: answer || '(no change — keep refining)' });
+      }
+    } finally {
+      rl.close();
+    }
+
+    console.log('');
+    if (aborted) {
+      console.log('Scope aborted — no spec written.');
+      process.exit(1);
+    }
+
+    if (!emitted) {
+      console.log('Scope ended without an explicit confirmation — no spec written.');
+      console.log('Re-run `turkeycode scope` to continue.');
+      process.exit(1);
+    }
+
+    // Verify the emit actually produced a usable spec.
+    const gate = createGates().checkScope();
+    if (!gate.passed) {
+      console.error(`\nScope emit incomplete: ${gate.message}`);
+      for (const a of gate.artifacts.filter((x) => !x.valid)) {
+        console.error(`  ✗ ${a.name}: ${a.validationError}`);
+      }
+      process.exit(1);
+    }
+
+    console.log('✓ Scope confirmed. Spec written:');
+    console.log(`    ${SPECS_FILE}            (intent spec — feeds research → plan → build)`);
+    console.log(`    ${SCOPE_DECISIONS_FILE}  (decisions + corrections)`);
+    console.log('');
+    console.log('Next:');
+    console.log(`    turkeycode run "${description}"`);
+    console.log('    (it picks up the scoped spec automatically)');
+    console.log('');
+  });
+
 // ==================== GATE COMMAND ====================
 program
   .command('gate')
   .description('Check a specific gate')
-  .argument('<gate>', 'Gate to check (research, plan, phase-build, qa-smoke, qa-functional, qa-visual, qa-verdict, code-review, aar)')
+  .argument('<gate>', 'Gate to check (scope, research, plan, phase-build, qa-smoke, qa-functional, qa-visual, qa-verdict, code-review, aar)')
   .option('-p, --phase <number>', 'Phase number (for phase-specific gates)', '1')
   .option('-a, --attempt <number>', 'Attempt number (for QA gates)', '1')
   .action((gate: string, options) => {
@@ -229,6 +405,9 @@ program
     let result;
 
     switch (gate) {
+      case 'scope':
+        result = gates.checkScope();
+        break;
       case 'research':
         result = gates.checkResearch();
         break;
@@ -258,7 +437,7 @@ program
         break;
       default:
         console.error(`Unknown gate: ${gate}`);
-        console.log('Available gates: research, plan, phase-build, qa-smoke, qa-functional, qa-visual, qa-verdict, code-review, aar');
+        console.log('Available gates: scope, research, plan, phase-build, qa-smoke, qa-functional, qa-visual, qa-verdict, code-review, aar');
         process.exit(1);
     }
 
