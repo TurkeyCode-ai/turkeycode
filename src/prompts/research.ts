@@ -16,7 +16,7 @@ export function buildResearchPrompt(
   // Scoped mode: a human already confirmed the intent spec via `turkeycode scope`.
   // specs.md is AUTHORITATIVE — do not rewrite it. Only append a technical survey.
   if (scoped) {
-    return buildAugmentPrompt(state);
+    return buildAugmentPrompt();
   }
 
   return `
@@ -106,7 +106,7 @@ Then STOP.
  * to build — research only adds the technical survey (stack, libraries, feasibility),
  * appended as a new section. It must NOT rewrite the human's intent.
  */
-function buildAugmentPrompt(state: ProjectState): string {
+function buildAugmentPrompt(): string {
   return `
 # RESEARCH PHASE (augment mode — a scoped spec already exists)
 

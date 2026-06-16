@@ -12,7 +12,7 @@ import { resolve } from 'path';
 config({ path: resolve(__dirname, '..', 'deploy', '.env') });
 
 import { Command } from 'commander';
-import { appendFileSync, mkdirSync, existsSync, readFileSync, rmSync } from 'fs';
+import { appendFileSync, mkdirSync, existsSync, readFileSync, writeFileSync, rmSync, statSync } from 'fs';
 import { join } from 'path';
 import { createInterface } from 'readline/promises';
 import { createOrchestrator } from './orchestrator';
@@ -251,12 +251,16 @@ program
 
     mkdirSync(REFERENCE_DIR, { recursive: true });
 
-    // Start a fresh scope session: clear our own stale markers so done-detection is
-    // meaningful and the working model starts empty. specs.md is left alone (the agent
-    // overwrites it only on an explicit confirmation).
-    for (const stale of [SCOPE_DONE, SCOPE_WORKING_FILE]) {
-      if (existsSync(stale)) rmSync(stale);
-    }
+    // Start a fresh session by clearing only our display scratch file. We do NOT delete
+    // a prior scope.done/specs.md here: if this session is aborted, a previously-confirmed
+    // scope must survive intact (otherwise a later `run` would clobber specs.md). Emit
+    // detection below uses mtime, so a stale scope.done from a prior run is ignored without
+    // being destroyed.
+    if (existsSync(SCOPE_WORKING_FILE)) rmSync(SCOPE_WORKING_FILE);
+
+    // Snapshot a prior confirmed marker so we can restore it if this session ends without
+    // a fresh emit (e.g. abort, or a misbehaving agent that overwrote it pre-confirmation).
+    const priorScopeDone = existsSync(SCOPE_DONE) ? readFileSync(SCOPE_DONE, 'utf-8') : null;
 
     let seedSpec: string | undefined;
     if (options.spec) {
@@ -297,9 +301,14 @@ program
 
     let emitted = false;
     let aborted = false;
+    let emptyStreak = 0; // consecutive turns the agent produced no working model
+    const MAX_EMPTY_STREAK = 3;
 
     try {
       for (let turn = 0; turn < MAX_TURNS; turn++) {
+        // Timestamp before the spawn so we can tell a scope.done written BY THIS turn
+        // apart from a stale one left by a prior run (which we must not honor or destroy).
+        const turnStartMs = Date.now();
         const prompt = buildScopePrompt({ description, seedSpec, transcript, workingModel });
         const result = await spawner.run({
           cwd: process.cwd(),
@@ -320,23 +329,46 @@ program
           workingModel = readFileSync(SCOPE_WORKING_FILE, 'utf-8');
         }
 
-        // The agent only writes scope.done after an explicit confirmation.
-        if (existsSync(SCOPE_DONE)) {
+        // Emit only when scope.done was written by THIS turn AND a human has actually
+        // spoken (a real confirmation). On the opening turn no human input exists yet, so
+        // a scope.done is necessarily premature — discard it rather than emit unconfirmed.
+        // The mtime check ignores (and preserves) any stale scope.done from a prior run.
+        const humanSpoke = transcript.some((t) => t.role === 'human');
+        const doneThisTurn =
+          existsSync(SCOPE_DONE) && statSync(SCOPE_DONE).mtimeMs >= turnStartMs;
+        if (doneThisTurn && humanSpoke) {
           emitted = true;
           break;
         }
+        if (doneThisTurn && !humanSpoke) {
+          rmSync(SCOPE_DONE, { force: true }); // premature emit with no confirmation — drop it
+          console.log('\n(Ignoring a spec emitted before any confirmation — keep going.)');
+        }
 
         if (!workingModel.trim()) {
+          if (++emptyStreak >= MAX_EMPTY_STREAK) {
+            console.log(`\nThe session produced no working model ${MAX_EMPTY_STREAK} times running — stopping.`);
+            console.log('Check your Claude CLI/auth, then re-run `turkeycode scope`.');
+            break;
+          }
           console.log('\n(The session produced no working model this turn. Retrying — rephrase if this repeats.)');
           if (result.exitCode !== 0) {
             console.log(`(session exit code ${result.exitCode})`);
           }
           continue;
         }
+        emptyStreak = 0;
 
         console.log('\n────────────────────────────────────────────────────────────');
         console.log(workingModel.trim());
         console.log('────────────────────────────────────────────────────────────');
+
+        // The final allowed turn is reserved for processing the last input (the spawn
+        // above), so don't solicit a new correction we'd have no turn left to act on.
+        if (turn === MAX_TURNS - 1) {
+          console.log(`\nReached the maximum of ${MAX_TURNS} scoping turns without a confirmation — stopping.`);
+          break;
+        }
 
         process.stdout.write('\nYou › ');
         const raw = await nextLine();
@@ -356,6 +388,12 @@ program
       }
     } finally {
       rl.close();
+    }
+
+    // If we didn't emit a fresh spec, make sure a prior confirmed marker survives this
+    // session intact (it may have been dropped as a premature emit, or overwritten).
+    if (!emitted && priorScopeDone !== null && !existsSync(SCOPE_DONE)) {
+      writeFileSync(SCOPE_DONE, priorScopeDone);
     }
 
     console.log('');
