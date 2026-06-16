@@ -51,6 +51,7 @@ import {
   QA_DIR,
   SCREENSHOTS_DIR,
   RESEARCH_DONE,
+  SCOPE_DONE,
   PLAN_DONE,
   PHASES_DIR,
   PHASE_PLAN_FILE,
@@ -334,7 +335,12 @@ export class Orchestrator {
       // Code already exists, so the planner can read it directly — no research agent needed.
       // But the plan prompt reads SPECS_FILE, so write the user's spec there verbatim.
       this.log('Continuation sprint detected — skipping research, planning from spec');
-      if (specContent || description) {
+      // Don't clobber a human-confirmed scope spec: if `turkeycode scope` already
+      // produced specs.md and the user didn't pass a fresh --spec, keep the scoped one.
+      const scoped = existsSync(SCOPE_DONE) && existsSync(SPECS_FILE);
+      if (scoped && !specContent) {
+        this.log('Scoped spec detected — planning from it (not overwriting).');
+      } else if (specContent || description) {
         if (!existsSync(REFERENCE_DIR)) {
           mkdirSync(REFERENCE_DIR, { recursive: true });
         }
@@ -481,8 +487,16 @@ export class Orchestrator {
       return;
     }
 
+    // Scoped mode: a human already confirmed the intent spec via `turkeycode scope`.
+    // Research then runs in augment mode — it adds a technical survey without
+    // overwriting the human's confirmed Description/Features/Flows.
+    const scoped = existsSync(SCOPE_DONE) && existsSync(SPECS_FILE);
+    if (scoped) {
+      this.log('Scoped spec detected — research will augment (not overwrite) it.');
+    }
+
     // Spawn research agent
-    const prompt = buildResearchPrompt(this.state, specContent);
+    const prompt = buildResearchPrompt(this.state, specContent, scoped);
     const result = await this.spawner.run({
       cwd: this.workDir,
       prompt,
