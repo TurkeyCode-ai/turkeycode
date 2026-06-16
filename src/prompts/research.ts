@@ -6,8 +6,18 @@
 import { ProjectState } from '../types';
 import { REFERENCE_DIR, RESEARCH_DONE, SPECS_FILE } from '../constants';
 
-export function buildResearchPrompt(state: ProjectState, specContent?: string): string {
+export function buildResearchPrompt(
+  state: ProjectState,
+  specContent?: string,
+  scoped: boolean = false
+): string {
   const spec = specContent || state.projectDescription;
+
+  // Scoped mode: a human already confirmed the intent spec via `turkeycode scope`.
+  // specs.md is AUTHORITATIVE — do not rewrite it. Only append a technical survey.
+  if (scoped) {
+    return buildAugmentPrompt();
+  }
 
   return `
 # RESEARCH PHASE
@@ -85,6 +95,54 @@ Before finalizing specs, evaluate:
 - ONLY research and document
 - Be thorough - QA will test against this spec
 - Number all flows explicitly for testability
+
+Then STOP.
+`.trim();
+}
+
+/**
+ * Augment-mode research: used when `turkeycode scope` already produced a
+ * human-confirmed intent spec. The existing specs.md is the source of truth for WHAT
+ * to build — research only adds the technical survey (stack, libraries, feasibility),
+ * appended as a new section. It must NOT rewrite the human's intent.
+ */
+function buildAugmentPrompt(): string {
+  return `
+# RESEARCH PHASE (augment mode — a scoped spec already exists)
+
+## CONTEXT
+A human already scoped this build interactively and CONFIRMED the spec. It lives at:
+- ${SPECS_FILE}
+
+That file is AUTHORITATIVE for WHAT to build. Read it first and treat its Description,
+Core Features, Core Flows, and Constraints as settled — do NOT rewrite, reorder, or
+second-guess them.
+
+## YOUR SINGLE JOB
+Add the TECHNICAL SURVEY the human's intent spec doesn't cover: concrete stack/library
+choices, official docs, and feasibility notes. APPEND it to ${SPECS_FILE} as a new
+section (do not touch the existing sections):
+
+\`\`\`markdown
+
+## Technical Survey
+- **Recommended stack**: [language/framework + why it fits the confirmed features/constraints]
+- **Key libraries**: [lib - purpose, lib - purpose]
+- **Reference docs**: [url - what it provides]
+- **Feasibility notes**: [anything in the spec that's hard, risky, or needs an open-source substitute for a proprietary asset]
+\`\`\`
+
+## RULES
+- Read ${SPECS_FILE} before writing anything.
+- ONLY append the \`## Technical Survey\` section; leave every existing section byte-for-byte intact.
+- Do NOT write code or set up the project.
+- Be concrete — the planner and QA will rely on these choices.
+
+## DONE SIGNAL
+When the survey is appended, create ${RESEARCH_DONE} with content:
+\`\`\`
+DONE - Research (augment) completed at [timestamp]
+\`\`\`
 
 Then STOP.
 `.trim();

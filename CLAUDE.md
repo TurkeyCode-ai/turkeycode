@@ -18,6 +18,9 @@ Scrum tickets exist for human coordination. AI doesn't need them — it works be
 ## Run Commands
 
 ```bash
+# Scope a build into a spec first (interactive correction loop — recommended)
+turkey-enterprise-v3 scope "Project description"
+
 # Start new project
 turkey-enterprise-v3 run "Project description" --spec /path/to/spec.md
 
@@ -34,7 +37,8 @@ turkey-enterprise-v3 reset --force
 ## Flow
 
 ```
-research (1 session)
+scope (interactive, optional) → specs.md
+  → research (1 session)
   → plan (1 session → N phases — as many as the work needs)
   → PHASE LOOP:
       build (1 session, full phase scope)
@@ -47,6 +51,30 @@ research (1 session)
       → next phase
   → POLISH PASS (default): repo-wide warning cleanup → re-verify build → merge
 ```
+
+## Scoping (the prompt is the hard part)
+
+The build is only as good as the spec, and the spec is not produced by interrogation —
+it **precipitates** out of a reflect-and-be-corrected loop. The agent holds a living
+working-model, restates it (over-committed, so there's an edge to knock down), the human
+corrects, the agent extends the model and surfaces the next fork **with a recommended
+lean**, repeat until corrections peter out and the human starts *confirming* instead of
+*amending*. That convergence is "same page," and the spec falls out of it. The engine is
+**correction, not extraction** — never a question-bot.
+
+Two surfaces, one shared core (`src/prompts/scope.ts` — `SCOPE_METHOD` + `EMIT_CONTRACT`):
+- **CLI**: `turkey-enterprise-v3 scope "<description>" [--spec seed.md]` — a terminal
+  readline loop. Each turn re-spawns `claude --print` with the transcript re-embedded
+  (the spawner has no session-resume), and reads back the agent's `scope-working.md` to
+  show the human.
+- **In-chat skill**: `skills/turkeycode-scope/SKILL.md` — runs the same loop natively as
+  the conversation (highest fidelity). The SaaS chat shell will reuse the same core.
+
+On explicit confirmation, scope emits `.turkey/reference/specs.md` (the intent spec, same
+shape research writes), `.turkey/reference/scope-decisions.md` (the decision/correction
+log — provenance now, training corpus later), and `.turkey/reference/scope.done`. Then
+`run` consumes `specs.md` unchanged; greenfield research runs in **augment mode**,
+appending a `## Technical Survey` section instead of overwriting the confirmed intent.
 
 ## Phase Model
 
@@ -102,6 +130,7 @@ src/
 ├── state.ts          # State management (phases, not tickets)
 ├── types.ts          # BuildPhase, PhasePlan, ProjectState
 ├── prompts/          # Prompt builders for each phase
+│   ├── scope.ts      # Shared scope core: SCOPE_METHOD, buildScopePrompt, EMIT_CONTRACT
 │   ├── research.ts
 │   ├── plan.ts       # Single session → N phases (as many as the work needs)
 │   ├── build.ts      # Full phase scope prompt
