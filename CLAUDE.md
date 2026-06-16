@@ -1,4 +1,4 @@
-# turkey-enterprise-v3
+# turkeycode
 
 Phase-based orchestrator for Claude Code build workflows. Spawns Claude sessions per build phase with hard artifact gates and parallel QA.
 
@@ -19,19 +19,19 @@ Scrum tickets exist for human coordination. AI doesn't need them — it works be
 
 ```bash
 # Scope a build into a spec first (interactive correction loop — recommended)
-turkey-enterprise-v3 scope "Project description"
+turkeycode scope "Project description"
 
 # Start new project
-turkey-enterprise-v3 run "Project description" --spec /path/to/spec.md
+turkeycode run "Project description" --spec /path/to/spec.md
 
 # Resume from current state
-turkey-enterprise-v3 resume
+turkeycode resume
 
 # Check status
-turkey-enterprise-v3 status
+turkeycode status
 
 # Reset (start over)
-turkey-enterprise-v3 reset --force
+turkeycode reset --force
 ```
 
 ## Flow
@@ -63,7 +63,7 @@ lean**, repeat until corrections peter out and the human starts *confirming* ins
 **correction, not extraction** — never a question-bot.
 
 Two surfaces, one shared core (`src/prompts/scope.ts` — `SCOPE_METHOD` + `EMIT_CONTRACT`):
-- **CLI**: `turkey-enterprise-v3 scope "<description>" [--spec seed.md]` — a terminal
+- **CLI**: `turkeycode scope "<description>" [--spec seed.md]` — a terminal
   readline loop. Each turn re-spawns `claude --print` with the transcript re-embedded
   (the spawner has no session-resume), and reads back the agent's `scope-working.md` to
   show the human.
@@ -108,7 +108,7 @@ Why defer-by-default: phases merge faster, and one repo-wide pass fixes a lint r
 **IMPORTANT:** If context was cleared, check for existing workflow state:
 
 1. Check if `.turkey/state.json` exists in the working directory
-2. If YES: Run `turkey-enterprise-v3 resume` to continue
+2. If YES: Run `turkeycode resume` to continue
 3. If NO: This is a fresh start
 
 The state file tracks:
@@ -187,5 +187,5 @@ JIRA_PROJECT=PROJ                 # Jira project key (optional - auto-created if
 ```bash
 npm install
 npm run build
-npm link  # Makes turkey-enterprise-v3 available globally
+npm link  # Makes turkeycode available globally
 ```
