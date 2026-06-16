@@ -16,6 +16,9 @@ deploy/prompts/
 state.json
 workspace/
 
+# Test fixtures (created by older test runs; current tests use tmpdir)
+.test-repos/
+
 # OS files
 .DS_Store
 Thumbs.db

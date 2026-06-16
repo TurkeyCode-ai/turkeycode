@@ -4,6 +4,8 @@
  * v3: Auto-creates projects if they don't exist
  */
 
+import { writeFileSync, mkdirSync } from 'fs';
+import { dirname } from 'path';
 import { audit } from './audit';
 
 interface JiraConfig {
@@ -11,6 +13,102 @@ interface JiraConfig {
   email: string;
   token: string;
   project: string;
+}
+
+export interface TicketSummary {
+  key: string;
+  summary: string;
+  status: string;
+  issueType: string;
+  priority?: string;
+  updated?: string;
+}
+
+export interface AttachmentMeta {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  contentUrl: string;
+}
+
+export interface TicketComment {
+  author: string;
+  created: string;
+  body: string;
+}
+
+export interface TicketDetail {
+  key: string;
+  summary: string;
+  description: string;
+  status: string;
+  issueType: string;
+  priority?: string;
+  labels: string[];
+  attachments: AttachmentMeta[];
+  comments: TicketComment[];
+}
+
+interface JiraRawIssue {
+  key: string;
+  fields?: Record<string, unknown>;
+}
+
+interface JiraRawAttachment {
+  id: string | number;
+  filename?: string;
+  mimeType?: string;
+  size?: number;
+  content?: string;
+}
+
+interface JiraRawComment {
+  author?: unknown;
+  created?: string;
+  body?: unknown;
+}
+
+/**
+ * Flatten Atlassian Document Format (ADF) or a plain string into readable text.
+ * We don't render formatting — just concatenate text nodes with reasonable spacing
+ * so the result is usable in Claude prompts.
+ */
+export function flattenAdf(input: unknown): string {
+  if (input == null) return '';
+  if (typeof input === 'string') return input;
+  if (typeof input !== 'object') return String(input);
+
+  const parts: string[] = [];
+  const visit = (node: unknown): void => {
+    if (!node || typeof node !== 'object') return;
+    const n = node as { type?: string; text?: string; content?: unknown[]; attrs?: Record<string, unknown> };
+
+    if (typeof n.text === 'string') {
+      parts.push(n.text);
+    }
+
+    if (n.type === 'hardBreak') parts.push('\n');
+
+    // Render mention/link attrs inline so ticket references survive
+    if (n.type === 'mention' && n.attrs && typeof n.attrs.text === 'string') {
+      parts.push(n.attrs.text);
+    }
+    if (n.type === 'inlineCard' && n.attrs && typeof n.attrs.url === 'string') {
+      parts.push(n.attrs.url);
+    }
+
+    if (Array.isArray(n.content)) {
+      for (const child of n.content) visit(child);
+    }
+
+    // Block-level separators go after children so runs of empty blocks still collapse
+    if (n.type === 'paragraph' || n.type === 'heading') parts.push('\n\n');
+    if (n.type === 'listItem') parts.push('\n');
+  };
+
+  visit(input);
+  return parts.join('').replace(/\n{3,}/g, '\n\n').trim();
 }
 
 /**
@@ -625,6 +723,132 @@ export class JiraClient {
       await this.addComment(ticketKey, `Closed via PR #${prNumber}`);
     }
     return this.transitionTicket(ticketKey, 'Done');
+  }
+
+  /**
+   * Find tickets assigned to the current user (from the Jira API token's owner)
+   * Filters out Done-status-category tickets by default.
+   */
+  async searchAssignedToMe(opts: { includeDone?: boolean; maxResults?: number } = {}): Promise<TicketSummary[]> {
+    if (!this.config) return [];
+
+    const jql = opts.includeDone
+      ? 'assignee = currentUser() ORDER BY updated DESC'
+      : 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC';
+    const maxResults = opts.maxResults ?? 50;
+
+    const result = await jiraRequest(
+      this.config,
+      'POST',
+      'search/jql',
+      {
+        jql,
+        fields: ['summary', 'status', 'issuetype', 'priority', 'updated'],
+        maxResults,
+      },
+    );
+
+    if (!result.ok) {
+      console.error(`[jira] searchAssignedToMe failed: ${result.error}`);
+      return [];
+    }
+
+    const data = result.data as { issues?: JiraRawIssue[] };
+    return (data.issues ?? []).map((issue): TicketSummary => ({
+      key: issue.key,
+      summary: (issue.fields?.summary as string) ?? '',
+      status: (issue.fields?.status as { name?: string })?.name ?? '',
+      issueType: (issue.fields?.issuetype as { name?: string })?.name ?? '',
+      priority: (issue.fields?.priority as { name?: string })?.name,
+      updated: issue.fields?.updated as string | undefined,
+    }));
+  }
+
+  /**
+   * Fetch a single ticket with description, comments, and attachment metadata.
+   * Description is flattened from ADF to plain text.
+   */
+  async getTicket(key: string): Promise<TicketDetail | null> {
+    if (!this.config) return null;
+
+    const result = await jiraRequest(
+      this.config,
+      'GET',
+      `issue/${encodeURIComponent(key)}?fields=summary,description,status,issuetype,priority,attachment,comment,labels,assignee,reporter`,
+    );
+
+    if (!result.ok) {
+      console.error(`[jira] getTicket(${key}) failed: ${result.error}`);
+      return null;
+    }
+
+    const issue = result.data as JiraRawIssue;
+    const fields = issue.fields ?? {};
+
+    const description = flattenAdf(fields.description);
+    const attachments: AttachmentMeta[] = Array.isArray(fields.attachment)
+      ? (fields.attachment as JiraRawAttachment[]).map((a) => ({
+          id: String(a.id),
+          filename: a.filename ?? 'unnamed',
+          mimeType: a.mimeType ?? 'application/octet-stream',
+          size: typeof a.size === 'number' ? a.size : 0,
+          contentUrl: a.content ?? '',
+        }))
+      : [];
+
+    const commentData = fields.comment as { comments?: JiraRawComment[] } | undefined;
+    const comments: TicketComment[] = (commentData?.comments ?? []).map((c) => ({
+      author: (c.author as { displayName?: string } | undefined)?.displayName ?? 'unknown',
+      created: c.created ?? '',
+      body: flattenAdf(c.body),
+    }));
+
+    return {
+      key: issue.key,
+      summary: (fields.summary as string) ?? '',
+      description,
+      status: (fields.status as { name?: string })?.name ?? '',
+      issueType: (fields.issuetype as { name?: string })?.name ?? '',
+      priority: (fields.priority as { name?: string })?.name,
+      labels: Array.isArray(fields.labels) ? (fields.labels as string[]) : [],
+      attachments,
+      comments,
+    };
+  }
+
+  /**
+   * Download an attachment to disk. Uses basic auth so private attachments work.
+   * Returns true on success. Creates parent directories as needed.
+   */
+  async downloadAttachment(attachment: AttachmentMeta, destPath: string): Promise<boolean> {
+    if (!this.config) return false;
+    if (!attachment.contentUrl) {
+      console.error(`[jira] attachment ${attachment.id} has no content URL`);
+      return false;
+    }
+
+    const auth = Buffer.from(`${this.config.email}:${this.config.token}`).toString('base64');
+
+    try {
+      const response = await fetch(attachment.contentUrl, {
+        method: 'GET',
+        headers: { Authorization: `Basic ${auth}` },
+        redirect: 'follow',
+      });
+
+      if (!response.ok) {
+        console.error(`[jira] attachment download failed for ${attachment.filename}: HTTP ${response.status}`);
+        return false;
+      }
+
+      const bytes = Buffer.from(await response.arrayBuffer());
+      mkdirSync(dirname(destPath), { recursive: true });
+      writeFileSync(destPath, bytes);
+      return true;
+    } catch (err) {
+      console.error(`[jira] attachment download error for ${attachment.filename}: ${String(err)}`);
+      return false;
+    }
   }
 }
 

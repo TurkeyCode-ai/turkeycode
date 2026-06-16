@@ -1,6 +1,6 @@
 /**
  * Main orchestrator for turkey-enterprise-v3
- * Phase-based model: 2-5 build phases, each one Claude session
+ * Phase-based model: N build phases (as many as the work needs), each one Claude session
  */
 
 import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, unlinkSync, rmSync, statSync } from 'fs';
@@ -110,7 +110,7 @@ export function isBuildDoneStale(workDir: string, buildDonePath: string): boolea
 
 /**
  * Main orchestrator class
- * Phase-based: 2-5 build phases, each one Claude session
+ * Phase-based: N build phases (as many as the work needs), each one Claude session
  */
 export class Orchestrator {
   private state: ProjectState;
