@@ -10,7 +10,8 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
-import { join } from 'path';
+import { basename, join } from 'path';
+import { shrinkImageToFit } from './attachment-shrink';
 import { createJiraClient, JiraClient, TicketDetail, isJiraConfigured, formatJiraDuration } from './jira';
 import { createSpawner, Spawner } from './spawner';
 import {
@@ -211,8 +212,27 @@ export class TicketOrchestrator {
       const safeName = sanitizeFilename(att.filename) || `${att.id}${extensionFromMime(att.mimeType)}`;
       const destPath = join(ticketDir, 'attachments', `${att.id}-${safeName}`);
       const ok = await this.jira.downloadAttachment(att, destPath);
-      if (ok) paths.push(destPath);
-      else console.warn(`[ticket] Could not download attachment ${att.filename}`);
+      if (!ok) {
+        console.warn(`[ticket] Could not download attachment ${att.filename}`);
+        continue;
+      }
+      const shrinkResult = await shrinkImageToFit(destPath);
+      if (shrinkResult === null) {
+        console.warn(
+          `[ticket] Skipping attachment ${att.filename} — exceeds Claude's 5 MB per-image cap ` +
+            `and could not be shrunk (install \`sharp\` or check the file).`,
+        );
+        continue;
+      }
+      if (shrinkResult.shrunk) {
+        const beforeKb = (shrinkResult.originalBytes / 1024).toFixed(0);
+        const afterKb = (shrinkResult.finalBytes / 1024).toFixed(0);
+        console.log(
+          `[ticket] Shrunk oversized attachment ${att.filename} ` +
+            `(${beforeKb} KB → ${afterKb} KB as ${basename(shrinkResult.path)})`,
+        );
+      }
+      paths.push(shrinkResult.path);
     }
     return paths;
   }

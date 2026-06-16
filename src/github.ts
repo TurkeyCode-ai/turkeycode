@@ -659,8 +659,15 @@ export class GitHubClient {
     try {
       const opts = { encoding: 'utf-8' as const, cwd: this.workDir || process.cwd() };
       const branches = execSync('git branch --list', opts);
-      if (branches.includes('main')) return 'main';
-      if (branches.includes('master')) return 'master';
+      // Exact branch-name match — otherwise branches like `feature/masterfile-*`
+      // (substring 'master') or `feature/develop.cynarch-2078-custom-domain-setup`
+      // (substring 'main') wrongly trip these checks.
+      const branchNames = branches
+        .split('\n')
+        .map(l => l.replace(/^\*?\s+/, '').trim())
+        .filter(Boolean);
+      if (branchNames.includes('main')) return 'main';
+      if (branchNames.includes('master')) return 'master';
       const configured = execSync('git config init.defaultBranch', opts).trim();
       if (configured) return configured;
     } catch { /* ignore */ }
