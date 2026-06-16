@@ -18,10 +18,12 @@ Scrum tickets exist for human coordination. AI doesn't need them — it works be
 ## Run Commands
 
 ```bash
-# Scope a build into a spec first (interactive correction loop — recommended)
+# Scope a build into a spec first (interactive correction loop)
 turkeycode scope "Project description"
 
-# Start new project
+# Start new project. A bare description with no confirmed spec auto-enters the
+# scope loop first (TTY only); pass --spec to skip scoping with a ready spec.
+turkeycode run "Project description"
 turkeycode run "Project description" --spec /path/to/spec.md
 
 # Resume from current state
@@ -37,7 +39,8 @@ turkeycode reset --force
 ## Flow
 
 ```
-scope (interactive, optional) → specs.md
+scope (interactive) → specs.md
+  [auto-entered by `run` on a bare description with no confirmed spec, TTY only]
   → research (1 session)
   → plan (1 session → N phases — as many as the work needs)
   → PHASE LOOP:
@@ -64,9 +67,12 @@ lean**, repeat until corrections peter out and the human starts *confirming* ins
 
 Two surfaces, one shared core (`src/prompts/scope.ts` — `SCOPE_METHOD` + `EMIT_CONTRACT`):
 - **CLI**: `turkeycode scope "<description>" [--spec seed.md]` — a terminal
-  readline loop. Each turn re-spawns `claude --print` with the transcript re-embedded
-  (the spawner has no session-resume), and reads back the agent's `scope-working.md` to
-  show the human.
+  readline loop (`src/scope-session.ts` — `runScopeSession`). Each turn re-spawns
+  `claude --print` with the transcript re-embedded (the spawner has no session-resume),
+  and reads back the agent's `scope-working.md` to show the human. `turkeycode run`
+  auto-enters this same loop when handed a bare description with no confirmed spec and
+  stdin is a TTY; with `--spec`, a prior confirmed scope, a spec-file description, or a
+  non-TTY stdin (CI), it skips straight to autonomous research.
 - **In-chat skill**: `skills/turkeycode-scope/SKILL.md` — runs the same loop natively as
   the conversation (highest fidelity). The SaaS chat shell will reuse the same core.
 
