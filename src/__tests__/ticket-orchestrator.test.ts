@@ -55,7 +55,7 @@ describe('scopeManifestToTriage', () => {
   it('passes references through unchanged so the build prompt still sees them', () => {
     const withRefs: RepoManifest = {
       ...manifest,
-      references: [{ path: '/legacy/cynergi', role: 'legacy' }],
+      references: [{ path: '/legacy/app', role: 'legacy' }],
     };
     const out = scopeManifestToTriage(withRefs, ['/r/inventory-api'], 'PROJ-1');
     expect(out.references).toEqual(withRefs.references);
