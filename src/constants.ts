@@ -16,6 +16,10 @@ export const SCOPE_WORKING_FILE = `${REFERENCE_DIR}/scope-working.md`;
 // The decision/correction log emitted on convergence — provenance now, training corpus later.
 export const SCOPE_DECISIONS_FILE = `${REFERENCE_DIR}/scope-decisions.md`;
 export const SCOPE_DONE = `${REFERENCE_DIR}/scope.done`;
+// Persona ("how I scope" operating manual) the scope agent embodies. Project-level
+// override lives here; the global default is ~/.turkeycode/persona.md (resolved in
+// scope-session.ts, alongside the ~/.turkeycode/ convention used by repos.ts/tickets).
+export const PERSONA_PROJECT = `${STATE_DIR}/persona.md`;
 
 // Research artifacts
 export const RESEARCH_DONE = `${REFERENCE_DIR}/research.done`;
