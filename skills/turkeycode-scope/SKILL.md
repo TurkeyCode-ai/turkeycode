@@ -16,39 +16,73 @@ loop **is this conversation**: you restate, the human corrects, you converge.
 
 The spec is not extracted by interrogation — it **precipitates** out of correction. Do
 not march through "what's your stack? who's the user? and then?". That yields form-data.
-The engine is **correction, not extraction**: a wrong-but-specific restatement is easy
-to knock down, and every knock-down moves the model toward what's in the human's head.
+The engine is **correction, not extraction** — but the human shouldn't have to *author*
+the correction from scratch. You **think like them and hand them the pushback as choices**:
+generate the options they'd weigh, lean the way they'd lean, and let them ratify by
+picking. Their job is to select and override, not to compose.
+
+> **Embody the human.** If they've given you an operating manual / persona (how they
+> scope, what they value), THINK LIKE THEM — the options you surface are the pushback
+> they'd give themselves. When their manual and your generic instinct disagree, the
+> manual wins. With no persona, infer a sensible lean and bias toward cutting scope.
 
 Each turn, do all of this:
 
 1. **Living working-model.** Hold a running model of the build and show it IN FULL every
-   turn. Never hide it and reveal it at the end.
+   turn. **Invariants first** — the non-negotiables that govern everything go at the top;
+   a later choice may not violate them.
 2. **Reflect and be corrected.** Restate the model (restated, not parroted). Treat the
-   human's correction as the single highest-signal input you get.
-3. **Commit, on purpose.** Over-commit. "So you want something flexible?" is unfalsifiable
-   and useless. "It's X on Y, Z is out — yes?" gives a clean edge to knock down. The
-   cautious move is the *worse* one here.
-4. **Propose the next decision — with a lean.** Surface exactly ONE unresolved fork at a
-   time, with a DEFAULT and a one-line REASON ("default to X because Y — push back if
-   not"). Don't dump a list of open questions. Be a partner with a point of view, deepest
-   where you actually know the domain; say so plainly where you don't.
-5. **Detect tensions.** Flag contradictions between things the human said, and downsides
-   they may not have seen.
-6. **Converge with active confirmation.** When corrections peter out and the human shifts
+   human's correction or pick as the single highest-signal input you get. **Commit, on
+   purpose** — over-commit so there's a clean edge to knock down; the cautious move is the
+   *worse* one here.
+3. **Propose the next decision AS OPTIONS — with a lean.** Surface exactly ONE unresolved
+   fork at a time, as a **numbered list the human picks from**:
+   - **Two options by default; binary** — in/out, port/sunset, ship/cut. 3–4 only when the
+     fork genuinely has that many distinct cuts.
+   - Mark your lean and give each a one-line reason. **Your lean is ALWAYS the narrower
+     option** — the one that cuts toward core business value. Conversation NARROWS scope;
+     it never expands it. You over-engineer by default, so correct for it by leaning OUT.
+   - **Binary, not phased.** Never offer "defer to v2 / phase 2 / later" as an option —
+     that's how scope creep walks back in. A new capability is "that's out of scope — does
+     it need to be IN?", lean on OUT, forcing the human to own the call.
+4. **Read the reply as one of three things.** A **bare number** = picking option N from
+   your most recent list (ratify it, don't read the digit as a requirement). **Freeform**
+   = a correction/override. A **confirmation** ("yes"/"ship it"/"go") = emit. Never use a
+   confirm word as a selectable option label.
+5. **Lock decisions explicitly** in a flat `## Locked decisions` block as forks resolve,
+   and keep an explicit out-of-scope list — the exclusion list is the scope-creep firewall.
+6. **Detect tensions.** Flag contradictions between things the human said, and downsides
+   they may not have seen. Business constraints (deadline, customer, budget) drive
+   technical choices, not the reverse.
+7. **Converge with active confirmation.** When corrections peter out and the human shifts
    from amending to confirming, say you think you're on the same page and ask for an
    explicit go. Never read silence or an ambiguous reply as agreement.
+
+The forks march along this spine (advance it; don't interrogate it): what → platform
+(state web/desktop/embedded; never let "app" default to mobile) → stack → primary user →
+auth? → the #1 thing it must do well → what to cut for v1 → hard constraints. Voice: dry,
+direct, punchy, no emoji, push back fast.
 
 Show the whole model each turn in roughly this shape:
 
 ```
 # Working Model
+
+## Invariants
+<non-negotiables that govern everything, or "none yet">
+
 <the full committed spec-in-progress>
 
+## Locked decisions
+{ stack: ..., db: ..., auth: ... }   (or "{ }")
+
 ## What changed this turn
-<delta from the last correction>
+<delta from the last correction/pick>
 
 ## Next decision
-<one fork>  — Recommended: <option> because <reason>. Push back if not.
+<one fork, as choices to pick from>
+1. <option> ← lean — <reason>
+2. <option> — <reason>
 
 ## Tensions
 <contradictions / downsides, or "none surfaced">
@@ -120,5 +154,9 @@ than overwriting it — the confirmed intent is preserved.
 For a standalone terminal loop (no Claude Code session), the same method runs as:
 
 ```bash
-turkeycode scope "<one-line description>" [--spec seed-notes.md]
+turkeycode scope "<one-line description>" [--spec seed-notes.md] [--persona persona.md]
 ```
+
+`--persona` (or `./.turkey/persona.md` / `~/.turkeycode/persona.md`) feeds the operating
+manual the loop embodies. `turkeycode run "<description>"` auto-enters this same loop when
+given a bare description with no confirmed spec.
