@@ -231,7 +231,7 @@ describe('prompts', () => {
         defaultBase: 'develop',
         branchPattern: 'ticket/{key}-{slug}',
         repos: [
-          { path: '/r/app-masterfile', role: 'masterfile backend', base: 'develop' },
+          { path: '/r/legacy-masterfile', role: 'masterfile backend', base: 'develop' },
         ],
         references: [],
         transitionAfterPush: 'In Review',
