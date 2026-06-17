@@ -11,7 +11,7 @@ npx turkeycode run "Build a job board with employer dashboards, \
   applicant tracking, and Stripe payments"
 ```
 
-Then go make coffee. Come back to a working app.
+It locks the scope with you first — a few quick picks, or skip with `--spec` — then builds heads-down. Go make coffee; come back to a working app.
 
 ---
 
