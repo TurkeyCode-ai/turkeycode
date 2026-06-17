@@ -203,13 +203,13 @@ describe('prompts', () => {
         manifest: {
           ...baseInput.manifest,
           references: [
-            { path: '/legacy/cynergi', role: 'legacy code being ported' },
+            { path: '/legacy/app', role: 'legacy code being ported' },
           ],
         },
       };
       const out = prompts.buildTicketTriagePrompt(input);
       expect(out).toMatch(/REFERENCE FILES/);
-      expect(out).toContain('/legacy/cynergi');
+      expect(out).toContain('/legacy/app');
       expect(out).toContain('legacy code being ported');
       expect(out).toMatch(/DO NOT include/i);
     });
@@ -231,7 +231,7 @@ describe('prompts', () => {
         defaultBase: 'develop',
         branchPattern: 'ticket/{key}-{slug}',
         repos: [
-          { path: '/r/cynergi-masterfile', role: 'masterfile backend', base: 'develop' },
+          { path: '/r/legacy-masterfile', role: 'masterfile backend', base: 'develop' },
         ],
         references: [],
         transitionAfterPush: 'In Review',
@@ -253,13 +253,13 @@ describe('prompts', () => {
         manifest: {
           ...baseInput.manifest,
           references: [
-            { path: '/legacy/cynergi', role: 'legacy code being ported' },
+            { path: '/legacy/app', role: 'legacy code being ported' },
           ],
         },
       };
       const out = prompts.buildTicketBuildPrompt(input);
       expect(out).toMatch(/READ-ONLY REFERENCE FILES/);
-      expect(out).toContain('/legacy/cynergi');
+      expect(out).toContain('/legacy/app');
       expect(out).toMatch(/Do NOT modify or commit/);
     });
   });
