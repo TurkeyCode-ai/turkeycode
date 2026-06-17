@@ -14,6 +14,7 @@ import { join } from 'path';
 import { createInterface } from 'readline/promises';
 import { Spawner } from './spawner';
 import { buildScopePrompt, ScopeTurn } from './prompts/scope';
+import { DEFAULT_PERSONA } from './prompts/persona';
 import {
   getModelForPhase,
   REFERENCE_DIR,
@@ -28,27 +29,27 @@ import {
 const PERSONA_GLOBAL = join(homedir(), '.turkeycode', 'persona.md');
 
 /**
- * Resolve the human's operating manual (persona.md) by precedence: an explicit
- * --persona path, then the project-level ./.turkey/persona.md, then the global
- * ~/.turkeycode/persona.md. Returns the file content + which path it came from, or
- * null content when nothing is found (→ the agent falls back to in-context inference).
+ * Resolve the operating manual (persona.md) by precedence: an explicit --persona path,
+ * then the project-level ./.turkey/persona.md, then the global ~/.turkeycode/persona.md.
+ * When none is found, fall back to the bundled DEFAULT_PERSONA (the scoping doctrine) —
+ * so options are always opinionated; isDefault flags that no user file was found.
  *
  * An explicit --persona that doesn't exist is a user error and throws (mirrors the
  * --spec fail-loud check); a missing implicit tier silently falls through.
  */
-export function resolvePersona(explicitPath?: string): { content: string | null; source: string } {
+export function resolvePersona(explicitPath?: string): { content: string; source: string; isDefault: boolean } {
   if (explicitPath) {
     if (!existsSync(explicitPath)) {
       throw new Error(`Persona file not found: ${explicitPath}`);
     }
-    return { content: readFileSync(explicitPath, 'utf-8'), source: explicitPath };
+    return { content: readFileSync(explicitPath, 'utf-8'), source: explicitPath, isDefault: false };
   }
   for (const candidate of [PERSONA_PROJECT, PERSONA_GLOBAL]) {
     if (existsSync(candidate)) {
-      return { content: readFileSync(candidate, 'utf-8'), source: candidate };
+      return { content: readFileSync(candidate, 'utf-8'), source: candidate, isDefault: false };
     }
   }
-  return { content: null, source: '' };
+  return { content: DEFAULT_PERSONA, source: '(bundled default)', isDefault: true };
 }
 
 // Color only when writing to an interactive terminal that hasn't opted out via
@@ -127,10 +128,10 @@ export async function runScopeSession(opts: ScopeSessionOptions): Promise<ScopeS
   // Resolve the persona once (an explicit --persona that's missing throws — fail loud).
   // The content is injected into every turn's prompt so the agent embodies the human.
   const persona = resolvePersona(opts.personaPath);
-  if (persona.content) {
-    console.log(`Persona: ${persona.source} — generating options in your voice.`);
+  if (persona.isDefault) {
+    console.log('Persona: built-in scoping doctrine (default). Drop ~/.turkeycode/persona.md or pass --persona to make it yours.');
   } else {
-    console.log('Persona: none — using in-context inference. (Add ~/.turkeycode/persona.md to mimic you.)');
+    console.log(`Persona: ${persona.source} — generating options in your voice.`);
   }
   console.log('');
 
@@ -191,7 +192,7 @@ export async function runScopeSession(opts: ScopeSessionOptions): Promise<ScopeS
         seedSpec,
         transcript,
         workingModel,
-        persona: persona.content ?? undefined,
+        persona: persona.content,
       });
       const result = await spawner.run({
         cwd: process.cwd(),
