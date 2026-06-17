@@ -22,6 +22,7 @@ TurkeyCode doesn't write code. It **orchestrates** Claude Code through a determi
 ```
 You: "Build me a recipe sharing app"
     │
+    ├── 🎯 Scope       → converge on what to build (interactive; skippable)
     ├── 🔍 Research    → tech stack, architecture, prior art
     ├── 📋 Plan        → 2-5 build phases with deliverables
     │
@@ -35,6 +36,30 @@ You: "Build me a recipe sharing app"
 ```
 
 Every transition has an **artifact gate** — a file that must exist with valid content before the pipeline moves forward. No hallucinated progress. No skipped steps.
+
+## Scope First (the prompt is the hard part)
+
+A build is only as good as its spec. Hand `run` a bare description and — when you're at a terminal — it converges with you *before* writing any code: it restates what it thinks you want and hands you the next decision as a short list of **options to pick from**, leaning toward the smaller cut. You ratify by typing a number. It doesn't interrogate you with a wall of questions.
+
+```bash
+# Converge interactively, then build straight through
+turkeycode run "a habit tracker with streaks and reminders"
+
+# Or scope into a spec without building yet
+turkeycode scope "a habit tracker with streaks and reminders"
+```
+
+It skips the loop and goes fully autonomous when you pass `--spec`, point it at a spec file, or run non-interactively (CI / piped stdin) — automation never blocks on input.
+
+### Make it think like you
+
+Drop a `persona.md` — your operating manual for how you scope, what you cut, your defaults — and the scope agent **embodies it**, generating the options *you'd* weigh in *your* voice.
+
+```bash
+turkeycode run "internal admin tool" --persona persona.md
+```
+
+Load order (first found wins): `--persona <file>` → `./.turkey/persona.md` (project) → `~/.turkeycode/persona.md` (global) → a built-in scoping doctrine. So the dialog is always opinionated — narrow, binary, invariants-first; drop your own file to make the options *yours*.
 
 ## Built with TurkeyCode 🦃
 
@@ -170,9 +195,13 @@ project/
 ├── .turkey/                    # Build state (gitignored)
 │   ├── state.json              # Current phase, QA attempts, etc.
 │   ├── audit.log               # Timestamped event log
+│   ├── persona.md              # Optional: your "how I scope" manual (project-level)
 │   ├── reference/
-│   │   ├── specs.md            # Research output
-│   │   └── research.done       # Gate artifact
+│   │   ├── specs.md            # Confirmed intent spec (scope) + research survey
+│   │   ├── scope-working.md    # Living working model (during scope)
+│   │   ├── scope-decisions.md  # Decisions + corrections log
+│   │   ├── scope.done          # Scope gate artifact
+│   │   └── research.done       # Research gate artifact
 │   ├── phase-plan.json         # 2-5 phases with deliverables
 │   ├── phases/
 │   │   └── phase-1.done        # Build completion gate
@@ -209,13 +238,15 @@ The quick-check system installs missing prerequisites, starts Docker services, v
 ## Options
 
 ```
-turkeycode run <description>     # Start a new build
+turkeycode run <description>     # Start a new build (converges with you first on a TTY)
+turkeycode scope <description>   # Converge on a spec without building
 turkeycode resume                # Resume from last checkpoint
 turkeycode status                # Show current state
 turkeycode reset --force         # Nuke state, start fresh
 
 Options:
-  --spec <file>           Spec file for additional context
+  --spec <file>           Spec file for additional context (skips the scope loop)
+  --persona <file>        Operating manual the scope agent embodies
   --verbose               Show detailed output
   --allow-warnings        Let cosmetic warnings pass QA
   --jira <project>        Create Jira tickets per phase
@@ -354,6 +385,7 @@ Generate a Jira API token at: https://id.atlassian.com/manage-profile/security/a
 
 | Gate | Artifact | Validation |
 |------|----------|------------|
+| scope | `reference/scope.done` | starts with `DONE`, specs.md > 200 chars |
 | research | `reference/research.done` | exists, specs.md > 200 chars |
 | plan | `phase-plan.json` | valid JSON, 2-5 phases |
 | build | `phases/phase-N.done` | exists |
@@ -394,7 +426,8 @@ PRs welcome. The orchestrator is intentionally simple — it's a deterministic l
 - **Prompts:** `src/prompts/` — the build, QA, and planning instructions
 - **Gates:** `src/gates.ts` — artifact validation logic
 - **Orchestrator:** `src/orchestrator.ts` — the main loop
-- **Tests:** `npm test` — 98 tests across 8 modules
+- **Scope:** `src/prompts/scope.ts` + `src/scope-session.ts` — the converge-first correction loop
+- **Tests:** `npm test` — 174 tests across 14 modules
 
 Please include tests for new features.
 
