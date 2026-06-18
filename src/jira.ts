@@ -58,6 +58,14 @@ export interface TicketSummary {
   updated?: string;
 }
 
+export interface EpicSummary {
+  key: string;
+  summary: string;
+  status: string;
+  /** The epic's own Story Points estimate (its budget), or null if unpointed/unavailable. */
+  points: number | null;
+}
+
 export interface AttachmentMeta {
   id: string;
   filename: string;
@@ -956,6 +964,48 @@ export class JiraClient {
       priority: (issue.fields?.priority as { name?: string })?.name,
       updated: issue.fields?.updated as string | undefined,
     }));
+  }
+
+  /**
+   * List epics for the configured project, most-recently-updated first.
+   * Excludes Done-category epics by default. Includes each epic's point budget
+   * (its own Story Points estimate) when the field is available, so a picker can
+   * show how much room is left at a glance.
+   */
+  async searchEpics(opts: { includeDone?: boolean; maxResults?: number } = {}): Promise<EpicSummary[]> {
+    if (!this.config) return [];
+
+    const projectClause = this.config.project ? `project = "${this.config.project}" AND ` : '';
+    const jql = opts.includeDone
+      ? `${projectClause}issuetype = Epic ORDER BY updated DESC`
+      : `${projectClause}issuetype = Epic AND statusCategory != Done ORDER BY updated DESC`;
+
+    const pointsField = await this.resolveFieldId(STORY_POINTS_FIELD_NAMES);
+    const fields = ['summary', 'status'];
+    if (pointsField) fields.push(pointsField);
+
+    const result = await jiraRequest(this.config, 'POST', 'search/jql', {
+      jql,
+      fields,
+      maxResults: opts.maxResults ?? 50,
+    });
+
+    if (!result.ok) {
+      console.error(`[jira] searchEpics failed: ${result.error}`);
+      return [];
+    }
+
+    const data = result.data as { issues?: JiraRawIssue[] };
+    return (data.issues ?? []).map((issue): EpicSummary => {
+      const f = issue.fields ?? {};
+      const rawPoints = pointsField ? f[pointsField] : undefined;
+      return {
+        key: issue.key,
+        summary: (f.summary as string) ?? '',
+        status: (f.status as { name?: string })?.name ?? '',
+        points: typeof rawPoints === 'number' ? rawPoints : null,
+      };
+    });
   }
 
   /**
