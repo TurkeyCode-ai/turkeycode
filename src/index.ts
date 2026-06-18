@@ -923,6 +923,106 @@ program
     }
   });
 
+// ==================== STORY COMMAND ====================
+program
+  .command('story')
+  .description('Bug/story mode: turn a prompt into a points-estimated Jira ticket (auto bug-vs-story), burn down its epic, then run it')
+  .argument('<prompt>', 'What to build or fix, in plain language')
+  .option('-e, --epic <key>', 'Parent epic key (omit to pick from a list; links the ticket and reports burndown)')
+  .option('--bug', 'Force issue type Bug')
+  .option('--story', 'Force issue type Story')
+  .option('--points <n>', 'Override the estimated story points')
+  .option('--budget <n>', 'Override the epic point budget used for burndown')
+  .option('--dry-run', 'Estimate only. Do not create the ticket or run anything.')
+  .option('--no-run', 'Create + point the ticket, but skip the ticket-run flow')
+  .option('--triage-only', 'Create the ticket, then stop after triage (no branches/build)')
+  .option('-v, --verbose', 'Verbose output')
+  .option('--manifest <path>', 'Override the repos.yaml manifest path')
+  .option('--mcp-config <path>', 'Override the MCP config path (else uses TURKEYCODE_MCP_CONFIG)')
+  .action(async (prompt: string, options) => {
+    if (options.bug && options.story) {
+      console.error('❌ Pass at most one of --bug / --story.');
+      process.exit(1);
+    }
+    const forceType = options.bug ? 'Bug' : options.story ? 'Story' : undefined;
+
+    const points = options.points != null ? Number(options.points) : undefined;
+    if (points != null && !Number.isFinite(points)) {
+      console.error(`❌ --points must be a number (got "${options.points}").`);
+      process.exit(1);
+    }
+    const budget = options.budget != null ? Number(options.budget) : undefined;
+    if (budget != null && !Number.isFinite(budget)) {
+      console.error(`❌ --budget must be a number (got "${options.budget}").`);
+      process.exit(1);
+    }
+
+    // Resolve the epic. If none was passed and we're interactive, list epics and
+    // let the user pick (or Enter to skip). Non-TTY/dry-run skip the picker so CI
+    // and estimate-only runs never block on a prompt.
+    let epicKey: string | undefined = options.epic;
+    if (!epicKey && !options.dryRun) {
+      const { createJiraClient, isJiraConfigured } = await import('./jira');
+      if (isJiraConfigured() && process.env.JIRA_PROJECT && process.stdin.isTTY) {
+        const jira = createJiraClient();
+        const epics = await jira.searchEpics();
+        if (epics.length === 0) {
+          console.log(`[story] No open epics in ${process.env.JIRA_PROJECT} — creating a standalone ticket.`);
+        } else {
+          console.log('');
+          console.log(`Epics in ${process.env.JIRA_PROJECT} (${epics.length}):`);
+          console.log('');
+          epics.forEach((e, i) => {
+            const idx = String(i + 1).padStart(2, ' ');
+            const key = e.key.padEnd(12, ' ');
+            const pts = (e.points != null ? `(${e.points} pts)` : '(unpointed)').padEnd(12, ' ');
+            const status = `[${e.status}]`.padEnd(16, ' ');
+            console.log(`${idx}. ${key} ${pts} ${status} ${e.summary}`);
+          });
+          console.log('');
+          const answer = await promptLine('Pick an epic by number (or Enter for no epic): ');
+          const trimmed = answer.trim();
+          if (trimmed) {
+            const pick = parseInt(trimmed, 10);
+            if (!Number.isInteger(pick) || pick < 1 || pick > epics.length) {
+              console.error(`Invalid selection: ${answer}`);
+              process.exit(1);
+            }
+            epicKey = epics[pick - 1].key;
+            console.log(`[story] Epic: ${epicKey}`);
+          } else {
+            console.log(`[story] No epic — creating a standalone ticket.`);
+          }
+        }
+      }
+    }
+
+    const { createStoryOrchestrator } = await import('./story-orchestrator');
+    try {
+      const orch = createStoryOrchestrator({
+        verbose: options.verbose,
+        mcpConfig: options.mcpConfig,
+      });
+      await orch.createAndRun(prompt, {
+        forceType,
+        pointsOverride: points,
+        epicKey,
+        budgetOverride: budget,
+        dryRun: options.dryRun,
+        run: options.run, // commander sets this false when --no-run is passed
+        triageOnly: options.triageOnly,
+        verbose: options.verbose,
+        manifestPath: options.manifest,
+        mcpConfig: options.mcpConfig,
+      });
+      console.log('');
+      console.log(`✅ Story flow complete.`);
+    } catch (err) {
+      console.error(`❌ Story flow failed: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  });
+
 // ==================== MY-TICKETS COMMAND ====================
 program
   .command('my-tickets')

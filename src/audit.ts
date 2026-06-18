@@ -35,7 +35,9 @@ export type AuditEvent =
   | 'ticket_scope_resolved'
   | 'ticket_research_posted'
   | 'ticket_branch_pushed'
-  | 'ticket_run_completed';
+  | 'ticket_run_completed'
+  | 'story_started'
+  | 'story_ticket_created';
 
 export interface AuditEntry {
   timestamp: string;
