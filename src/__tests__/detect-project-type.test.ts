@@ -1,9 +1,52 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
-import { detectProjectType } from '../detect-project-type';
+import { detectProjectType, detectProjectTypeStrict, inferProjectTypeFromDescription } from '../detect-project-type';
 
 const testDir = join('/tmp', `.test-detect-type-${Date.now()}`);
+
+describe('greenfield (empty dir) detection', () => {
+  const empty = join('/tmp', `.test-detect-empty-${Date.now()}`);
+  beforeEach(() => { mkdirSync(empty, { recursive: true }); });
+  afterEach(() => { rmSync(empty, { recursive: true, force: true }); });
+
+  it('detectProjectType defaults an empty dir to web-fullstack (backwards compatible)', () => {
+    expect(detectProjectType(empty)).toBe('web-fullstack');
+  });
+
+  it('detectProjectTypeStrict returns unknown for an empty dir (no web fallback)', () => {
+    expect(detectProjectTypeStrict(empty)).toBe('unknown');
+  });
+});
+
+describe('inferProjectTypeFromDescription', () => {
+  it('infers cli from terminal/command-line language', () => {
+    expect(inferProjectTypeFromDescription('a CLI that prints a random dad joke')).toBe('cli');
+    expect(inferProjectTypeFromDescription('DadJoke Terminal')).toBe('cli');
+    expect(inferProjectTypeFromDescription('a command-line tool to rename files')).toBe('cli');
+  });
+
+  it('infers desktop / mobile / library', () => {
+    expect(inferProjectTypeFromDescription('an Electron desktop app for notes')).toBe('desktop');
+    expect(inferProjectTypeFromDescription('a React Native mobile app')).toBe('mobile');
+    expect(inferProjectTypeFromDescription('a published npm package for date math')).toBe('library');
+  });
+
+  it('infers web-api only when there is no frontend/UI signal', () => {
+    expect(inferProjectTypeFromDescription('a REST API for inventory management')).toBe('web-api');
+    // A dashboard is a web app, not a bare API — should NOT be web-api
+    expect(inferProjectTypeFromDescription('a REST API plus an admin dashboard')).toBeNull();
+  });
+
+  it('returns null for a plain web app (caller defaults to web-fullstack)', () => {
+    expect(inferProjectTypeFromDescription('a recipe sharing web app with login')).toBeNull();
+    expect(inferProjectTypeFromDescription('a SaaS dashboard with Stripe billing')).toBeNull();
+  });
+
+  it('does not match cli inside unrelated words', () => {
+    expect(inferProjectTypeFromDescription('a client portal for a web app')).toBeNull();
+  });
+});
 
 beforeEach(() => {
   mkdirSync(testDir, { recursive: true });

@@ -1,5 +1,5 @@
 /**
- * State management for turkey-enterprise-v3
+ * State management for turkeycode
  * Phase-based orchestrator model
  */
 

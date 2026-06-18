@@ -1,5 +1,5 @@
 /**
- * Type definitions for turkey-enterprise-v3
+ * Type definitions for turkeycode
  * Phase-based orchestrator model
  */
 

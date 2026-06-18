@@ -19,16 +19,38 @@ import { ProjectType } from './types';
  * 3. Default to 'web-fullstack' for ambiguous projects (backwards compatible)
  */
 export function detectProjectType(cwd: string): ProjectType {
-  // 1. Check explicit metadata
+  const strict = detectProjectTypeStrict(cwd);
+  // Default ambiguous/greenfield dirs to web-fullstack (backwards compatible).
+  return strict === 'unknown' ? 'web-fullstack' : strict;
+}
+
+/**
+ * Like detectProjectType, but returns 'unknown' for greenfield/ambiguous dirs
+ * instead of defaulting to web-fullstack. Lets callers (e.g. the orchestrator on a
+ * greenfield build) infer the type from the DESCRIPTION rather than assuming web.
+ */
+export function detectProjectTypeStrict(cwd: string): ProjectType {
   const explicit = checkExplicitType(cwd);
   if (explicit) return explicit;
+  return applyHeuristics(cwd); // 'unknown' when nothing matches
+}
 
-  // 2. Apply heuristics
-  const detected = applyHeuristics(cwd);
-  if (detected !== 'unknown') return detected;
-
-  // 3. Default to web-fullstack for ambiguous projects (backwards compatible)
-  return 'web-fullstack';
+/**
+ * Best-effort project type from the build DESCRIPTION, for greenfield builds where
+ * the filesystem has nothing to detect from yet. Returns null when there's no clear
+ * NON-web signal, so the caller defaults to web-fullstack. Order = most specific first.
+ */
+export function inferProjectTypeFromDescription(description: string): ProjectType | null {
+  const d = ` ${description.toLowerCase()} `;
+  if (/\b(cli|command[- ]?line|terminal(-based)?(\s+(app|tool|program|ui))?|tui|shell script)\b/.test(d)) return 'cli';
+  if (/\b(desktop app|electron|tauri|menu ?bar app|system tray)\b/.test(d)) return 'desktop';
+  if (/\b(mobile app|ios app|android app|react native|flutter|expo)\b/.test(d)) return 'mobile';
+  if (/\b(npm package|published package|reusable (library|module|package)|\blibrary\b|\bsdk\b)\b/.test(d)) return 'library';
+  if (
+    /\b(rest api|graphql api|backend service|microservice|api server|api service|web service)\b/.test(d) &&
+    !/\b(dashboard|frontend|front-end|web app|web ?site|\bui\b|pages?)\b/.test(d)
+  ) return 'web-api';
+  return null;
 }
 
 // ==================== Explicit Metadata ====================
