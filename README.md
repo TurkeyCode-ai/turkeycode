@@ -148,6 +148,50 @@ turkeycode resume
 turkeycode status
 ```
 
+## Iterate with Tickets (Jira)
+
+Greenfield gets you the app. Real life is what comes next: bugs and follow-on work.
+Tickets are how that work *enters* — TurkeyCode triages each one and decides the build
+shape (the no-micro-tickets philosophy is about how the AI *builds*, not how work arrives).
+
+**Bug/story mode — describe it, and TurkeyCode files its own ticket and runs it:**
+
+```bash
+# Estimate (auto Bug-vs-Story + Fibonacci points) → create the ticket
+# → burn down its epic → run it end to end.
+turkeycode story "users can export their dashboard to CSV"
+
+# Omit --epic and you get an interactive epic picker (with each epic's point budget).
+# Or pin it directly:
+turkeycode story "fix the broken CSV export on empty sets" --epic PROJ-100 --bug
+
+# Estimate only, write nothing:
+turkeycode story "add SSO via Okta" --dry-run
+
+# Create + point the ticket but don't build yet:
+turkeycode story "rate-limit the public API" --no-run
+```
+
+Epic burndown is **read-and-report**: `remaining = epic budget − committed points`.
+It never writes back to the epic, so it never fights Jira's native rollup
+(`--budget <n>` overrides the pool if the epic isn't pointed).
+
+**Run tickets that already exist:**
+
+```bash
+# Run one ticket: triage → research (non-coding) or build + push branches (coding)
+turkeycode run-ticket PROJ-123
+
+# Pick from tickets assigned to you
+turkeycode my-tickets
+
+# Just classify, change nothing
+turkeycode run-ticket PROJ-123 --triage-only
+```
+
+Requires Jira env (`JIRA_HOST`, `JIRA_EMAIL`, `JIRA_TOKEN`, and `JIRA_PROJECT` for
+`story`). See [Jira Integration](#jira-integration-optional).
+
 ## Spawning Long-Running Builds
 
 Builds can take 30-60+ minutes. To run in the background:
@@ -361,15 +405,20 @@ turkey deliver
 
 ### Jira Integration (Optional)
 
-To pull specs from Jira tickets:
+Powers `turkeycode story`, `run-ticket`, and `my-tickets` (see
+[Iterate with Tickets](#iterate-with-tickets-jira)):
 
 ```bash
 export JIRA_HOST=yourcompany.atlassian.net
 export JIRA_EMAIL=you@company.com
 export JIRA_TOKEN=your-jira-api-token
+export JIRA_PROJECT=PROJ   # required for `story` (it creates tickets)
 ```
 
 Generate a Jira API token at: https://id.atlassian.com/manage-profile/security/api-tokens
+
+`story` resolves your instance's Story Points and Epic Link fields automatically, and
+links epics on both team- and company-managed projects.
 
 ### Environment Variables Reference
 
@@ -380,6 +429,7 @@ Generate a Jira API token at: https://id.atlassian.com/manage-profile/security/a
 | `JIRA_HOST` | No | Jira instance hostname (e.g. `company.atlassian.net`) |
 | `JIRA_EMAIL` | No | Jira account email |
 | `JIRA_TOKEN` | No | Jira API token |
+| `JIRA_PROJECT` | No | Jira project key. Required for `turkeycode story` (it creates tickets) |
 
 ## Gate Reference
 
