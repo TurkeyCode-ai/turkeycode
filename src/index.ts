@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * turkey-enterprise-v3 CLI
+ * turkeycode CLI
  * Phase-based orchestrator for Claude Code build workflows
  */
 
@@ -44,17 +44,26 @@ function logFatal(context: string, err: unknown): void {
 process.on('uncaughtException', (err) => { logFatal('uncaughtException', err); console.error('uncaughtException:', err); process.exit(1); });
 process.on('unhandledRejection', (err) => { logFatal('unhandledRejection', err); console.error('unhandledRejection:', err); process.exit(1); });
 
+// Read the version from package.json so `--version` never drifts from the published package.
+const CLI_VERSION = (() => {
+  try {
+    return JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8')).version as string;
+  } catch {
+    return '0.0.0';
+  }
+})();
+
 const program = new Command();
 
 program
-  .name('turkey-enterprise-v3')
+  .name('turkeycode')
   .description('Phase-based orchestrator for Claude Code build workflows')
-  .version('3.0.0');
+  .version(CLI_VERSION);
 
 // ==================== RUN COMMAND ====================
 program
   .command('run')
-  .description('Run the full orchestration loop')
+  .description('Run the full orchestration loop (a bare description auto-enters the interactive scope loop first on a TTY; skip with --spec)')
   .argument('<description>', 'Project description')
   .option('-j, --jira <project>', 'Jira project key')
   .option('-g, --github <repo>', 'GitHub repo (owner/repo)')
@@ -72,7 +81,7 @@ program
   .action(async (description: string, options) => {
     console.log('');
     console.log('╔══════════════════════════════════════════════════════════╗');
-    console.log('║           TURKEY ENTERPRISE V3 ORCHESTRATOR              ║');
+    console.log('║                 TURKEYCODE ORCHESTRATOR                  ║');
     console.log('║                                                          ║');
     console.log('║  Phase-based builds. Parallel QA. Hard gates.           ║');
     console.log('╚══════════════════════════════════════════════════════════╝');
@@ -435,7 +444,7 @@ program
   .option('--feature <branch>', 'Feature branch (seed/override; persisted to state)')
   .action(async (options) => {
     if (!canResume()) {
-      console.log('Nothing to resume. Use "turkey-enterprise-v3 run" to start.');
+      console.log('Nothing to resume. Use "turkeycode run" to start.');
       process.exit(1);
     }
 
