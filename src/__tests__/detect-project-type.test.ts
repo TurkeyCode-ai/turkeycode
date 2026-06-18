@@ -212,6 +212,15 @@ describe('legacy detection', () => {
     writeFileSync(join(testDir, 'main.go'), 'package main');
     expect(detectProjectType(testDir)).toBe('cli');
   });
+
+  it('does NOT flag ambiguous extensions as legacy (asm/mac/dds/rpg false positives)', () => {
+    // These appear in modern/non-mainframe projects (assembly, macros, textures, RPG Maker)
+    // and previously misdetected greenfield apps as `legacy`.
+    for (const f of ['boot.asm', 'build.mac', 'sprite.dds', 'Actor.rpg']) {
+      writeFileSync(join(testDir, f), 'x');
+    }
+    expect(detectProjectType(testDir)).not.toBe('legacy');
+  });
 });
 
 // ==================== Fallback ====================
