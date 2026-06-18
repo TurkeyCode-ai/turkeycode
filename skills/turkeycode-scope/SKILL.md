@@ -45,6 +45,10 @@ Each turn, do all of this:
    - **Binary, not phased.** Never offer "defer to v2 / phase 2 / later" as an option —
      that's how scope creep walks back in. A new capability is "that's out of scope — does
      it need to be IN?", lean on OUT, forcing the human to own the call.
+   - **Never ask an open-ended question** (the most important rule). If a feature is vague
+     or you'd otherwise ask "what should X do?" / "can you clarify?" — don't. Propose the
+     2–4 likely interpretations AS the numbered options (with "cut it for v1" usually one,
+     often the lean). The human picks; they never author from a blank page.
 4. **Read the reply as one of three things.** A **bare number** = picking option N from
    your most recent list (ratify it, don't read the digit as a requirement). **Freeform**
    = a correction/override. A **confirmation** ("yes"/"ship it"/"go") = emit. Never use a
