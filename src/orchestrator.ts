@@ -283,6 +283,19 @@ export class Orchestrator {
       } else {
         this.state.projectType = detectProjectType(this.workDir);
         this.log(`Detected project type: ${this.state.projectType}`);
+        // Greenfield guard: a fresh "build me an app" request can land in a workspace that
+        // happens to hold stray legacy files (e.g. leftover COBOL from a prior run/test).
+        // Don't treat that as a legacy MODERNIZATION unless the request actually asks for one
+        // — otherwise a greenfield app gets handed a mainframe strategy. An explicit
+        // --type legacy still wins (handled above); this only overrides AUTO-detection.
+        const wantsModernization =
+          /\b(moderni[sz]|legacy|cobol|rpg|mainframe|jcl|pl\/?i|as\/?400|ibm\s*i|rewrite|re-?platform|port(ing)?|migrat)/i.test(
+            description
+          );
+        if (this.state.projectType === 'legacy' && !wantsModernization) {
+          this.state.projectType = 'web-fullstack';
+          this.log('Greenfield request with no modernization intent — ignoring stray legacy files; treating as web-fullstack.');
+        }
       }
       saveState(this.state);
     } else {
