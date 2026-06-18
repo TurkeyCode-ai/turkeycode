@@ -923,6 +923,66 @@ program
     }
   });
 
+// ==================== STORY COMMAND ====================
+program
+  .command('story')
+  .description('Bug/story mode: turn a prompt into a points-estimated Jira ticket (auto bug-vs-story), burn down its epic, then run it')
+  .argument('<prompt>', 'What to build or fix, in plain language')
+  .option('-e, --epic <key>', 'Parent epic key (links the ticket and reports burndown)')
+  .option('--bug', 'Force issue type Bug')
+  .option('--story', 'Force issue type Story')
+  .option('--points <n>', 'Override the estimated story points')
+  .option('--budget <n>', 'Override the epic point budget used for burndown')
+  .option('--dry-run', 'Estimate only. Do not create the ticket or run anything.')
+  .option('--no-run', 'Create + point the ticket, but skip the ticket-run flow')
+  .option('--triage-only', 'Create the ticket, then stop after triage (no branches/build)')
+  .option('-v, --verbose', 'Verbose output')
+  .option('--manifest <path>', 'Override the repos.yaml manifest path')
+  .option('--mcp-config <path>', 'Override the MCP config path (else uses TURKEYCODE_MCP_CONFIG)')
+  .action(async (prompt: string, options) => {
+    if (options.bug && options.story) {
+      console.error('❌ Pass at most one of --bug / --story.');
+      process.exit(1);
+    }
+    const forceType = options.bug ? 'Bug' : options.story ? 'Story' : undefined;
+
+    const points = options.points != null ? Number(options.points) : undefined;
+    if (points != null && !Number.isFinite(points)) {
+      console.error(`❌ --points must be a number (got "${options.points}").`);
+      process.exit(1);
+    }
+    const budget = options.budget != null ? Number(options.budget) : undefined;
+    if (budget != null && !Number.isFinite(budget)) {
+      console.error(`❌ --budget must be a number (got "${options.budget}").`);
+      process.exit(1);
+    }
+
+    const { createStoryOrchestrator } = await import('./story-orchestrator');
+    try {
+      const orch = createStoryOrchestrator({
+        verbose: options.verbose,
+        mcpConfig: options.mcpConfig,
+      });
+      await orch.createAndRun(prompt, {
+        forceType,
+        pointsOverride: points,
+        epicKey: options.epic,
+        budgetOverride: budget,
+        dryRun: options.dryRun,
+        run: options.run, // commander sets this false when --no-run is passed
+        triageOnly: options.triageOnly,
+        verbose: options.verbose,
+        manifestPath: options.manifest,
+        mcpConfig: options.mcpConfig,
+      });
+      console.log('');
+      console.log(`✅ Story flow complete.`);
+    } catch (err) {
+      console.error(`❌ Story flow failed: ${(err as Error).message}`);
+      process.exit(1);
+    }
+  });
+
 // ==================== MY-TICKETS COMMAND ====================
 program
   .command('my-tickets')

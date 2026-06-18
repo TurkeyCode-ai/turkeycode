@@ -15,6 +15,40 @@ interface JiraConfig {
   project: string;
 }
 
+/** Story-point field display names, in priority order (company- then team-managed). */
+const STORY_POINTS_FIELD_NAMES = ['Story Points', 'Story point estimate'];
+/** Classic Epic Link field display names. */
+const EPIC_LINK_FIELD_NAMES = ['Epic Link'];
+
+export interface EpicBurndown {
+  /** The epic's own story-point estimate (the pool), or null if unpointed/unavailable. */
+  budget: number | null;
+  /** Sum of story points across the epic's children. */
+  used: number;
+  /** budget - used, or null when budget is unknown. */
+  remaining: number | null;
+  /** Number of child issues found under the epic. */
+  childCount: number;
+}
+
+/**
+ * Pure burndown math: given an epic budget and its children's points, report usage.
+ * Children without points contribute 0. Exported for testing without a live Jira.
+ */
+export function computeBurndown(
+  budget: number | null,
+  childPoints: number[],
+  childCount?: number,
+): EpicBurndown {
+  const used = childPoints.reduce((sum, n) => sum + (typeof n === 'number' ? n : 0), 0);
+  return {
+    budget,
+    used,
+    remaining: budget === null ? null : budget - used,
+    childCount: childCount ?? childPoints.length,
+  };
+}
+
 export interface TicketSummary {
   key: string;
   summary: string;
@@ -238,6 +272,8 @@ async function agileRequest(
 export class JiraClient {
   private config: JiraConfig | null;
   private boardId: number | null = null;
+  /** Resolved custom field ids by name-set key. `null` means "looked up, not found". */
+  private fieldIdCache: Map<string, string | null> = new Map();
 
   constructor(project?: string) {
     this.config = getConfig();
@@ -480,6 +516,8 @@ export class JiraClient {
     sprintId?: number;
     storyPoints?: number;
     issueType?: string;
+    /** Parent epic key. Linked after create so it works on both team- and company-managed projects. */
+    epicKey?: string;
   }): Promise<string | null> {
     if (!this.config) return null;
 
@@ -540,11 +578,167 @@ export class JiraClient {
         await this.addToSprint(issue.key, options.sprintId);
       }
 
+      // Story points and epic link are applied via update after create. Create screens
+      // often omit these fields, so a post-create update is more reliable than inlining
+      // them above (and works across team- and company-managed projects).
+      if (typeof options.storyPoints === 'number') {
+        await this.setStoryPoints(issue.key, options.storyPoints);
+      }
+      if (options.epicKey) {
+        await this.setEpic(issue.key, options.epicKey);
+      }
+
       return issue.key;
     }
 
     console.error(`[jira] Failed to create ticket: ${result.error}`);
     return null;
+  }
+
+  /**
+   * Resolve a custom field id by display name. Jira custom field ids vary per
+   * instance (e.g. Story Points is customfield_10016 on one site, _10026 on another),
+   * so we look them up by name. Pass synonyms (first match wins). Cached per client.
+   */
+  async resolveFieldId(names: string[]): Promise<string | null> {
+    if (!this.config) return null;
+    const cacheKey = names.map((n) => n.toLowerCase()).join('|');
+    const cached = this.fieldIdCache.get(cacheKey);
+    if (cached !== undefined) return cached;
+
+    const result = await jiraRequest(this.config, 'GET', 'field');
+    let id: string | null = null;
+    if (result.ok && Array.isArray(result.data)) {
+      const fields = result.data as Array<{ id?: string; name?: string }>;
+      const wanted = names.map((n) => n.toLowerCase());
+      // Preserve caller priority: try each synonym in order.
+      for (const want of wanted) {
+        const match = fields.find((f) => (f.name ?? '').toLowerCase() === want);
+        if (match?.id) {
+          id = match.id;
+          break;
+        }
+      }
+    } else {
+      console.warn(`[jira] Could not list fields to resolve ${names.join('/')}: ${result.error ?? 'unknown'}`);
+    }
+    this.fieldIdCache.set(cacheKey, id);
+    return id;
+  }
+
+  /**
+   * Set story points on an issue. Resolves the instance's points field by name.
+   * Returns true on success; logs and returns false if the field can't be found/set.
+   */
+  async setStoryPoints(issueKey: string, points: number): Promise<boolean> {
+    if (!this.config) return false;
+    const fieldId = await this.resolveFieldId(STORY_POINTS_FIELD_NAMES);
+    if (!fieldId) {
+      console.warn(`[jira] No Story Points field found on this instance — leaving ${issueKey} unpointed.`);
+      return false;
+    }
+    const result = await jiraRequest(this.config, 'PUT', `issue/${encodeURIComponent(issueKey)}`, {
+      fields: { [fieldId]: points },
+    });
+    if (!result.ok) {
+      console.warn(`[jira] Failed to set ${points} points on ${issueKey}: ${result.error}`);
+      return false;
+    }
+    console.log(`[jira] Set ${points} story point(s) on ${issueKey}`);
+    return true;
+  }
+
+  /**
+   * Link an issue to a parent epic. Tries the modern `parent` field first
+   * (team-managed projects), then the classic "Epic Link" custom field, then the
+   * Agile "add issue to epic" endpoint. Returns true on the first that works.
+   */
+  async setEpic(issueKey: string, epicKey: string): Promise<boolean> {
+    if (!this.config) return false;
+
+    // 1. Modern parent field (team-managed / next-gen).
+    const parentTry = await jiraRequest(this.config, 'PUT', `issue/${encodeURIComponent(issueKey)}`, {
+      fields: { parent: { key: epicKey } },
+    });
+    if (parentTry.ok) {
+      console.log(`[jira] Linked ${issueKey} to epic ${epicKey} (parent)`);
+      return true;
+    }
+
+    // 2. Classic Epic Link custom field (company-managed).
+    const epicLinkField = await this.resolveFieldId(EPIC_LINK_FIELD_NAMES);
+    if (epicLinkField) {
+      const linkTry = await jiraRequest(this.config, 'PUT', `issue/${encodeURIComponent(issueKey)}`, {
+        fields: { [epicLinkField]: epicKey },
+      });
+      if (linkTry.ok) {
+        console.log(`[jira] Linked ${issueKey} to epic ${epicKey} (Epic Link)`);
+        return true;
+      }
+    }
+
+    // 3. Agile endpoint fallback.
+    const agileTry = await agileRequest(this.config, 'POST', `epic/${encodeURIComponent(epicKey)}/issue`, {
+      issues: [issueKey],
+    });
+    if (agileTry.ok) {
+      console.log(`[jira] Linked ${issueKey} to epic ${epicKey} (agile)`);
+      return true;
+    }
+
+    console.warn(`[jira] Could not link ${issueKey} to epic ${epicKey}: ${parentTry.error ?? agileTry.error}`);
+    return false;
+  }
+
+  /**
+   * Read an epic's point budget and the points already committed by its children.
+   * "budget" is the epic's own Story Points estimate (the pool); "used" is the sum
+   * across child issues. Caller decides how to present remaining = budget - used.
+   * Returns null only if Jira is unconfigured.
+   */
+  async getEpicBurndown(epicKey: string): Promise<EpicBurndown | null> {
+    if (!this.config) return null;
+    const fieldId = await this.resolveFieldId(STORY_POINTS_FIELD_NAMES);
+
+    // Budget: the epic's own story-point estimate, if pointed and the field exists.
+    let budget: number | null = null;
+    if (fieldId) {
+      const epicRes = await jiraRequest(
+        this.config,
+        'GET',
+        `issue/${encodeURIComponent(epicKey)}?fields=${encodeURIComponent(fieldId)}`,
+      );
+      if (epicRes.ok && epicRes.data) {
+        const f = (epicRes.data as JiraRawIssue).fields ?? {};
+        const v = f[fieldId];
+        if (typeof v === 'number') budget = v;
+      }
+    }
+
+    // Used: sum of child points. Try the modern parent link, fall back to Epic Link JQL.
+    const childPoints: number[] = [];
+    let childCount = 0;
+    if (fieldId) {
+      const jqlVariants = [`parent = ${epicKey}`, `"Epic Link" = ${epicKey}`];
+      for (const jql of jqlVariants) {
+        const res = await jiraRequest(this.config, 'POST', 'search/jql', {
+          jql,
+          fields: [fieldId],
+          maxResults: 200,
+        });
+        if (!res.ok) continue;
+        const issues = ((res.data as { issues?: JiraRawIssue[] })?.issues) ?? [];
+        if (issues.length === 0) continue;
+        childCount = issues.length;
+        for (const iss of issues) {
+          const v = (iss.fields ?? {})[fieldId];
+          if (typeof v === 'number') childPoints.push(v);
+        }
+        break; // first variant that returns children wins
+      }
+    }
+
+    return computeBurndown(budget, childPoints, childCount);
   }
 
   /**
