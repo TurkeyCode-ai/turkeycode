@@ -178,14 +178,18 @@ function isNativeAppleProject(cwd: string): boolean {
 
 // ==================== Legacy / Mainframe Detection ====================
 
-/** Source extensions that signal a legacy/mainframe codebase. */
+/**
+ * Source extensions that UNAMBIGUOUSLY signal a legacy/mainframe codebase. Ambiguous ones
+ * are deliberately excluded — they appear constantly in modern/non-mainframe projects and
+ * caused false positives (a greenfield app misdetected as `legacy`): `.asm` (any assembly),
+ * `.mac` (macros), `.dds` (DirectDraw textures), `.rpg` (RPG Maker). Real IBM i projects
+ * still match via `.rpgle`/`.sqlrpgle`.
+ */
 const LEGACY_EXTENSIONS = [
   '.cbl', '.cob', '.cobol', '.cpy',   // COBOL + copybooks
   '.jcl',                              // Job Control Language
   '.pli', '.pl1',                     // PL/I
-  '.rpgle', '.rpg', '.sqlrpgle',      // RPG (IBM i)
-  '.dds',                             // IBM i data description specs
-  '.asm', '.mac',                     // mainframe assembler / macros
+  '.rpgle', '.sqlrpgle',              // RPG (IBM i)
 ];
 
 function isLegacyProject(cwd: string): boolean {
