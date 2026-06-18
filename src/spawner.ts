@@ -399,6 +399,13 @@ export class Spawner {
   }
 
   private log(message: string): void {
+    // Honor the verbose flag (it was previously a dead field — every session printed its
+    // internal logs, which cluttered the interactive scope loop with "Starting session",
+    // "Exit code", "Output length", and a false "suspiciously short output" warning every
+    // turn). Behavior is driven by result flags (creditExhausted, exit codes), and
+    // user-facing messages live in the callers, so gating these debug lines hides nothing
+    // important. Run with -v / --verbose to see them.
+    if (!this.verbose) return;
     const timestamp = new Date().toISOString();
     console.log(`${timestamp} ${message}`);
   }
