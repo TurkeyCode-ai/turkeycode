@@ -1,5 +1,5 @@
 /**
- * Audit logging for turkey-enterprise-v3
+ * Audit logging for turkeycode
  * Append-only log for compliance and SOC 2 evidence
  * Phase-based orchestrator model
  */

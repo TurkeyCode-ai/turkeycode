@@ -1,5 +1,5 @@
 /**
- * Path constants and configuration for turkey-enterprise-v3
+ * Path constants and configuration for turkeycode
  * Phase-based orchestrator model
  */
 

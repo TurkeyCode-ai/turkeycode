@@ -1,5 +1,5 @@
 /**
- * Claude Code session runner for turkey-enterprise-v3
+ * Claude Code session runner for turkeycode
  * Spawns claude --print sessions with proper timeout handling
  * v3: Adds runParallel() for concurrent session execution
  */

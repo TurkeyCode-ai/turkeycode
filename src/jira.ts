@@ -1,5 +1,5 @@
 /**
- * Jira integration for turkey-enterprise-v3
+ * Jira integration for turkeycode
  * Uses Jira REST API directly (no CLI dependency)
  * v3: Auto-creates projects if they don't exist
  */

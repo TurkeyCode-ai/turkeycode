@@ -1,11 +1,12 @@
 /**
- * Main orchestrator for turkey-enterprise-v3
+ * Main orchestrator for turkeycode
  * Phase-based model: N build phases (as many as the work needs), each one Claude session
  */
 
 import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, unlinkSync, rmSync, statSync } from 'fs';
 import { execSync } from 'child_process';
 import { join } from 'path';
+import { homedir } from 'os';
 import {
   ProjectState,
   BuildPhase,
@@ -66,7 +67,7 @@ import {
 } from './constants';
 import { audit, auditGate, auditPhase, auditBuildPhase, auditQA } from './audit';
 import { runQuickChecks } from './quick-check';
-import { detectProjectType } from './detect-project-type';
+import { detectProjectTypeStrict, inferProjectTypeFromDescription } from './detect-project-type';
 import { shouldSkipVisualQA } from './types';
 
 export interface OrchestratorOptions {
@@ -118,6 +119,21 @@ export function isBuildDoneStale(workDir: string, buildDonePath: string): boolea
     }
   } catch { /* stat error — treat as not-stale, fall through to other checks */ }
   return false;
+}
+
+/**
+ * Directories turkeycode must never initialize a project into — your home dir or a
+ * system root. Building there git-inits and writes files across the whole tree.
+ * Exact-match only, so any subdirectory (e.g. ~/projects/app, /tmp/build) is fine.
+ * Pure for testing.
+ */
+export function isUnsafeWorkDir(dir: string, home: string): boolean {
+  const norm = (p: string): string => p.replace(/[/\\]+$/, '') || '/';
+  const d = norm(dir);
+  if (d === norm(home)) return true;
+  if (/^[A-Za-z]:$/.test(d)) return true; // Windows drive root (C:)
+  const roots = ['/', '/root', '/home', '/Users', '/usr', '/etc', '/var', '/bin', '/sbin', '/opt', '/tmp', '/Library', '/System', '/Applications'];
+  return roots.includes(d);
 }
 
 /**
@@ -182,8 +198,13 @@ export class Orchestrator {
    */
   async run(description: string, options: OrchestratorOptions = {}): Promise<void> {
     this.log('='.repeat(60));
-    this.log('TURKEY ENTERPRISE V3 - PHASE-BASED ORCHESTRATION');
+    this.log('TURKEYCODE - PHASE-BASED ORCHESTRATION');
     this.log('='.repeat(60));
+
+    // Guard: turkeycode git-inits and writes files in the CURRENT directory. Running
+    // in $HOME or a system root scatters a project across it (and `git add -A` chokes
+    // on ~/Library permission walls). Refuse those and point the user at an empty folder.
+    this.assertSafeWorkDir();
 
     // Preflight: verify Claude Code is available and working
     await this.preflightCheck();
@@ -281,8 +302,10 @@ export class Orchestrator {
         this.state.projectType = options.projectType;
         this.log(`Project type (forced via --type): ${this.state.projectType}`);
       } else {
-        this.state.projectType = detectProjectType(this.workDir);
-        this.log(`Detected project type: ${this.state.projectType}`);
+        // File-based detection, but WITHOUT the web-fullstack fallback — a greenfield
+        // (empty) workspace returns 'unknown' here so we can read the real intent off
+        // the description instead of blindly assuming a web app.
+        const strictType = detectProjectTypeStrict(this.workDir);
         // Greenfield guard: a fresh "build me an app" request can land in a workspace that
         // happens to hold stray legacy files (e.g. leftover COBOL from a prior run/test).
         // Don't treat that as a legacy MODERNIZATION unless the request actually asks for one
@@ -292,9 +315,21 @@ export class Orchestrator {
           /\b(moderni[sz]|legacy|cobol|rpg|mainframe|jcl|pl\/?i|as\/?400|ibm\s*i|rewrite|re-?platform|port(ing)?|migrat)/i.test(
             description
           );
-        if (this.state.projectType === 'legacy' && !wantsModernization) {
-          this.state.projectType = 'web-fullstack';
-          this.log('Greenfield request with no modernization intent — ignoring stray legacy files; treating as web-fullstack.');
+        // Greenfield = nothing concrete to detect ('unknown'), or only stray legacy files
+        // with no modernization intent. Then the DESCRIPTION is the real signal: a "CLI"/
+        // "terminal"/"API"/"desktop" build should not be mislabeled web-fullstack at start.
+        const isGreenfield = strictType === 'unknown' || (strictType === 'legacy' && !wantsModernization);
+        if (isGreenfield) {
+          const inferred = inferProjectTypeFromDescription(description);
+          this.state.projectType = inferred ?? 'web-fullstack';
+          this.log(
+            inferred
+              ? `Greenfield build — project type inferred from description: ${this.state.projectType}`
+              : `Greenfield build — no clear type in description; defaulting to web-fullstack.`
+          );
+        } else {
+          this.state.projectType = strictType;
+          this.log(`Detected project type: ${this.state.projectType}`);
         }
       }
       saveState(this.state);
@@ -2028,7 +2063,7 @@ ${deliverables}
 ${criteria}
 
 ---
-Generated by turkey-enterprise-v3 (phase-based)
+Generated by turkeycode (phase-based)
 `;
   }
 
@@ -2054,6 +2089,20 @@ Generated by turkey-enterprise-v3 (phase-based)
    * Preflight check: verify Claude Code is installed and working
    * Catches common issues before wasting time on a full build
    */
+  private assertSafeWorkDir(): void {
+    if (!isUnsafeWorkDir(this.workDir, homedir())) return;
+    this.log('');
+    this.log(`✖ Refusing to build in ${this.workDir}`);
+    this.log(`  turkeycode initializes a git repo and writes files in the CURRENT directory.`);
+    this.log(`  This is your home or a system directory — building here would scatter a`);
+    this.log(`  project across it. Create an empty folder and run from inside it:`);
+    this.log('');
+    this.log(`      mkdir my-app && cd my-app`);
+    this.log(`      turkeycode run "<your description>"`);
+    this.log('');
+    process.exit(1);
+  }
+
   private async preflightCheck(): Promise<void> {
     this.log('Running preflight checks...');
 

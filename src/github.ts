@@ -1,5 +1,5 @@
 /**
- * GitHub integration for turkey-enterprise-v2
+ * GitHub integration for turkeycode
  * Wraps gh CLI - skips gracefully if not available
  */
 

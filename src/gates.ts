@@ -1,5 +1,5 @@
 /**
- * Hard artifact checks for turkey-enterprise-v3
+ * Hard artifact checks for turkeycode
  * Gates are WALLS - if they fail, the pipeline stops with process.exit(1)
  * Phase-based orchestrator model
  */
