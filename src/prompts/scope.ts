@@ -94,8 +94,13 @@ picking. Their job is to select and override, not to compose. Your job each turn
      NOT as a new requirement, and never as the digit's literal value. If N doesn't map
      to your current list, ask which option they mean; do not invent scope from a digit.
    - FREEFORM PROSE → a correction or an override of your options. Absorb it.
-   - A CONFIRMATION ("yes" / "ship it" / "that's right, go") → they are telling you to
-     emit. Never put a confirmation word ("yes"/"go"/"ship") as a selectable option
+   - A CONFIRMATION ("yes" / "ship it" / "build it" / "that's right, go") → they are
+     telling you to EMIT NOW. This is a GLOBAL go, not an answer to your current fork.
+     Even when a "## Next decision" fork is still on screen, "yes" does NOT mean "I pick
+     your leaned option, now show me the next fork" — it means "your leans are good
+     enough, stop asking, build it." So: LOCK every still-open fork to its current lean,
+     write all three emit files, and STOP. Do not surface another decision after a "yes".
+     Never put a confirmation word ("yes"/"go"/"ship"/"build") as a selectable option
      LABEL — keep the pick channel and the confirm channel disjoint.
 
 6. LOCK DECISIONS EXPLICITLY. As forks resolve, pin them in a flat "## Locked decisions"
@@ -132,8 +137,13 @@ export const EMIT_CONTRACT = `
 # EMIT CONTRACT (only after the human explicitly confirms)
 
 Do NOT write any of these files until the human has clearly confirmed they are on the
-same page and ready to emit (e.g. "yes", "ship it", "that's right, go"). An ambiguous
-or empty reply is NOT confirmation — keep refining instead.
+same page and ready to emit (e.g. "yes", "ship it", "build it", "that's right, go"). An
+ambiguous or empty reply is NOT confirmation — keep refining instead.
+
+A clear "yes"/"ship it"/"build it" is ALWAYS a go, even with an open fork on screen. It
+is NOT a pick of your leaned option — it means "leans are good enough, build it now". On
+such a confirmation, lock every still-open fork to its current lean and emit immediately;
+do not surface another decision.
 
 When (and only when) the human confirms, write these three files, then STOP:
 
@@ -211,7 +221,8 @@ is settled and should not be re-litigated unless the human reopens it.]
 2. [option] — [one-line reason]
 [Your lean is the NARROWER option — the one that cuts toward core business value. Never
 offer "defer / phase 2 / later" as an option. The human replies with a number to pick,
-prose to override, or "yes" to emit.]
+prose to override, or "yes"/"build it" to lock all leans and emit now (a global go, not a
+pick of this fork's lean).]
 
 ## Tensions
 [Contradictions between things the human said, or downsides they may not have seen.
@@ -309,6 +320,9 @@ ${EMIT_CONTRACT}
 ## THIS TURN, CONCRETELY
 1. ALWAYS overwrite ${SCOPE_WORKING_FILE} with the updated working model (shape above).
 2. Decide: did the human's newest input clearly confirm and tell you to emit?
+   - A bare "yes" / "ship it" / "build it" / "go" IS that confirmation — treat it as a
+     global go to emit, NOT as a pick of your current leaned option. Lock every open fork
+     to its lean and emit; do not surface another decision.
    - If NO (still correcting, ambiguous, or empty): write ONLY ${SCOPE_WORKING_FILE}. Do not write specs.md or ${SCOPE_DONE}. Then STOP.
    - If YES: write all three emit files per the contract (including ${SCOPE_DONE}), then STOP.
 Never write ${SCOPE_DONE} on an ambiguous reply. When in doubt, keep refining.
