@@ -1015,6 +1015,27 @@ function findDbContainer(dbType: DatabaseType): string | null {
   return null;
 }
 
+/**
+ * A connection string supplied through the process environment, by DB type.
+ * Lets a sandbox/host inject an ambient build-time DB (e.g. DATABASE_URL) that
+ * the quick-check trusts ahead of the app's scaffolded .env.
+ */
+function connStringFromProcessEnv(dbType: DatabaseType): string {
+  const envVarsByType: Record<DatabaseType, string[]> = {
+    postgres: ['DATABASE_URL', 'POSTGRES_URL'],
+    mysql: ['DATABASE_URL', 'MYSQL_URL'],
+    mongodb: ['MONGO_URI', 'MONGODB_URI', 'MONGO_URL', 'DATABASE_URL'],
+    redis: ['REDIS_URL'],
+    sqlite: [],
+    dynamodb: ['DYNAMODB_ENDPOINT'],
+  };
+  for (const name of envVarsByType[dbType] || []) {
+    const val = process.env[name];
+    if (val && val.trim()) return val.trim();
+  }
+  return '';
+}
+
 function checkDatabase(workDir: string, dbType: DatabaseType, backendDir: string): CheckResult {
   const start = Date.now();
   const dbInfo = DATABASE_INFO.find(d => d.type === dbType);
@@ -1095,10 +1116,14 @@ function checkDatabase(workDir: string, dbType: DatabaseType, backendDir: string
     }
   }
 
-  // 3. Try connection string + Node driver from backendDir
+  // 3. Try connection string + Node driver from backendDir.
+  //    Prefer a connection string injected via the process environment (e.g. an
+  //    ambient build-time DB provided by the sandbox/host) over whatever the app
+  //    scaffolded into its .env — the env URL is the one that actually points at a
+  //    running instance during the build.
   const envContent = readEnvFiles(workDir, backendDir);
   const connMatch = envContent.match(dbInfo.connectionStringPattern);
-  const connString = connMatch ? connMatch[1].trim() : '';
+  const connString = connStringFromProcessEnv(dbType) || (connMatch ? connMatch[1].trim() : '');
 
   if (connString) {
     // Try Node driver if available in project
