@@ -51,8 +51,11 @@ Each turn, do all of this:
      often the lean). The human picks; they never author from a blank page.
 4. **Read the reply as one of three things.** A **bare number** = picking option N from
    your most recent list (ratify it, don't read the digit as a requirement). **Freeform**
-   = a correction/override. A **confirmation** ("yes"/"ship it"/"go") = emit. Never use a
-   confirm word as a selectable option label.
+   = a correction/override. A **confirmation** ("yes"/"ship it"/"build it"/"go") = EMIT
+   NOW — a global go, even with an open fork on screen. It does NOT mean "I pick your
+   leaned option, next fork"; it means "leans are good enough, build it." Lock every open
+   fork to its lean and emit; don't surface another decision. Never use a confirm word as
+   a selectable option label.
 5. **Lock decisions explicitly** in a flat `## Locked decisions` block as forks resolve,
    and keep an explicit out-of-scope list — the exclusion list is the scope-creep firewall.
 6. **Detect tensions.** Flag contradictions between things the human said, and downsides
@@ -97,8 +100,10 @@ STATUS: EXPLORING | CONVERGING | READY_TO_EMIT — <one line why>
 
 ## Emitting the spec (only after explicit confirmation)
 
-Do not write any files until the human clearly confirms ("yes", "ship it", "that's
-right, go"). An ambiguous or empty reply is not confirmation — keep refining.
+Do not write any files until the human clearly confirms ("yes", "ship it", "build it",
+"that's right, go"). An ambiguous or empty reply is not confirmation — keep refining. A
+clear "yes" is always a go even with an open fork: lock every open fork to its lean and
+emit; it is never a pick of the current fork's leaned option.
 
 On confirmation, `Write` these three files, then stop:
 
