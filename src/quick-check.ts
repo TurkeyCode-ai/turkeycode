@@ -1574,6 +1574,73 @@ function checkFrontendBuild(project: ProjectInfo): CheckResult {
 // Public API
 // ═══════════════════════════════════════════
 
+function isTailwindV4(range: string): boolean {
+  const m = range.replace(/^[\^~>=<\s]+/, "").match(/^(\d+)/);
+  return m ? m[1] === "4" : false;
+}
+
+/**
+ * Tailwind v4 must be wired into the build (the `@tailwindcss/postcss` PostCSS
+ * plugin for Next.js/PostCSS, or `@tailwindcss/vite` for Vite) or the build
+ * generates NO utility classes and the app ships unstyled — a failure visual QA
+ * routinely misses but users see immediately. Pure decision for unit-testing.
+ * Returns a fixable error message, or null when fine.
+ */
+export function tailwindV4SetupError(
+  deps: Record<string, string>,
+  postcssConfig: string | null,
+  viteConfig: string | null
+): string | null {
+  const tw = deps["tailwindcss"];
+  if (!tw || !isTailwindV4(tw)) return null;
+  const postcssOk =
+    "@tailwindcss/postcss" in deps && !!postcssConfig && postcssConfig.includes("@tailwindcss/postcss");
+  const viteOk =
+    "@tailwindcss/vite" in deps && !!viteConfig && /@tailwindcss\/vite/.test(viteConfig);
+  if (postcssOk || viteOk) return null;
+  return (
+    "Tailwind v4 is installed but not wired into the build, so NO utility classes are generated and the app ships UNSTYLED. " +
+    'Fix: add "@tailwindcss/postcss" to devDependencies and create postcss.config.mjs with ' +
+    '`export default { plugins: { "@tailwindcss/postcss": {} } }` (Next.js / PostCSS), ' +
+    'or add "@tailwindcss/vite" and the tailwindcss() plugin to vite.config (Vite).'
+  );
+}
+
+function readFirstExisting(dir: string, names: string[]): string | null {
+  for (const n of names) {
+    const p = join(dir, n);
+    if (existsSync(p)) {
+      try { return readFileSync(p, "utf-8"); } catch { /* unreadable — skip */ }
+    }
+  }
+  return null;
+}
+
+/** Deterministic guard: a Tailwind-v4 app missing its PostCSS/Vite wiring. */
+function checkTailwindSetup(dirs: string[]): CheckResult {
+  const start = Date.now();
+  const seen = new Set<string>();
+  for (const dir of dirs) {
+    if (!dir || seen.has(dir)) continue;
+    seen.add(dir);
+    const pkgPath = join(dir, "package.json");
+    if (!existsSync(pkgPath)) continue;
+    const pkg = safeReadJson(pkgPath);
+    if (!pkg) continue;
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies } as Record<string, string>;
+    if (!deps["tailwindcss"]) continue;
+    const postcss = readFirstExisting(dir, [
+      "postcss.config.mjs", "postcss.config.js", "postcss.config.cjs", "postcss.config.ts", "postcss.config.json",
+    ]);
+    const vite = readFirstExisting(dir, [
+      "vite.config.ts", "vite.config.js", "vite.config.mjs", "vite.config.cts", "vite.config.mts",
+    ]);
+    const err = tailwindV4SetupError(deps, postcss, vite);
+    if (err) return { name: "Tailwind Setup", passed: false, message: err, duration: Date.now() - start };
+  }
+  return { name: "Tailwind Setup", passed: true, message: "Tailwind v4 wired correctly (or not used)", duration: Date.now() - start };
+}
+
 export async function runQuickChecks(workDir: string): Promise<QuickCheckResult> {
   const startTime = Date.now();
   const checks: CheckResult[] = [];
@@ -1647,6 +1714,16 @@ export async function runQuickChecks(workDir: string): Promise<QuickCheckResult>
         return { passed: false, checks, duration: Date.now() - startTime };
       }
     }
+  }
+
+  // 4.5 Framework config sanity — e.g. Tailwind v4 needs @tailwindcss/postcss,
+  // or the build emits no utilities and the app ships unstyled (visual QA misses this).
+  console.log('[quick-check] Checking Tailwind setup...');
+  const twCheck = checkTailwindSetup([workDir, project.frontendDir]);
+  checks.push(twCheck);
+  if (!twCheck.passed) {
+    console.log('[quick-check] Tailwind setup check failed — stopping early');
+    return { passed: false, checks, duration: Date.now() - startTime };
   }
 
   // 5. Frontend build
