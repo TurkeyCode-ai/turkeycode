@@ -209,6 +209,7 @@ those are planned for future phases — do NOT report them as issues.
 ${previousVisualContext}
 Review EVERY screenshot for these categories of issues:
 - **BLOCKERS**: Dead/broken elements, missing required UI, broken layouts, text overflow, unreadable content, broken images, elements that prevent usability, **low contrast text** (light text on light backgrounds, gray text on white, any text that is hard to read)
+- **AI-generated / template look (BLOCKER)**: the app must look hand-crafted, not AI-generated. Flag any of these CONCRETE tells as blockers (they are required design rules, not subjective preferences): visible gradients (backgrounds, buttons, or text); the default purple/indigo/violet "AI" palette; emojis used as icons, bullets, or in headings; a centered-everything layout (centered hero plus a centered three-card feature grid); or a generic untouched default-Tailwind starter look with no intentional design system.
 - **WARNINGS**: Wrong colors vs spec, wrong fonts vs spec, significant alignment issues, significant responsive breakage
 
 Do NOT flag as issues:

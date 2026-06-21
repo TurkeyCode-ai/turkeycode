@@ -10,6 +10,7 @@ import { PHASES_DIR } from '../constants';
 
 function getTypeSpecificRules(projectType: ProjectType): string {
   const webRules = `
+**DESIGN - do this for every screen: use the \`frontend-design\` skill and follow its hard rules without exception.** NO em-dashes anywhere in copy (hyphens only). NO emojis (use real SVG icons like Lucide). NO gradients, and not the default purple/indigo "AI" palette. ONE consistent alignment, left by default - never center-everything. Derive color, typography, and layout from THIS product, not a template. The result must look hand-crafted, not AI-generated; a bland default-Tailwind look is a failure.
 8. **No placeholder pages** - NEVER create stub pages with "coming soon" text. If a feature isn't in scope, don't create the page — remove the nav link instead.
 9. **No hardcoded localhost URLs** - Use environment variables for all URLs. For Next.js + Auth.js, use \`AUTH_TRUST_HOST=true\`. Never hardcode \`localhost:3000\`.
 10. **Text contrast** - ALL text must have sufficient contrast (WCAG AA: 4.5:1 body, 3:1 large). Never use light gray on white.
