@@ -10,8 +10,8 @@
  */
 
 import { execSync, spawn, ChildProcess } from 'child_process';
-import { existsSync, readFileSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { existsSync, readFileSync, readdirSync, Dirent } from 'fs';
+import { join, extname, relative } from 'path';
 
 // ═══════════════════════════════════════════
 // Public API types
@@ -1666,6 +1666,79 @@ function checkTailwindSetup(dirs: string[]): CheckResult {
   return { name: "Tailwind Setup", passed: true, message: "Tailwind v4 wired correctly (or not used)", duration: Date.now() - start };
 }
 
+const EM_DASH_RE = /[–—]/;
+// Pictographic emoji blocks + flags + the emoji variation selector. Deliberately
+// does NOT include arrows (U+2190-21FF) so "Next ->" style glyphs are fine.
+const EMOJI_RE = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{2B00}-\u{2BFF}\u{1F1E6}-\u{1F1FF}\u{FE0F}]/u;
+
+/**
+ * The two cheapest "an AI generated this" tells in a line of app source: em/en
+ * dashes (banned - hyphens only) and emojis (banned - real SVG icons instead).
+ * Pure + exported for unit tests.
+ */
+export function aiTellsInLine(line: string): Array<'em-dash' | 'emoji'> {
+  const tells: Array<'em-dash' | 'emoji'> = [];
+  if (EM_DASH_RE.test(line)) tells.push('em-dash');
+  if (EMOJI_RE.test(line)) tells.push('emoji');
+  return tells;
+}
+
+const AI_TELL_EXTS = new Set([
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.html', '.css', '.scss',
+  '.md', '.mdx', '.vue', '.svelte', '.astro', '.json',
+]);
+const AI_TELL_SKIP_DIRS = new Set([
+  'node_modules', '.next', 'dist', 'build', 'out', 'coverage', '.git', '.turkey', '.vercel', '.cache',
+]);
+
+function scanAiTells(workDir: string, cap = 50): Array<{ file: string; line: number; kind: string; snippet: string }> {
+  const hits: Array<{ file: string; line: number; kind: string; snippet: string }> = [];
+  const walk = (dir: string): void => {
+    if (hits.length >= cap) return;
+    let entries: Dirent[];
+    try { entries = readdirSync(dir, { withFileTypes: true }) as Dirent[]; } catch { return; }
+    for (const e of entries) {
+      if (hits.length >= cap) return;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) {
+        if (!AI_TELL_SKIP_DIRS.has(e.name)) walk(p);
+        continue;
+      }
+      if (!AI_TELL_EXTS.has(extname(e.name))) continue;
+      let content: string;
+      try { content = readFileSync(p, 'utf-8'); } catch { continue; }
+      const lines = content.split('\n');
+      for (let i = 0; i < lines.length && hits.length < cap; i++) {
+        for (const kind of aiTellsInLine(lines[i])) {
+          hits.push({ file: relative(workDir, p), line: i + 1, kind, snippet: lines[i].trim().slice(0, 80) });
+        }
+      }
+    }
+  };
+  walk(workDir);
+  return hits;
+}
+
+/**
+ * Deterministic backstop for the design bar: em-dashes and emojis are the two
+ * cheapest "an AI generated this" tells, and they are banned (hyphens + real SVG
+ * icons instead). Failing here routes them to the fix loop before QA.
+ */
+function checkNoAiTells(workDir: string): CheckResult {
+  const start = Date.now();
+  const hits = scanAiTells(workDir);
+  if (hits.length === 0) {
+    return { name: 'No AI Tells', passed: true, message: 'No em-dashes or emojis in app source', duration: Date.now() - start };
+  }
+  const sample = hits.slice(0, 12).map(h => `  ${h.file}:${h.line} [${h.kind}] ${h.snippet}`).join('\n');
+  return {
+    name: 'No AI Tells',
+    passed: false,
+    message: `Found ${hits.length} banned AI tell(s) - replace every em/en dash with a hyphen and every emoji with a real SVG icon (Lucide):\n${sample}`,
+    duration: Date.now() - start,
+  };
+}
+
 export async function runQuickChecks(workDir: string): Promise<QuickCheckResult> {
   const startTime = Date.now();
   const checks: CheckResult[] = [];
@@ -1748,6 +1821,15 @@ export async function runQuickChecks(workDir: string): Promise<QuickCheckResult>
   checks.push(twCheck);
   if (!twCheck.passed) {
     console.log('[quick-check] Tailwind setup check failed — stopping early');
+    return { passed: false, checks, duration: Date.now() - startTime };
+  }
+
+  // 4.6 No AI tells - em-dashes / emojis are banned (design bar). Deterministic.
+  console.log('[quick-check] Checking for AI tells (em-dashes / emojis)...');
+  const aiTellCheck = checkNoAiTells(workDir);
+  checks.push(aiTellCheck);
+  if (!aiTellCheck.passed) {
+    console.log(`[quick-check] AI-tells check failed - ${aiTellCheck.message.split('\n')[0]}`);
     return { passed: false, checks, duration: Date.now() - startTime };
   }
 

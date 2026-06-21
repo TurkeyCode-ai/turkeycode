@@ -412,6 +412,7 @@ ${flows}
 
 ### Classify findings:
 - **BLOCKER**: Dead elements, failed acceptance criteria, crashes, broken flows, missing required deliverables, placeholder "coming soon" pages
+- **BLOCKER (AI-generated look)**: the app must look hand-crafted, not AI-generated. These CONCRETE tells are blockers, not cosmetic warnings: visible gradients (backgrounds, buttons, or text), the default purple/indigo/violet "AI" palette, emojis used as icons/bullets/headings, em-dashes in copy, a centered-everything layout (centered hero plus centered three-card grid), or a generic untouched default-Tailwind starter look.
 - **WARNING**: Minor alignment, subtle color differences, font inconsistencies, UX suggestions
 - **OUT-OF-SCOPE**: Features not in this phase's deliverables — ignore these
 
