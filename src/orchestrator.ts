@@ -127,6 +127,15 @@ export function isBuildDoneStale(workDir: string, buildDonePath: string): boolea
  * Exact-match only, so any subdirectory (e.g. ~/projects/app, /tmp/build) is fine.
  * Pure for testing.
  */
+/**
+ * A fix session was a no-op when HEAD is unchanged from the pre-fix snapshot —
+ * the agent committed nothing, so re-running QA would only repeat the verdict.
+ * Pure decision (no git/IO) so it's unit-testable; the caller supplies both SHAs.
+ */
+export function isNoopFix(currentHead: string | null, preFixSha: string | null): boolean {
+  return !!preFixSha && !!currentHead && currentHead === preFixSha;
+}
+
 export function isUnsafeWorkDir(dir: string, home: string): boolean {
   const norm = (p: string): string => p.replace(/[/\\]+$/, '') || '/';
   const d = norm(dir);
@@ -1238,6 +1247,12 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
           if (phase?.branchName) {
             this.github.push(phase.branchName);
           }
+
+          // No-op guard: if the fix edited nothing, re-running QA is pointless.
+          if (this.fixWasNoop(preFixSha, attempt)) {
+            saveState(this.state);
+            break;
+          }
         }
       }
 
@@ -1368,6 +1383,11 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
           preFixSha = this.getGitHead();
           prevBlockerCount = reverted ? prevBlockerCount : currentBlockers;
           await this.runChunkedFixes(phaseNumber, attempt);
+          // No-op guard: a fix that changed nothing won't change the next verdict.
+          if (this.fixWasNoop(preFixSha, attempt)) {
+            saveState(this.state);
+            break;
+          }
         }
 
         saveState(this.state);
@@ -1480,6 +1500,11 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
           // After revert, keep original blocker count as baseline (not the inflated regression count)
           prevBlockerCount = reverted ? prevBlockerCount : currentBlockers;
           await this.runChunkedFixes(phaseNumber, attempt);
+          // No-op guard: if the fix edited nothing, the next QA round repeats this verdict.
+          if (this.fixWasNoop(preFixSha, attempt)) {
+            saveState(this.state);
+            break;
+          }
         }
       }
 
@@ -1961,6 +1986,30 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Detect a no-op fix: a fix session that committed nothing (HEAD unchanged since
+   * the pre-fix snapshot), i.e. the agent reported fixes but edited no files. The
+   * QA gates only verify a `.done` signal, not real work, so a no-op fix otherwise
+   * sails through and the loop re-runs full (expensive) QA on identical code —
+   * producing the same verdict and burning every remaining attempt. When the fix
+   * changed nothing, stop: re-running QA can't help, and a fresh build attempt is
+   * far more useful than another identical no-op fix.
+   */
+  private fixWasNoop(preFixSha: string | null, attempt: number): boolean {
+    if (!preFixSha) return false;
+    const head = this.getGitHead();
+    if (isNoopFix(head, preFixSha)) {
+      this.log(
+        `✖ Fix attempt ${attempt} changed NOTHING (empty diff vs ${preFixSha.slice(0, 8)}) — ` +
+        `the agent reported fixes but edited no files. Stopping QA retries; re-running QA on ` +
+        `unchanged code only repeats the same verdict.`
+      );
+      audit('fix_noop', { details: { attempt, sha: preFixSha } });
+      return true;
+    }
+    return false;
   }
 
   /**

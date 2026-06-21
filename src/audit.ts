@@ -24,6 +24,7 @@ export type AuditEvent =
   | 'fix_started'
   | 'fix_completed'
   | 'fix_reverted'
+  | 'fix_noop'
   | 'jira_sprint_created'
   | 'jira_ticket_created'
   | 'jira_time_logged'
