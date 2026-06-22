@@ -864,6 +864,22 @@ const INSTALL_RECIPES: Record<BackendType, Array<{ check: string; install: strin
  * Auto-install missing prerequisites for the detected stack.
  * Runs apt-get update once if any apt packages are needed.
  */
+/**
+ * In the build sandbox, datastores arrive as env vars (DATABASE_URL / REDIS_URL /
+ * MONGO_URL) from throwaway sidecars, and there is NO Docker daemon (unprivileged
+ * gVisor jail). A compose file or Dockerfile in the workspace is then the app's OWN
+ * deploy config, not infra to stand up now - so we must not try to install Docker
+ * or run docker-compose. Detected by the presence of an infra env var.
+ */
+export function infraProvidedByEnv(): boolean {
+  return !!(
+    process.env.DATABASE_URL ||
+    process.env.REDIS_URL ||
+    process.env.MONGO_URL ||
+    process.env.MONGODB_URI
+  );
+}
+
 function installPrerequisites(project: ProjectInfo): CheckResult {
   const start = Date.now();
   const installed: string[] = [];
@@ -884,8 +900,9 @@ function installPrerequisites(project: ProjectInfo): CheckResult {
     (r.success ? installed : failed).push('git');
   }
 
-  // Docker (if compose file exists)
-  if (project.hasDocker) {
+  // Docker (only if a compose file needs it AND the sandbox hasn't already
+  // provided the datastore via env — there's no Docker daemon in the jail).
+  if (project.hasDocker && !infraProvidedByEnv()) {
     if (!hasCommand('docker')) {
       ensureAptUpdated();
       const r = runCommand(
@@ -1758,8 +1775,9 @@ export async function runQuickChecks(workDir: string): Promise<QuickCheckResult>
     console.log(`[quick-check] ${prereqCheck.message}`);
   }
 
-  // 1. Docker services (starts DB containers, etc.)
-  if (project.hasDocker) {
+  // 1. Docker services (starts DB containers, etc.) — skip when the sandbox
+  // already provides the datastore via env (no Docker daemon in the jail).
+  if (project.hasDocker && !infraProvidedByEnv()) {
     console.log('[quick-check] Starting Docker services...');
     checks.push(await checkDockerServices(workDir));
     if (!checks[checks.length - 1].passed) {
