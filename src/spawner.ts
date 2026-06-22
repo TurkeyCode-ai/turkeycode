@@ -172,11 +172,23 @@ export class Spawner {
       const proc: ChildProcess = spawn('claude', args, {
         cwd,
         stdio: ['pipe', 'pipe', 'pipe'], // stdin piped for prompt, stdout/stderr piped for capture
+        // Own process group so we can reap the WHOLE tree. A QA/fix session
+        // backgrounds a dev server and (for visual QA) headless Chrome with `&`;
+        // those outlive the claude process and, across a multi-phase build, pile
+        // up until the jail OOMs. detached:true puts them in claude's group.
+        detached: true,
         env: {
           ...cleanEnv,
           CI: 'true' // Prevent interactive prompts
         }
       });
+
+      // Kill claude AND everything it backgrounded (dev servers, Chrome) by
+      // signalling the process group (negative pid). Safe to call repeatedly.
+      const reapGroup = (signal: NodeJS.Signals = 'SIGKILL'): void => {
+        if (!proc.pid) return;
+        try { process.kill(-proc.pid, signal); } catch { /* group already gone */ }
+      };
 
       // Write prompt directly to stdin and close it
       if (proc.stdin) {
@@ -187,21 +199,11 @@ export class Spawner {
       // Helper to gracefully kill the process
       const killProcess = (reason: string) => {
         killed = true;
-        this.log(`[${sessionName}] ${reason}, killing process...`);
-        try {
-          proc.kill('SIGTERM');
-        } catch {
-          // Ignore if already killed
-        }
-        // Force kill after 2 seconds if still running
+        this.log(`[${sessionName}] ${reason}, killing process group...`);
+        reapGroup('SIGTERM');
+        // Force-kill the whole group after 2 seconds if anything is still alive
         setTimeout(() => {
-          if (!proc.killed) {
-            try {
-              proc.kill('SIGKILL');
-            } catch {
-              // Ignore if already killed
-            }
-          }
+          if (!proc.killed) reapGroup('SIGKILL');
         }, 2000);
       };
 
@@ -268,6 +270,9 @@ export class Spawner {
         clearTimeout(timeoutHandle);
         clearInterval(watchdog);
         if (doneFileInterval) clearInterval(doneFileInterval);
+        // Reap any dev server / Chrome the session backgrounded and left running —
+        // this is what otherwise accumulates across phases until the jail OOMs.
+        reapGroup();
         const durationMs = Date.now() - startTime;
 
         // Exit code: 0 if done file was detected (task succeeded), 124 for timeout, otherwise actual code
@@ -302,6 +307,7 @@ export class Spawner {
         clearTimeout(timeoutHandle);
         clearInterval(watchdog);
         if (doneFileInterval) clearInterval(doneFileInterval);
+        reapGroup();
         const durationMs = Date.now() - startTime;
 
         this.log(`[${sessionName}] Spawn error: ${err.message}`);
