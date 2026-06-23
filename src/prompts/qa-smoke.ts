@@ -128,6 +128,8 @@ pkill -f "next dev" 2>/dev/null || true
 pkill -f "npm run dev" 2>/dev/null || true
 pkill -f "vite" 2>/dev/null || true
 pkill -f "webpack-dev-server" 2>/dev/null || true
+pkill -f "chrome" 2>/dev/null || true
+pkill -f "chromium" 2>/dev/null || true
 sleep 2
 
 # For Next.js: clear build cache to prevent stale vendor-chunks

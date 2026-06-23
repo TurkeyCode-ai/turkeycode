@@ -192,8 +192,10 @@ if [ -f prisma/schema.prisma ]; then
 fi
 
 # App actually starts?
-# Kill stale servers, clear cache, restart
+# Kill stale servers + browsers, clear cache, restart
 pkill -f "next dev" 2>/dev/null || true
+pkill -f "chrome" 2>/dev/null || true
+pkill -f "chromium" 2>/dev/null || true
 rm -rf .next 2>/dev/null || true
 \`\`\`
 

@@ -106,6 +106,9 @@ fi
 pkill -f "next dev" 2>/dev/null || true
 pkill -f "npm run dev" 2>/dev/null || true
 pkill -f "vite" 2>/dev/null || true
+pkill -f "chrome" 2>/dev/null || true
+pkill -f "chromium" 2>/dev/null || true
+pkill -f "headless_shell" 2>/dev/null || true
 sleep 2
 rm -rf .next 2>/dev/null || true
 PORT=5123 npm run dev &

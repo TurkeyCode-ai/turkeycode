@@ -1871,16 +1871,29 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
   private ensureGitignore(): void {
     const gitignorePath = join(this.workDir, '.gitignore');
 
+    // Patterns that MUST be ignored or a phase merge breaks: build artifacts and
+    // turkeycode state mutate during build/QA, and a committed copy makes the
+    // phase-merge git checkout abort ("untracked working tree files would be
+    // overwritten by merge"). An agent's .gitignore that omits .next/ is exactly
+    // how that happens.
+    const CRITICAL_IGNORES = [
+      'node_modules/', '.turkey/', '.next/', '.nuxt/', '.output/', '.vercel/',
+      'dist/', 'build/', 'out/', 'coverage/',
+    ];
+
     if (existsSync(gitignorePath)) {
-      // Never bail just because a .gitignore already exists (build agents create one) —
-      // we must still guarantee turkeycode's own state dir is ignored, or git checkout
-      // during phase merges fails on the constantly-mutating .turkey/state.json.
+      // A .gitignore already exists (build agents create one). Guarantee every
+      // critical artifact pattern is present, not just .turkey/.
       const content = readFileSync(gitignorePath, 'utf-8');
-      if (!/^\s*\.turkey\/?\s*$/m.test(content)) {
-        writeFileSync(gitignorePath, content.replace(/\s*$/, '') + '\n\n# turkeycode runtime state — never commit\n.turkey/\n');
-        this.log('Added .turkey/ to existing .gitignore');
+      const missing = CRITICAL_IGNORES.filter((p) => {
+        const base = p.replace(/\/$/, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return !new RegExp('^\\s*' + base + '/?\\s*$', 'm').test(content);
+      });
+      if (missing.length > 0) {
+        writeFileSync(gitignorePath, content.replace(/\s*$/, '') + '\n\n# turkeycode: never commit (build artifacts + state)\n' + missing.join('\n') + '\n');
+        this.log(`Ensured critical .gitignore entries: ${missing.join(', ')}`);
       }
-      this.untrackTurkeyState();
+      this.untrackIgnoredArtifacts();
       return;
     }
 
@@ -1896,6 +1909,10 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       'dist/',
       'build/',
       'out/',
+      '.next/',
+      '.nuxt/',
+      '.output/',
+      '.vercel/',
       '',
       '# Environment',
       '.env',
@@ -1916,16 +1933,6 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       '*.log',
       'npm-debug.log*',
     ];
-
-    // Next.js
-    if (/next/i.test(stack)) {
-      lines.push('', '# Next.js', '.next/', '.vercel/');
-    }
-
-    // Nuxt
-    if (/nuxt/i.test(stack)) {
-      lines.push('', '# Nuxt', '.nuxt/', '.output/');
-    }
 
     // Python
     if (/python|django|flask|fastapi/i.test(stack) || tech.packageManager === 'pip') {
@@ -1958,7 +1965,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
 
     writeFileSync(gitignorePath, lines.join('\n'));
     this.log('Created .gitignore based on project type');
-    this.untrackTurkeyState();
+    this.untrackIgnoredArtifacts();
   }
 
   /**
@@ -1967,12 +1974,16 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
    * during a phase merge aborts with "local changes would be overwritten", which used
    * to kill the run on the local-merge path (no remote / --no-push). Files stay on disk.
    */
-  private untrackTurkeyState(): void {
+  private untrackIgnoredArtifacts(): void {
+    // Drop turkeycode state AND build artifacts from the index if any ever got
+    // tracked (e.g. an agent committed .next/ before .gitignore covered it). A
+    // tracked, mutating artifact makes the phase-merge git checkout abort.
+    const paths = ['.turkey', '.next', '.nuxt', '.output', '.vercel', 'dist', 'build', 'out', 'coverage'];
     try {
-      const tracked = execSync('git ls-files .turkey', { cwd: this.workDir, encoding: 'utf-8', stdio: 'pipe' }).trim();
+      const tracked = execSync(`git ls-files ${paths.join(' ')}`, { cwd: this.workDir, encoding: 'utf-8', stdio: 'pipe' }).trim();
       if (tracked) {
-        execSync('git rm -r --cached --quiet .turkey', { cwd: this.workDir, stdio: 'pipe' });
-        this.log('Untracked .turkey/ from git (turkeycode state must never be committed)');
+        execSync(`git rm -r --cached --quiet --ignore-unmatch ${paths.join(' ')}`, { cwd: this.workDir, stdio: 'pipe' });
+        this.log('Untracked build artifacts + turkeycode state from git (must never be committed)');
       }
     } catch { /* not a git repo yet, or nothing tracked — fine */ }
   }
