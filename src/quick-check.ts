@@ -10,7 +10,7 @@
  */
 
 import { execSync, spawn, ChildProcess } from 'child_process';
-import { existsSync, readFileSync, readdirSync, Dirent } from 'fs';
+import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync, Dirent } from 'fs';
 import { join, extname, relative } from 'path';
 
 // ═══════════════════════════════════════════
@@ -1756,6 +1756,90 @@ function checkNoAiTells(workDir: string): CheckResult {
   };
 }
 
+/**
+ * Decide the seed-data verdict. Pure, for unit testing.
+ *
+ * Empty data is sometimes the CORRECT answer (a fresh to-do app, blog, CRM — data
+ * comes from users). So this only judges apps that ship a way to populate their
+ * OWN data (a seed / startup fetch). An app with no seed is never gated. When an
+ * app DOES ship a seed, it is promising to arrive populated, so a seed that errors
+ * or produces zero rows means the deployed app would ship broken/empty.
+ */
+export function seedDataVerdict(opts: { hasSeed: boolean; seedExitOk: boolean; rowCount: number | null }): { passed: boolean; reason: string } {
+  if (!opts.hasSeed) {
+    return { passed: true, reason: 'No seed / data-fetch — data is user-generated, so an empty start is correct.' };
+  }
+  if (!opts.seedExitOk) {
+    return { passed: false, reason: 'The app ships a seed (so it should arrive pre-populated) but the seed FAILED — the deployed app would show empty data.' };
+  }
+  if (opts.rowCount === 0) {
+    return { passed: false, reason: 'The seed ran without error but populated ZERO rows — the data pipeline silently produced nothing, so the deployed app would show empty data.' };
+  }
+  return { passed: true, reason: opts.rowCount === null ? 'Seed ran successfully.' : `Seed populated ${opts.rowCount} rows.` };
+}
+
+/** Detect how (if at all) the app populates its own data, and how to migrate first. */
+function detectSeed(workDir: string): { seedCmd: string | null; migrateCmd: string | null } {
+  const pkg = safeReadJson(join(workDir, 'package.json')) || {};
+  const scripts = (pkg.scripts || {}) as Record<string, string>;
+  let seedCmd: string | null = null;
+  if (scripts['db:seed']) seedCmd = 'npm run db:seed';
+  else if (scripts['seed']) seedCmd = 'npm run seed';
+  else if (pkg.prisma?.seed || existsSync(join(workDir, 'prisma', 'seed.ts')) || existsSync(join(workDir, 'prisma', 'seed.js'))) seedCmd = 'npx prisma db seed';
+
+  let migrateCmd: string | null = null;
+  if (scripts['db:migrate']) migrateCmd = 'npm run db:migrate';
+  else if (existsSync(join(workDir, 'prisma', 'schema.prisma'))) migrateCmd = 'npx prisma db push --skip-generate --accept-data-loss';
+  else if (scripts['migrate']) migrateCmd = 'npm run migrate';
+  return { seedCmd, migrateCmd };
+}
+
+/** Best-effort: total rows across all user tables (Postgres). null = inconclusive. */
+function countDbRows(workDir: string): number | null {
+  const script =
+    "const {Pool}=require('pg');const p=new Pool({connectionString:process.env.DATABASE_URL});" +
+    "(async()=>{try{await p.query('ANALYZE');" +
+    "const t=await p.query(\"SELECT schemaname,relname FROM pg_stat_user_tables\");let n=0;" +
+    "for(const r of t.rows){const c=await p.query('SELECT count(*)::int n FROM \"'+r.schemaname+'\".\"'+r.relname+'\"');n+=c.rows[0].n;}" +
+    "console.log(n);}catch(e){console.error(e.message);process.exit(2);}finally{await p.end();}})();";
+  try {
+    const dir = join(workDir, '.turkey');
+    mkdirSync(dir, { recursive: true });
+    const tmp = join(dir, 'count-rows.cjs');
+    writeFileSync(tmp, script);
+    const r = runCommand(`node ${JSON.stringify(tmp)}`, workDir, 30000);
+    if (!r.success) return null;
+    const n = parseInt((r.output.trim().split('\n').pop() || '').trim(), 10);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Data-realism gate: if the app populates its own data (ships a seed / startup
+ * fetch), run it and require it to succeed AND produce rows. This is what catches
+ * a broken data pipeline that an "it still renders an empty list" QA misses. Apps
+ * with no seed are skipped — empty is the correct answer for user-generated data.
+ */
+function checkSeedData(workDir: string): CheckResult {
+  const start = Date.now();
+  const { seedCmd, migrateCmd } = detectSeed(workDir);
+  if (!seedCmd) {
+    return { name: 'Seed Data', passed: true, message: 'No seed — data is user-generated; an empty start is expected', duration: Date.now() - start };
+  }
+  // Make sure tables exist, then run the seed against the env-provided DB.
+  if (migrateCmd) runCommand(migrateCmd, workDir, 120000);
+  const seedRes = runCommand(seedCmd, workDir, 180000);
+  const rowCount = seedRes.success ? countDbRows(workDir) : null;
+  const verdict = seedDataVerdict({ hasSeed: true, seedExitOk: seedRes.success, rowCount });
+  if (verdict.passed) {
+    return { name: 'Seed Data', passed: true, message: verdict.reason, duration: Date.now() - start };
+  }
+  const tail = seedRes.output.split('\n').slice(-12).join('\n');
+  return { name: 'Seed Data', passed: false, message: `${verdict.reason}\n--- seed output (tail) ---\n${tail}`, duration: Date.now() - start };
+}
+
 export async function runQuickChecks(workDir: string): Promise<QuickCheckResult> {
   const startTime = Date.now();
   const checks: CheckResult[] = [];
@@ -1856,6 +1940,19 @@ export async function runQuickChecks(workDir: string): Promise<QuickCheckResult>
     console.log(`[quick-check] Checking ${project.frontendType} frontend build...`);
     checks.push(checkFrontendBuild(project));
     if (!checks[checks.length - 1].passed) {
+      return { passed: false, checks, duration: Date.now() - startTime };
+    }
+  }
+
+  // 6. Seed data (data realism) — only for DB-backed apps. If the app populates its
+  // own data, the seed must succeed and produce rows. Apps with no seed are skipped:
+  // empty IS the correct answer for user-generated data, so they're never gated.
+  if (project.databases.length > 0) {
+    console.log('[quick-check] Checking seed data (data realism)...');
+    const seedCheck = checkSeedData(workDir);
+    checks.push(seedCheck);
+    if (!seedCheck.passed) {
+      console.log('[quick-check] Seed data check failed — data pipeline broken or empty');
       return { passed: false, checks, duration: Date.now() - startTime };
     }
   }
