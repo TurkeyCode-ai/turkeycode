@@ -1840,6 +1840,77 @@ function checkSeedData(workDir: string): CheckResult {
   return { name: 'Seed Data', passed: false, message: `${verdict.reason}\n--- seed output (tail) ---\n${tail}`, duration: Date.now() - start };
 }
 
+const DEAD_AFFORDANCE_PATTERNS: Array<{ kind: string; re: RegExp }> = [
+  { kind: 'empty-href', re: /href\s*=\s*(["'`])\s*\1/ },                            // href=""
+  { kind: 'hash-href', re: /href\s*=\s*\{?\s*(["'`])#\1\s*\}?/ },                   // href="#"
+  { kind: 'void-href', re: /href\s*=\s*(["'`])javascript:\s*void\(0\)\1/i },        // javascript:void(0)
+  { kind: 'empty-onclick', re: /onClick\s*=\s*\{\s*\(\s*[^)]*\)\s*=>\s*\{\s*\}\s*\}/ }, // onClick={() => {}}
+  { kind: 'empty-onclick', re: /onClick\s*=\s*\{\s*function\s*\([^)]*\)\s*\{\s*\}\s*\}/ },
+];
+
+/**
+ * Dead UI affordances - elements that look interactive but go nowhere: an anchor
+ * to "#"/""/void(0), or an empty click handler. The blatant "a button that does
+ * nothing" cases, catchable deterministically. (Subtler dead ends - a link to a
+ * useless page, a handler that does nothing meaningful - are left to QA.) Pure +
+ * exported for unit tests.
+ */
+export function deadAffordancesInLine(line: string): string[] {
+  const hits: string[] = [];
+  for (const { kind, re } of DEAD_AFFORDANCE_PATTERNS) {
+    if (re.test(line) && !hits.includes(kind)) hits.push(kind);
+  }
+  return hits;
+}
+
+const DEAD_AFFORDANCE_EXTS = new Set(['.tsx', '.jsx', '.vue', '.svelte', '.astro', '.html']);
+
+function scanDeadAffordances(workDir: string, cap = 50): Array<{ file: string; line: number; kind: string; snippet: string }> {
+  const hits: Array<{ file: string; line: number; kind: string; snippet: string }> = [];
+  const walk = (dir: string): void => {
+    if (hits.length >= cap) return;
+    let entries: Dirent[];
+    try { entries = readdirSync(dir, { withFileTypes: true }) as Dirent[]; } catch { return; }
+    for (const e of entries) {
+      if (hits.length >= cap) return;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) { if (!AI_TELL_SKIP_DIRS.has(e.name)) walk(p); continue; }
+      if (!DEAD_AFFORDANCE_EXTS.has(extname(e.name))) continue;
+      let content: string;
+      try { content = readFileSync(p, 'utf-8'); } catch { continue; }
+      const lines = content.split('\n');
+      for (let i = 0; i < lines.length && hits.length < cap; i++) {
+        for (const kind of deadAffordancesInLine(lines[i])) {
+          hits.push({ file: relative(workDir, p), line: i + 1, kind, snippet: lines[i].trim().slice(0, 90) });
+        }
+      }
+    }
+  };
+  walk(workDir);
+  return hits;
+}
+
+/**
+ * Deterministic dead-affordance gate: an element that looks clickable but goes
+ * nowhere (href="#"/""/void(0), or an empty onClick) is a "button that does
+ * nothing" - a blocker, routed to the fix loop. Subtler dead ends (a link to a
+ * useless destination) are QA's job.
+ */
+function checkDeadAffordances(workDir: string): CheckResult {
+  const start = Date.now();
+  const hits = scanDeadAffordances(workDir);
+  if (hits.length === 0) {
+    return { name: 'No Dead Affordances', passed: true, message: 'No dead links/handlers found', duration: Date.now() - start };
+  }
+  const sample = hits.slice(0, 12).map(h => `  ${h.file}:${h.line} [${h.kind}] ${h.snippet}`).join('\n');
+  return {
+    name: 'No Dead Affordances',
+    passed: false,
+    message: `Found ${hits.length} dead UI affordance(s) - looks interactive but does nothing. Wire each to a real action or remove it:\n${sample}`,
+    duration: Date.now() - start,
+  };
+}
+
 export async function runQuickChecks(workDir: string): Promise<QuickCheckResult> {
   const startTime = Date.now();
   const checks: CheckResult[] = [];
@@ -1933,6 +2004,17 @@ export async function runQuickChecks(workDir: string): Promise<QuickCheckResult>
   if (!aiTellCheck.passed) {
     console.log(`[quick-check] AI-tells check failed - ${aiTellCheck.message.split('\n')[0]}`);
     return { passed: false, checks, duration: Date.now() - startTime };
+  }
+
+  // 4.7 No dead affordances - links/handlers that look interactive but go nowhere.
+  if (project.hasFrontend) {
+    console.log('[quick-check] Checking for dead affordances (dead links / empty handlers)...');
+    const deadCheck = checkDeadAffordances(workDir);
+    checks.push(deadCheck);
+    if (!deadCheck.passed) {
+      console.log('[quick-check] Dead-affordance check failed - elements that do nothing');
+      return { passed: false, checks, duration: Date.now() - startTime };
+    }
   }
 
   // 5. Frontend build
