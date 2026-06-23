@@ -190,9 +190,10 @@ For web apps, use Playwright:
 npx playwright install chromium 2>/dev/null
 \`\`\`
 
-Test all buttons, links, inputs, forms. For each:
-- **DEAD** = no response when clicked/submitted
-- **LIVE** = something happens (page change, modal, toast, data update)`;
+Test EVERY button, link, nav item, icon-button, and form on the page - not just the spec's happy path. Click each one and check what actually happens. For each:
+- **DEAD (BLOCKER)** = no observable result, OR a result that's useless. This includes: nothing happens; \`href="#"\`/empty handler; a nav/link that just reloads the page you're already on; an outbound link that lands on a broken or empty destination (e.g. a "Get directions" link that opens a maps page with no route / an empty origin); a control for data that is always absent (e.g. a rating UI when every record's rating is null). A control that LOOKS interactive but does nothing useful is a blocker - "a button that does nothing" is exactly what users notice.
+- **LIVE** = something genuinely useful happens (navigation to a real page, a working modal/toast, a data update, an external link that opens a usable destination).
+Open every outbound link and confirm it reaches a usable page, not a dead end.`;
   }
 }
 
