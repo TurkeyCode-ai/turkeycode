@@ -1,11 +1,13 @@
 ---
 name: frontend-design
-description: "Design taste and hard rules for building app UIs that look hand-crafted, not AI-generated. Use whenever building or styling any web or app frontend - pages, components, layouts, marketing sites, dashboards, emails. Enforces no em-dashes, no emojis, no gradients, consistent left alignment, real type and color systems, and real content. NOT for backend/API logic or build orchestration."
+description: "Design taste and hard rules for building app UIs that are hand-crafted and genuinely impressive, not AI-generated. Use whenever building or styling any web or app frontend - pages, components, layouts, marketing sites, dashboards, emails. Enforces no em-dashes, no emojis, no gradients, consistent left alignment, real type and color systems, and real content - and pushes for a real identity (logo, palette, type, motion), purposeful motion, and a voice matched to the domain. NOT for backend/API logic or build orchestration."
 ---
 
 # Frontend Design
 
 Build interfaces a senior product designer would be proud to ship, for THIS product specifically. The failure mode to avoid is the "AI-built app" look: generic, templated, the same every time, decorated instead of designed. If the result could be any AI app, it is not done.
+
+The bar is not "works," and not even "doesn't look AI-made." The bar is **a product someone would be excited to use**: a coherent visual identity, motion that makes it feel alive, and a voice with a point of view. You reach that bar through craft and a strong identity - never through bolt-on effects. The Hard rules below are the floor (they prevent the AI-built look); the Identity, Motion, and Personality sections are the ceiling (they make it memorable). Both matter.
 
 ## Hard rules (non-negotiable)
 
@@ -44,6 +46,26 @@ These are the tells that scream "an AI made this." Never do them.
 - Write real, specific copy for the actual product. No lorem ipsum, no "Welcome to X," no "Your all-in-one solution for...," no "Powered by AI."
 - Concrete microcopy on buttons and states ("Save changes," "Find shops near me"), never generic ("Submit," "Click here").
 
+## Identity (give the product a face)
+
+- Derive a cohesive identity from the product and its domain, then build everything to it: a logo, a palette, a typeface pairing, and a motion language that all feel like one thing.
+- Generate a real **logo / wordmark** when the user did not provide one - a designed SVG mark, or a wordmark with intentional type and a small graphic element, NOT the app name set in the default font. The favicon is that mark, simplified. Never ship the framework default or a generic placeholder.
+- Identity is consistency: the same accent, type, spacing, and motion on every screen. A user should recognize the app from any single screen.
+
+## Motion (make it feel alive, with restraint)
+
+- Add purposeful motion: entrance for content as it loads, smooth transitions on view/route changes, responsive hover/focus feedback, real loading states, and a beat of feedback on state changes (saved, added, removed).
+- Restraint is the rule. Motion guides attention and confirms actions; it is never decoration. No bouncing, spinning, or animation for its own sake. Keep it quick (about 150-300ms) with real easing, not linear.
+- Animate `transform` and `opacity` (cheap, smooth); avoid animating layout. Respect `prefers-reduced-motion: reduce` - drop or minimize motion when the user asks for it.
+- A static page that never moves feels dead; gratuitous animation feels amateur. Aim for the small, tasteful in-between.
+
+## Personality and voice (match the domain)
+
+- Give the product a point of view, matched to what it IS. A kids' game is playful and loud; a finance or legal tool is calm, precise, and confident; a coffee app is warm and inviting. Let the domain set the boldness dial - within every Hard rule above.
+- Carry that voice through the copy, especially the empty, loading, and error states - that is where personality lives. "No shops match your filters yet - widen your search" beats "No results."
+- Give the app ONE signature moment: a detail, an interaction, or a piece of craft that makes someone smile or think "nice." One is enough - do not scatter gimmicks.
+- Personality is earned through craft and voice. Never fake it with emojis, gradients, or noise (those are banned above).
+
 ## Before you finish: self-check
 
 Scan the built UI and fix anything that fails:
@@ -55,5 +77,9 @@ Scan the built UI and fix anything that fails:
 - [ ] A real type scale and typeface, left-aligned body text
 - [ ] Color and layout derived from THIS product, not a template
 - [ ] Real copy and real states (hover, focus, empty, loading, error)
+- [ ] A real logo / wordmark (not the app name in a default font); favicon matches it
+- [ ] Purposeful, restrained motion (entrance, transitions, hover, loading); `prefers-reduced-motion` respected
+- [ ] A clear voice matched to the domain, carried into the empty/loading/error states; one signature moment
+- [ ] Hits the quality bar for its category, not the literal minimum
 
-If it looks like it came from a template, redesign it before shipping.
+If it looks like it came from a template, redesign it before shipping. If it merely works but no one would be excited to use it, it is not done.
