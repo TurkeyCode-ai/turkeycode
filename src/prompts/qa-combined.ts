@@ -417,7 +417,8 @@ ${flows}
 ### Classify findings:
 - **BLOCKER**: Dead elements, failed acceptance criteria, crashes, broken flows, missing required deliverables, placeholder "coming soon" pages
 - **BLOCKER (AI-generated look)**: the app must look hand-crafted, not AI-generated. These CONCRETE tells are blockers, not cosmetic warnings: visible gradients (backgrounds, buttons, or text), the default purple/indigo/violet "AI" palette, emojis used as icons/bullets/headings, em-dashes in copy, a centered-everything layout (centered hero plus centered three-card grid), or a generic untouched default-Tailwind starter look.
-- **WARNING**: Minor alignment, subtle color differences, font inconsistencies, UX suggestions
+- **BLOCKER (no point of view)**: the app should feel like a real product someone would be excited to use, not a bare list. The WORST cases are blockers (not subjective polish): NO real logo/wordmark (just the app name in a default font); a completely STATIC UI with no motion at all (no entrance/transition/hover feedback); generic voiceless copy with bland empty/loading/error states; OR clearly missing the "Genre Quality Bar" in the spec (lacks the table-stakes features named there). Judge against the genre bar if the spec has one. Do NOT block on subjective taste (color choices, exact motion timing, "I'd design it differently") - those are warnings.
+- **WARNING**: Minor alignment, subtle color differences, font inconsistencies, UX suggestions, subjective design/polish preferences
 - **OUT-OF-SCOPE**: Features not in this phase's deliverables — ignore these
 
 ### CLEAN = ZERO blockers (warnings OK)
