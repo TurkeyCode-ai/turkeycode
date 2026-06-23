@@ -389,17 +389,51 @@ const FRONTEND_DEPS: Array<{ deps: string[]; type: FrontendType }> = [
 // Utility functions
 // ═══════════════════════════════════════════
 
-function runCommand(cmd: string, cwd: string, timeoutMs: number = 30000): { success: boolean; output: string } {
+function runCommand(cmd: string, cwd: string, timeoutMs: number = 30000, extraEnv?: Record<string, string>): { success: boolean; output: string } {
   try {
     const output = execSync(cmd, {
       cwd,
       timeout: timeoutMs,
       encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: extraEnv ? { ...process.env, ...extraEnv } : process.env
     });
     return { success: true, output: output || '' };
   } catch (err: any) {
     return { success: false, output: err.stderr || err.message || 'Command failed' };
+  }
+}
+
+/**
+ * The build runs in a jail with NO direct egress and broken DNS - the ONLY way out
+ * is the egress proxy (HTTP_PROXY/HTTPS_PROXY, addressed by IP). Node's native
+ * `fetch` ignores those env vars, so a seed that uses `fetch` (or any undici-based
+ * client) dead-ends and hangs until it's killed - exactly what fails the data gate
+ * for a seed that would work fine in prod (where egress is direct). This returns a
+ * NODE_OPTIONS that --requires a tiny bootstrap setting undici's global dispatcher to
+ * an EnvHttpProxyAgent, making native fetch transparently proxy-aware for the seed.
+ * No proxy env (e.g. prod, or a local build) -> undefined (no-op). Belt to the build
+ * prompt's manual ProxyAgent guidance, not a replacement.
+ */
+export function proxyAwareSeedEnv(workDir: string): Record<string, string> | undefined {
+  const proxy = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
+  if (!proxy) return undefined;
+  let undiciPath: string;
+  try { undiciPath = require.resolve('undici'); } catch { return undefined; }
+  try {
+    const dir = join(workDir, '.turkey');
+    mkdirSync(dir, { recursive: true });
+    const bootPath = join(dir, 'proxy-bootstrap.cjs');
+    const script =
+      "try{var p=process.env.HTTPS_PROXY||process.env.https_proxy||process.env.HTTP_PROXY||process.env.http_proxy;" +
+      "if(p){var u=require(" + JSON.stringify(undiciPath) + ");" +
+      "if(u.EnvHttpProxyAgent){u.setGlobalDispatcher(new u.EnvHttpProxyAgent());}" +
+      "else if(u.ProxyAgent){u.setGlobalDispatcher(new u.ProxyAgent(p));}}}catch(e){}";
+    writeFileSync(bootPath, script);
+    const existing = process.env.NODE_OPTIONS ? process.env.NODE_OPTIONS + ' ' : '';
+    return { NODE_OPTIONS: existing + '--require ' + bootPath };
+  } catch {
+    return undefined;
   }
 }
 
@@ -1828,9 +1862,12 @@ function checkSeedData(workDir: string): CheckResult {
   if (!seedCmd) {
     return { name: 'Seed Data', passed: true, message: 'No seed — data is user-generated; an empty start is expected', duration: Date.now() - start };
   }
-  // Make sure tables exist, then run the seed against the env-provided DB.
-  if (migrateCmd) runCommand(migrateCmd, workDir, 120000);
-  const seedRes = runCommand(seedCmd, workDir, 180000);
+  // Make sure tables exist, then run the seed against the env-provided DB. In the
+  // jail, make native fetch proxy-aware so a fetch-based seed reaches its source
+  // (without this it hangs on broken DNS / no egress and gets killed at the timeout).
+  const seedEnv = proxyAwareSeedEnv(workDir);
+  if (migrateCmd) runCommand(migrateCmd, workDir, 120000, seedEnv);
+  const seedRes = runCommand(seedCmd, workDir, 180000, seedEnv);
   const rowCount = seedRes.success ? countDbRows(workDir) : null;
   const verdict = seedDataVerdict({ hasSeed: true, seedExitOk: seedRes.success, rowCount });
   if (verdict.passed) {
