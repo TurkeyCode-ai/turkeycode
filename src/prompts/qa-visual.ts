@@ -105,7 +105,7 @@ const routes = [
 ];
 
 async function capture() {
-  const browser = await chromium.launch();
+  const browser = await chromium.launch({ args: ['--disable-dev-shm-usage', '--no-sandbox'] });
 
   for (const route of routes) {
     // Desktop (1280x800)
