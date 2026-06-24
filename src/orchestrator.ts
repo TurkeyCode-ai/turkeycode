@@ -136,6 +136,68 @@ export function isNoopFix(currentHead: string | null, preFixSha: string | null):
   return !!preFixSha && !!currentHead && currentHead === preFixSha;
 }
 
+/** A finding as the verdict/visual JSON carries it. */
+export interface QaFinding {
+  type?: string;
+  description?: string;
+  location?: string;
+  severity?: string;
+}
+
+/**
+ * Pure merge: fold a visual QA report's findings into a phase verdict so its
+ * blockers gate the phase exactly like functional blockers. Visual findings are
+ * normalized to `type: 'visual'`; any visual blocker flips the verdict to
+ * NEEDS_FIX. Returns a new verdict object (does not mutate the input). Extracted
+ * from the orchestrator so the merge rules can be unit-tested without file I/O.
+ */
+export function mergeVisualIntoVerdict(
+  verdict: Record<string, unknown>,
+  visual: { blockers?: QaFinding[]; warnings?: QaFinding[] }
+): Record<string, unknown> {
+  const visualBlockers = Array.isArray(visual.blockers) ? visual.blockers : [];
+  const visualWarnings = Array.isArray(visual.warnings) ? visual.warnings : [];
+
+  const blockers = [
+    ...((verdict.blockers as QaFinding[]) || []),
+    ...visualBlockers.map((b) => ({
+      type: 'visual',
+      description: b.description || 'visual blocker',
+      location: b.location || 'unknown',
+      severity: b.severity || 'critical'
+    }))
+  ];
+  const warnings = [
+    ...((verdict.warnings as QaFinding[]) || []),
+    ...visualWarnings.map((w) => ({
+      type: 'visual',
+      description: w.description || 'visual warning',
+      location: w.location || 'unknown'
+    }))
+  ];
+
+  const summary = (verdict.summary as Record<string, unknown>) || undefined;
+  return {
+    ...verdict,
+    blockers,
+    warnings,
+    // A clean combined verdict must flip to NEEDS_FIX once visual adds a blocker.
+    verdict: blockers.length > 0 ? 'NEEDS_FIX' : verdict.verdict,
+    ...(summary
+      ? {
+          summary: {
+            ...summary,
+            visual: {
+              passed: visualBlockers.length === 0,
+              blockers: visualBlockers.length,
+              warnings: visualWarnings.length
+            }
+          }
+        }
+      : {})
+  };
+}
+
 export function isUnsafeWorkDir(dir: string, home: string): boolean {
   const norm = (p: string): string => p.replace(/[/\\]+$/, '') || '/';
   const d = norm(dir);
@@ -1132,6 +1194,11 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     if (!existsSync(qaDir)) {
       mkdirSync(qaDir, { recursive: true });
     }
+    // Clean stale screenshots so the visual pass captures this phase fresh
+    const screenshotsDir = `${SCREENSHOTS_DIR}/phase-${phaseNumber}`;
+    if (existsSync(screenshotsDir)) {
+      rmSync(screenshotsDir, { recursive: true, force: true });
+    }
 
     this.state.qaAttempts = 0;
     saveState(this.state);
@@ -1159,18 +1226,40 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
         diffStat = execSync(`git diff ${baseRef}...HEAD --stat`, { encoding: 'utf-8' }).trim();
       } catch { /* base branch may not exist on first run */ }
 
-      // Single combined QA session: smoke + functional + verdict
-      const qaResult = await this.spawner.run({
-        cwd: this.workDir,
-        prompt: buildQaCombinedPrompt(this.state, phaseNumber, attempt, diffStat, baseRef),
-        timeoutMs: QA_TIMEOUT_MS,
-        sessionName: `qa-combined-${attempt}`,
-        doneFile: `${QA_DIR}/phase-${phaseNumber}/verdict-${attempt}.done`,
-        model: getModelForPhase('qa-functional') // Sonnet for combined QA
-      });
+      // Combined QA session (smoke + functional + verdict) runs alongside a
+      // dedicated visual QA session (screenshots + blind fresh-context review).
+      // Visual is the secret sauce: a fresh agent that never saw the code judges
+      // the rendered UI from screenshots, with cross-attempt memory. It's skipped
+      // for non-visual project types (CLI/API/library/embedded).
+      const skipVisual = shouldSkipVisualQA(this.state.projectType || 'web-fullstack');
+      const qaTasks = [
+        {
+          cwd: this.workDir,
+          prompt: buildQaCombinedPrompt(this.state, phaseNumber, attempt, diffStat, baseRef),
+          timeoutMs: QA_TIMEOUT_MS,
+          sessionName: `qa-combined-${attempt}`,
+          doneFile: `${QA_DIR}/phase-${phaseNumber}/verdict-${attempt}.done`,
+          model: getModelForPhase('qa-functional') // Sonnet for combined QA
+        }
+      ];
+      if (skipVisual) {
+        this.log(`Skipping visual QA — project type "${this.state.projectType}" has no visual surface`);
+      } else {
+        this.log('--- Running combined QA + visual QA (parallel) ---');
+        qaTasks.push({
+          cwd: this.workDir,
+          prompt: buildQaVisualPrompt(this.state, phaseNumber, attempt),
+          timeoutMs: QA_TIMEOUT_MS,
+          sessionName: `qa-visual-${attempt}`,
+          doneFile: `${QA_DIR}/phase-${phaseNumber}/visual-${attempt}.done`,
+          model: getModelForPhase('qa-visual')
+        });
+      }
 
-      this.assertNotCreditExhausted(qaResult);
-      if (qaResult.rateLimited) {
+      const qaResults = await this.spawner.runParallel(qaTasks, skipVisual ? 1 : 2);
+
+      this.assertNotCreditExhausted(qaResults);
+      if (qaResults.some(r => r.rateLimited)) {
         rateLimitRetries = await this.waitForRateLimit(rateLimitRetries, 'QA');
         this.state.qaAttempts--;
         saveState(this.state);
@@ -1185,6 +1274,12 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
           this.log('Verdict file not created, creating fallback...');
           this.createFallbackVerdict(qaDir, phaseNumber, attempt);
         }
+      }
+
+      // Fold the visual pass's findings into the verdict so its blockers gate the
+      // phase exactly like functional blockers (and reach the fix agent).
+      if (!skipVisual) {
+        this.mergeVisualFindings(qaDir, phaseNumber, attempt);
       }
 
       // Check verdict
@@ -1862,6 +1957,46 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
 
     writeFileSync(verdictPath, JSON.stringify(verdictJson, null, 2));
     this.log(`Created fallback verdict: ${verdict} (${blockers.length} blockers)`);
+  }
+
+  /**
+   * Fold the dedicated visual QA pass's findings (visual-N.json) into the phase
+   * verdict (verdict-N.json). Visual blockers must gate the phase exactly like
+   * functional blockers — the verdict is the single source of truth the gate,
+   * blocker-count, warnings-only, and fix-prompt logic all read. Best-effort: a
+   * missing/garbled visual report never crashes QA (the combined verdict still
+   * carries its own design rubric as a safety net).
+   */
+  private mergeVisualFindings(qaDir: string, phaseNumber: number, attempt: number): void {
+    const visualJsonPath = `${qaDir}/visual-${attempt}.json`;
+    const verdictPath = `${qaDir}/verdict-${attempt}.json`;
+
+    if (!existsSync(visualJsonPath)) {
+      this.log('Visual QA produced no machine-readable report (visual-N.json) — skipping merge');
+      return;
+    }
+    if (!existsSync(verdictPath)) {
+      this.log('No verdict file to merge visual findings into — skipping merge');
+      return;
+    }
+
+    try {
+      const visual = JSON.parse(readFileSync(visualJsonPath, 'utf-8'));
+      const visualBlockers = Array.isArray(visual.blockers) ? visual.blockers : [];
+      const visualWarnings = Array.isArray(visual.warnings) ? visual.warnings : [];
+
+      if (visualBlockers.length === 0 && visualWarnings.length === 0) {
+        this.log('Visual QA: 0 blockers, 0 warnings — verdict unchanged');
+        return;
+      }
+
+      const verdict = JSON.parse(readFileSync(verdictPath, 'utf-8'));
+      const merged = mergeVisualIntoVerdict(verdict, visual);
+      writeFileSync(verdictPath, JSON.stringify(merged, null, 2));
+      this.log(`Merged visual QA into verdict: +${visualBlockers.length} blockers, +${visualWarnings.length} warnings`);
+    } catch (err) {
+      this.log(`Failed to merge visual findings (non-fatal): ${err}`);
+    }
   }
 
   /**
