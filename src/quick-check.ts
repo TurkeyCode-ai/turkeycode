@@ -477,30 +477,50 @@ function startProcess(cmd: string, cwd: string, readyCheck: (output: string) => 
       }
     };
 
+    // Single settle latch: the ready-check, timeout, exit, and error paths all race,
+    // so guard against double-resolve (which would clear the interval twice and could
+    // kill a server the caller already holds).
+    let settled = false;
+    let cleanExitAt: number | null = null;
+    const CLEAN_EXIT_GRACE_MS = 5000;
+    const settle = (value: StartResult) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(checkInterval);
+      resolve(value);
+    };
+
     const startTime = Date.now();
     const checkInterval = setInterval(async () => {
       if (Date.now() - startTime > timeoutMs) {
-        clearInterval(checkInterval);
         handle.kill();
-        resolve({ handle: null, output: outputBuf.trim(), reason: 'timeout' });
+        settle({ handle: null, output: outputBuf.trim(), reason: 'timeout' });
         return;
       }
       try {
         if (await readyCheck(outputBuf)) {
-          clearInterval(checkInterval);
-          resolve({ handle, output: outputBuf.trim(), reason: 'ready' });
+          settle({ handle, output: outputBuf.trim(), reason: 'ready' });
+          return;
         }
       } catch {}
+      // The start command exited cleanly (code 0) — typical of a daemonizing server
+      // like `rails server -d` whose foreground parent returns immediately. Keep
+      // ready-checking for a short grace window so the detached server can bind,
+      // then give up — instead of spinning to the full 240s timeout.
+      if (cleanExitAt !== null && Date.now() - cleanExitAt > CLEAN_EXIT_GRACE_MS) {
+        settle({ handle: null, output: outputBuf.trim(), reason: 'exited' });
+      }
     }, 500);
 
     proc.on('error', (err) => {
-      clearInterval(checkInterval);
-      resolve({ handle: null, output: outputBuf.trim() || err.message, reason: 'error' });
+      settle({ handle: null, output: outputBuf.trim() || err.message, reason: 'error' });
     });
     proc.on('exit', (code) => {
       if (code !== 0 && code !== null) {
-        clearInterval(checkInterval);
-        resolve({ handle: null, output: outputBuf.trim(), reason: 'crashed' });
+        settle({ handle: null, output: outputBuf.trim(), reason: 'crashed' });
+      } else {
+        // Clean exit: let the interval keep polling readyCheck for the grace window.
+        cleanExitAt = Date.now();
       }
     });
   });
@@ -1181,9 +1201,10 @@ function checkDatabase(workDir: string, dbType: DatabaseType, backendDir: string
     const dirsToTry = backendDir !== workDir ? [backendDir, workDir] : [workDir];
     for (const dir of dirsToTry) {
       if (existsSync(join(dir, 'node_modules', dbInfo.nodeDriver))) {
-        const testScript = buildNodeConnectionTest(dbType, connString);
+        const testScript = buildNodeConnectionTest(dbType);
         if (testScript) {
-          const nodeResult = runCommand(`node -e "${testScript}"`, dir, 10000);
+          // connString goes through env, never the shell command (injection-safe).
+          const nodeResult = runCommand(`node -e "${testScript}"`, dir, 10000, { TURKEY_DB_URL: connString });
           if (nodeResult.success) {
             return {
               name: `${label} Connection`, passed: true,
@@ -1199,9 +1220,11 @@ function checkDatabase(workDir: string, dbType: DatabaseType, backendDir: string
     const portMatch = connString.match(/:(\d+)/);
     const hostMatch = connString.match(/@([^:/?]+)/) || connString.match(/:\/\/([^:/?]+)/);
     if (portMatch && hostMatch) {
+      // Host goes through env (it can contain shell metachars); port is digits-only
+      // from the regex. Neither is interpolated raw into the shell command.
       const tcpResult = runCommand(
-        `node -e "require('net').createConnection(${portMatch[1]},'${hostMatch[1]}',()=>{console.log('OK');process.exit(0)}).on('error',()=>process.exit(1)).setTimeout(3000,()=>process.exit(1))"`,
-        workDir, 5000
+        `node -e "require('net').createConnection(Number(process.env.TURKEY_DB_PORT),process.env.TURKEY_DB_HOST,()=>{console.log('OK');process.exit(0)}).on('error',()=>process.exit(1)).setTimeout(3000,()=>process.exit(1))"`,
+        workDir, 5000, { TURKEY_DB_HOST: hostMatch[1], TURKEY_DB_PORT: portMatch[1] }
       );
       return {
         name: `${label} Connection`,
@@ -1230,19 +1253,25 @@ function checkDatabase(workDir: string, dbType: DatabaseType, backendDir: string
   };
 }
 
-/** Build a minimal Node.js connection test script for a given DB type */
-function buildNodeConnectionTest(dbType: DatabaseType, connString: string): string | null {
-  // Escape single quotes in connection string
-  const safe = connString.replace(/'/g, "\\'");
+/**
+ * Build a minimal Node.js connection test script for a given DB type. The
+ * connection string is read from process.env.TURKEY_DB_URL at runtime (passed via
+ * runCommand's extraEnv) rather than interpolated into the script source — a DB
+ * password containing a double-quote, `$`, or backtick would otherwise break out
+ * of the `node -e "..."` shell string (or inject a subshell). Never inline the
+ * connString here.
+ */
+export function buildNodeConnectionTest(dbType: DatabaseType): string | null {
+  const u = "process.env.TURKEY_DB_URL";
   switch (dbType) {
     case 'postgres':
-      return `const{Client}=require('pg');new Client({connectionString:'${safe}'}).connect().then(()=>{console.log('OK');process.exit(0)}).catch(()=>process.exit(1))`;
+      return `const{Client}=require('pg');new Client({connectionString:${u}}).connect().then(()=>{console.log('OK');process.exit(0)}).catch(()=>process.exit(1))`;
     case 'mysql':
-      return `const m=require('mysql2');const c=m.createConnection('${safe}');c.connect(e=>{if(e)process.exit(1);console.log('OK');process.exit(0)})`;
+      return `const m=require('mysql2');const c=m.createConnection(${u});c.connect(e=>{if(e)process.exit(1);console.log('OK');process.exit(0)})`;
     case 'mongodb':
-      return `const{MongoClient}=require('mongodb');MongoClient.connect('${safe}').then(()=>{console.log('OK');process.exit(0)}).catch(()=>process.exit(1))`;
+      return `const{MongoClient}=require('mongodb');MongoClient.connect(${u}).then(()=>{console.log('OK');process.exit(0)}).catch(()=>process.exit(1))`;
     case 'redis':
-      return `const{createClient}=require('redis');const c=createClient({url:'${safe}'});c.connect().then(()=>{console.log('OK');process.exit(0)}).catch(()=>process.exit(1))`;
+      return `const{createClient}=require('redis');const c=createClient({url:${u}});c.connect().then(()=>{console.log('OK');process.exit(0)}).catch(()=>process.exit(1))`;
     default:
       return null;
   }
@@ -1520,8 +1549,10 @@ async function checkBackendStarts(project: ProjectInfo): Promise<CheckResult> {
     for (const sc of config.startCmds) {
       if (sc.condition && !existsSync(join(startDir, sc.condition))) continue;
 
-      // For Node.js, check package.json scripts and use correct package manager
-      if (backendType === 'node' && sc.cmd.startsWith('npm') || sc.cmd.startsWith('PORT=')) {
+      // For Node.js, check package.json scripts and use correct package manager.
+      // Parens are load-bearing: without them `&&`/`||` precedence made the
+      // right-hand `startsWith('PORT=')` match for ANY backend type.
+      if (backendType === 'node' && (sc.cmd.startsWith('npm') || sc.cmd.startsWith('PORT='))) {
         const pkg = safeReadJson(join(startDir, 'package.json'));
         const cmdPart = sc.cmd.replace(/^PORT=\d+\s+/, '');
         const scriptName = cmdPart.replace('npm run ', '').replace('npm ', '');

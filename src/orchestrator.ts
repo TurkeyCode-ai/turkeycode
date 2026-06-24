@@ -1015,47 +1015,41 @@ export class Orchestrator {
   private async runPhaseBuild(phase: BuildPhase, phaseBranch: string): Promise<void> {
     this.log(`\n--- Building Phase ${phase.number}: ${phase.name} ---`);
 
-    phase.buildAttempts = (phase.buildAttempts || 0) + 1;
-    saveState(this.state);
-
     // Build prompt and run session
     const prompt = buildBuildPhasePrompt(this.state, phase);
+    const buildDoneFile = `${PHASES_DIR}/phase-${phase.number}/build.done`;
     const startTime = Date.now();
 
-    const buildDoneFile = `${PHASES_DIR}/phase-${phase.number}/build.done`;
-    const result = await this.spawner.run({
-      cwd: this.workDir,
-      prompt,
-      timeoutMs: PHASE_BUILD_TIMEOUT_MS,
-      sessionName: `build-phase-${phase.number}`,
-      doneFile: buildDoneFile,
-      model: getModelForPhase('build')
-    });
-
-    const durationMs = Date.now() - startTime;
-    phase.buildTime = this.formatDuration(durationMs);
-    saveState(this.state);
-
-    // Check gate
+    // Local retry loop: up to MAX_BUILD_RETRIES build sessions PER invocation.
+    // The retry decision is gated on `localAttempt`, NOT the persisted
+    // `phase.buildAttempts`. That counter accumulates across resumes, so gating on
+    // it starved a resumed phase of retries (it would run once, see the counter
+    // already at the cap, and exit without the retry the constant promises).
+    let result!: SpawnResult;
     let gateResult = this.gates.checkPhaseBuild(phase.number);
-
-    // Retry once if failed
-    if (!gateResult.passed && phase.buildAttempts < MAX_BUILD_RETRIES) {
-      this.log(`Build gate failed for phase ${phase.number}, retrying...`);
-      phase.buildAttempts++;
+    for (let localAttempt = 0; localAttempt < MAX_BUILD_RETRIES; localAttempt++) {
+      phase.buildAttempts = (phase.buildAttempts || 0) + 1;
       saveState(this.state);
 
-      await this.spawner.run({
+      if (localAttempt > 0) {
+        this.log(`Build gate failed for phase ${phase.number}, retrying (${localAttempt + 1}/${MAX_BUILD_RETRIES})...`);
+      }
+
+      result = await this.spawner.run({
         cwd: this.workDir,
         prompt,
         timeoutMs: PHASE_BUILD_TIMEOUT_MS,
-        sessionName: `build-phase-${phase.number}-retry`,
+        sessionName: localAttempt === 0 ? `build-phase-${phase.number}` : `build-phase-${phase.number}-retry`,
         doneFile: buildDoneFile,
         model: getModelForPhase('build')
       });
 
       gateResult = this.gates.checkPhaseBuild(phase.number);
+      if (gateResult.passed) break;
     }
+
+    phase.buildTime = this.formatDuration(Date.now() - startTime);
+    saveState(this.state);
 
     if (!gateResult.passed) {
       // Better diagnostics for short output (common failure mode)

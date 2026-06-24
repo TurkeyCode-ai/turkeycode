@@ -3,7 +3,7 @@
  * Wraps gh CLI - skips gracefully if not available
  */
 
-import { execSync, ExecSyncOptions } from 'child_process';
+import { execSync, execFileSync, ExecSyncOptions } from 'child_process';
 import fs, { writeFileSync, unlinkSync } from 'fs';
 import path, { join } from 'path';
 import { tmpdir } from 'os';
@@ -397,31 +397,35 @@ export class GitHubClient {
     this.removeStaleIndexLock();
     try {
       this.cleanTrackedIgnoredFiles();
-      // Resolve any unmerged files before staging (e.g. state.json after stash conflicts)
+      // Resolve any unmerged files before staging (e.g. state.json after stash conflicts).
+      // All git ops pinned to this.workDir — defaulting to process.cwd() risked
+      // operating on the wrong repo if cwd ever diverged from the build dir.
       try {
-        const unmerged = execSync('git diff --name-only --diff-filter=U', { encoding: 'utf-8' }).trim();
+        const unmerged = execSync('git diff --name-only --diff-filter=U', { encoding: 'utf-8', cwd: this.workDir }).trim();
         if (unmerged) {
           console.log(`Resolving ${unmerged.split('\n').length} unmerged file(s)...`);
           for (const file of unmerged.split('\n').filter(Boolean)) {
             try {
-              execSync(`git checkout --theirs "${file}"`, { stdio: 'inherit' });
-              execSync(`git add "${file}"`, { stdio: 'inherit' });
+              execSync(`git checkout --theirs "${file}"`, { stdio: 'inherit', cwd: this.workDir });
+              execSync(`git add "${file}"`, { stdio: 'inherit', cwd: this.workDir });
             } catch { /* ignore individual file errors */ }
           }
         }
       } catch { /* no unmerged files */ }
-      execSync('git add -A', { stdio: 'inherit' });
+      execSync('git add -A', { stdio: 'inherit', cwd: this.workDir });
       // Skip quietly if nothing is staged. A common false-error is when a fix
       // session (or another nested agent) already committed its work — the
       // outer commit call would otherwise noisily fail "nothing to commit."
       try {
-        execSync('git diff --cached --quiet', { stdio: 'pipe' });
+        execSync('git diff --cached --quiet', { stdio: 'pipe', cwd: this.workDir });
         // exit 0 → nothing staged, nothing to commit
         return true;
       } catch {
         // exit non-zero → staged changes present, proceed to commit
       }
-      execSync(`git commit -m "${message}"`, { stdio: 'inherit' });
+      // execFileSync (no shell) so a message with quotes/backticks/$(...) — phase
+      // names are model-generated — can't break the command or inject a subshell.
+      execFileSync('git', ['commit', '-m', message], { stdio: 'inherit', cwd: this.workDir });
       console.log(`Committed: ${message}`);
       return true;
     } catch (err) {
@@ -581,36 +585,29 @@ export class GitHubClient {
    * Merge one branch into another locally
    */
   mergeBranch(sourceBranch: string, targetBranch: string): boolean {
+    const opts = { stdio: 'inherit' as const, cwd: this.workDir };
     try {
-      execSync(`git checkout ${targetBranch}`, { stdio: 'inherit', cwd: this.workDir });
-      execSync(`git merge ${sourceBranch}`, { stdio: 'inherit', cwd: this.workDir });
+      execSync(`git checkout ${targetBranch}`, opts);
+      execSync(`git merge ${sourceBranch}`, opts);
       console.log(`Merged ${sourceBranch} into ${targetBranch}`);
       return true;
     } catch (err) {
-      // Try to resolve all conflicts: accept theirs (source branch has the latest code)
+      // A merge conflict means the target branch has commits that overlap the
+      // phase branch's changes. We must NOT auto-resolve by blindly accepting one
+      // side: the old `git checkout --theirs` blanket resolution silently DROPPED
+      // any commit that existed only on the target (e.g. a hotfix committed
+      // straight to main), reporting "merged" while losing that work. Abort and
+      // fail loudly so the conflict is surfaced instead of papered over with data
+      // loss — the caller treats `false` as a hard stop.
       try {
-        // Find all unmerged files and resolve with --theirs
-        const unmerged = execSync('git diff --name-only --diff-filter=U', { encoding: 'utf-8' }).trim();
-        if (unmerged) {
-          for (const file of unmerged.split('\n').filter(Boolean)) {
-            try {
-              execSync(`git checkout --theirs "${file}"`, { stdio: 'inherit' });
-              execSync(`git add "${file}"`, { stdio: 'inherit' });
-            } catch {
-              // If --theirs fails (e.g. file deleted on one side), just add it
-              try { execSync(`git add "${file}"`, { stdio: 'inherit' }); } catch { /* skip */ }
-            }
-          }
-        }
-        execSync(`git commit -m "Merge ${sourceBranch}: auto-resolved conflicts"`, { stdio: 'inherit' });
-        console.log(`Merged ${sourceBranch} into ${targetBranch} (auto-resolved ${unmerged.split('\n').length} conflicts)`);
-        return true;
-      } catch (mergeErr) {
-        // Last resort: abort the merge to leave git in a clean state
-        try { execSync('git merge --abort', { stdio: 'inherit' }); } catch { /* ignore */ }
-        console.error(`Failed to merge branch ${sourceBranch} into ${targetBranch}: ${mergeErr}`);
-        return false;
-      }
+        execSync('git merge --abort', { stdio: 'pipe', cwd: this.workDir });
+      } catch { /* nothing to abort */ }
+      console.error(
+        `Merge conflict: ${sourceBranch} into ${targetBranch} could not be auto-merged ` +
+        `without discarding commits on ${targetBranch}. Aborted to avoid data loss — ` +
+        `resolve the conflict manually and resume. Original error: ${err}`
+      );
+      return false;
     }
   }
 
