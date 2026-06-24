@@ -494,7 +494,7 @@ PRs welcome. The orchestrator is intentionally simple — it's a deterministic l
 - **Gates:** `src/gates.ts` — artifact validation logic
 - **Orchestrator:** `src/orchestrator.ts` — the main loop
 - **Scope:** `src/prompts/scope.ts` + `src/scope-session.ts` — the converge-first correction loop
-- **Tests:** `npm test` — 243 tests across 25 modules
+- **Tests:** `npm test` — 248 tests across 26 modules
 
 Please include tests for new features.
 

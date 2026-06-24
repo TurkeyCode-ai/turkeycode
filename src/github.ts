@@ -612,6 +612,74 @@ export class GitHubClient {
   }
 
   /**
+   * Attempt a local merge, surfacing conflicts instead of aborting. On conflict
+   * the merge is LEFT IN PROGRESS (conflict markers present) so a resolver agent
+   * can fix it and complete the commit — the caller owns cleanup. Returns the
+   * conflicted paths so the agent gets a precise work list.
+   */
+  tryMerge(sourceBranch: string, targetBranch: string): { status: 'clean' | 'conflict' | 'error'; conflictedPaths?: string[]; detail?: string } {
+    try {
+      execSync(`git checkout ${targetBranch}`, { stdio: 'pipe', cwd: this.workDir });
+    } catch (err) {
+      return { status: 'error', detail: `checkout ${targetBranch} failed: ${String(err)}` };
+    }
+    try {
+      execSync(`git merge --no-edit ${sourceBranch}`, { stdio: 'pipe', cwd: this.workDir });
+      return { status: 'clean' };
+    } catch {
+      const conflicted = this.getConflictedPaths();
+      if (conflicted.length > 0) {
+        return { status: 'conflict', conflictedPaths: conflicted };
+      }
+      // Merge failed but no conflicts staged — not something a resolver can fix.
+      try { execSync('git merge --abort', { stdio: 'pipe', cwd: this.workDir }); } catch { /* ignore */ }
+      return { status: 'error', detail: 'merge failed with no conflict markers — manual intervention required' };
+    }
+  }
+
+  /** Paths with unresolved merge conflicts (relative to the repo). */
+  getConflictedPaths(): string[] {
+    try {
+      const out = execSync('git diff --name-only --diff-filter=U', { encoding: 'utf-8', cwd: this.workDir }).trim();
+      return out ? out.split('\n').filter(Boolean) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** True if a merge is in progress (MERGE_HEAD present). */
+  mergeInProgress(): boolean {
+    try {
+      const gitDir = execSync('git rev-parse --git-dir', { encoding: 'utf-8', cwd: this.workDir }).trim();
+      return fs.existsSync(join(this.workDir, gitDir, 'MERGE_HEAD'));
+    } catch {
+      return false;
+    }
+  }
+
+  /** Abort an in-progress merge, restoring the pre-merge state. */
+  abortMerge(): void {
+    try { execSync('git merge --abort', { stdio: 'pipe', cwd: this.workDir }); } catch { /* nothing to abort */ }
+  }
+
+  /**
+   * Finish a merge whose conflicts have been resolved and staged. No-ops cleanly
+   * if the resolver agent already committed it. Returns false only if a commit was
+   * needed but failed (e.g. unresolved markers remain).
+   */
+  completeMerge(message: string): boolean {
+    if (!this.mergeInProgress()) return true; // agent already committed the merge
+    if (this.getConflictedPaths().length > 0) return false; // still unresolved
+    try {
+      execSync('git add -A', { stdio: 'pipe', cwd: this.workDir });
+      execFileSync('git', ['commit', '--no-edit', '-m', message], { stdio: 'pipe', cwd: this.workDir });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Get the default branch name (main or master)
    */
   /**

@@ -36,7 +36,8 @@ import {
   buildQaCombinedPrompt,
   buildCodeReviewPrompt,
   buildAarPrompt,
-  buildPolishPrompt
+  buildPolishPrompt,
+  buildMergeFixPrompt
 } from './prompts';
 import {
   RESEARCH_TIMEOUT_MS,
@@ -977,7 +978,7 @@ export class Orchestrator {
       merged = this.github.mergePR(phase.prNumber);
       if (!merged) {
         this.log(`PR merge failed for #${phase.prNumber}, falling back to local merge...`);
-        merged = this.github.mergeBranch(phaseBranch, mergeTarget);
+        merged = await this.mergeWithResolution(phaseNumber, phaseBranch, mergeTarget);
         if (merged && this.github.hasRemote()) {
           this.github.push(mergeTarget);
         }
@@ -985,7 +986,7 @@ export class Orchestrator {
     } else {
       // No PR (no remote) — merge locally
       this.log(`Merging ${phaseBranch} into ${mergeTarget} locally (no PR)`);
-      merged = this.github.mergeBranch(phaseBranch, mergeTarget);
+      merged = await this.mergeWithResolution(phaseNumber, phaseBranch, mergeTarget);
     }
 
     if (!merged) {
@@ -1674,6 +1675,107 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     });
 
     enforceGate(this.gates.checkCodeReview(phaseNumber));
+  }
+
+  /**
+   * Merge a phase branch into its target, recovering from conflicts with a
+   * merge-fix agent instead of hard-failing. A conflict means the target moved
+   * (e.g. a concurrent hotfix on main) in a way that overlaps the phase work;
+   * rather than discard a side (data loss) or stop the whole run, an agent
+   * resolves the conflict keeping both intents. Returns false only when the
+   * conflict is genuinely unresolvable (agent aborts or attempts exhaust) — the
+   * caller then stops with the work preserved on the phase branch.
+   */
+  private async mergeWithResolution(phaseNumber: number, sourceBranch: string, targetBranch: string): Promise<boolean> {
+    const outcome = this.github.tryMerge(sourceBranch, targetBranch);
+    if (outcome.status === 'clean') {
+      this.log(`Merged ${sourceBranch} into ${targetBranch}`);
+      return true;
+    }
+    if (outcome.status === 'error') {
+      this.log(`Merge error (${outcome.detail ?? 'unknown'}) — cannot auto-resolve.`);
+      this.github.abortMerge();
+      return false;
+    }
+
+    // status === 'conflict' — the merge is left in progress; resolve with an agent.
+    const MAX_MERGE_FIX_ATTEMPTS = 2;
+    let conflicted = outcome.conflictedPaths ?? this.github.getConflictedPaths();
+    this.log(`Merge conflict in ${conflicted.length} file(s): ${conflicted.join(', ')}. Running merge-fix...`);
+
+    for (let attempt = 1; attempt <= MAX_MERGE_FIX_ATTEMPTS; attempt++) {
+      const resolved = await this.runMergeFix(phaseNumber, sourceBranch, targetBranch, conflicted, attempt);
+      if (!resolved) {
+        this.log(`Merge-fix attempt ${attempt} did not resolve the conflict — aborting merge.`);
+        this.github.abortMerge();
+        return false;
+      }
+      // Agent reported success: it either committed the merge or just staged the
+      // resolutions. Complete the merge commit if needed, then verify it's clean.
+      const remaining = this.github.getConflictedPaths();
+      if (remaining.length === 0) {
+        if (this.github.completeMerge(`Merge ${sourceBranch} into ${targetBranch} (phase ${phaseNumber})`)) {
+          this.log(`Merge-fix resolved the conflict; merged ${sourceBranch} into ${targetBranch}`);
+          audit('phase_merge_fixed', { buildPhase: phaseNumber, details: { source: sourceBranch, target: targetBranch, attempt } });
+          return true;
+        }
+        this.log('Merge-fix staged a resolution but the merge commit failed — aborting.');
+        this.github.abortMerge();
+        return false;
+      }
+      conflicted = remaining; // still conflicted — try again on what's left
+    }
+
+    this.log(`Merge-fix exhausted ${MAX_MERGE_FIX_ATTEMPTS} attempts; conflict unresolved — aborting merge.`);
+    this.github.abortMerge();
+    return false;
+  }
+
+  /**
+   * Spawn a merge-fix agent to resolve an in-progress merge conflict. Returns
+   * true only on an explicit OK done-signal; an ABORTED signal, a missing done
+   * file, or a non-zero exit all return false.
+   */
+  private async runMergeFix(
+    phaseNumber: number,
+    sourceBranch: string,
+    targetBranch: string,
+    conflictedPaths: string[],
+    attempt: number
+  ): Promise<boolean> {
+    const phase = this.state.buildPhases.find(p => p.number === phaseNumber);
+    const qaDir = `${QA_DIR}/phase-${phaseNumber}`;
+    mkdirSync(qaDir, { recursive: true });
+    const doneFile = `${qaDir}/merge-fix-${attempt}.done`;
+    if (existsSync(doneFile)) { try { unlinkSync(doneFile); } catch { /* ignore */ } }
+
+    const result = await this.spawner.run({
+      cwd: this.workDir,
+      prompt: buildMergeFixPrompt({
+        repoPath: this.workDir,
+        branchName: sourceBranch,
+        baseBranch: targetBranch,
+        conflictedPaths,
+        mode: 'merge',
+        contextKey: `phase-${phaseNumber}`,
+        contextSummary: phase?.name,
+        doneFile,
+      }),
+      timeoutMs: FIX_TIMEOUT_MS,
+      sessionName: `merge-fix-phase-${phaseNumber}-${attempt}`,
+      doneFile,
+      model: getModelForPhase('qa-fix')
+    });
+
+    this.assertNotCreditExhausted(result);
+    if (result.exitCode !== 0 || !existsSync(doneFile)) return false;
+
+    const doneContent = readFileSync(doneFile, 'utf-8').trim();
+    if (doneContent.startsWith('ABORTED')) {
+      this.log(`Merge-fix reported it could not resolve the conflict: ${doneContent}`);
+      return false;
+    }
+    return true;
   }
 
   /**
