@@ -926,6 +926,13 @@ export class Orchestrator {
     }
     await this.runQAFast(phaseNumber);
 
+    // ==================== CODE REVIEW ====================
+    // Runs on the QA-passed code, before merge. Produces reviews/phase-N.md and
+    // hard-gates on that artifact existing (the documented flow:
+    // QA → code review → AAR → merge). Unlike AAR this is not opt-in — it's a
+    // standard phase gate.
+    await this.runCodeReview(phaseNumber);
+
     // ==================== AAR PHASE (opt-in) ====================
     // Off by default: the report is write-only (no downstream prompt reads it,
     // and QA is told to distrust it), so it's pure cost + a failure surface.
