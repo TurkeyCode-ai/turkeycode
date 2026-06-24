@@ -287,6 +287,7 @@ pio run --target size 2>&1 || true
 - Don't just check "it responds" — check "it does the RIGHT THING"
 - Verify data persistence (reload after save, check it's still there)
 - Use Playwright for browser flows, curl for API endpoints
+- Launch Chromium memory-frugally (the build runs in a memory-capped sandbox): \`chromium.launch({ args: ['--disable-dev-shm-usage', '--no-sandbox'] })\`. Reuse ONE browser for the whole run and \`await browser.close()\` when done - do not launch a browser per test.
 
 ### Security checks (if app has user accounts):
 - Auth guards on mutating routes (should 401 without login)

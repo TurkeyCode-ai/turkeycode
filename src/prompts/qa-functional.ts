@@ -116,7 +116,7 @@ For EACH core flow:
 import { chromium } from 'playwright';
 
 async function functionalTest() {
-  const browser = await chromium.launch();
+  const browser = await chromium.launch({ args: ['--disable-dev-shm-usage', '--no-sandbox'] });
   const page = await browser.newPage();
   await page.goto('http://localhost:5123');
 
