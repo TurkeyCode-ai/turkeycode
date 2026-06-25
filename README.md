@@ -24,15 +24,17 @@ You: "Build me a recipe sharing app"
     │
     ├── 🎯 Scope       → converge on what to build (interactive; skippable)
     ├── 🔍 Research    → tech stack, architecture, prior art
-    ├── 📋 Plan        → 2-5 build phases with deliverables
+    ├── 📋 Plan        → build phases with deliverables (as many as the work needs)
     │
-    └── FOR EACH PHASE:
-        ├── 🏗️  Build     → one focused coding session
-        ├── 🧪 QA        → smoke → functional → visual (parallel)
-        ├── 🔧 Fix       → all issues in one session, full context
-        ├── 🔁 Retry     → up to 5 QA cycles until clean
-        ├── 📝 Review    → code review with actionable feedback
-        └── ✅ Merge     → PR merged to main, next phase
+    ├── FOR EACH PHASE:
+    │   ├── 🏗️  Build     → one focused coding session
+    │   ├── 🧪 QA        → smoke → functional → visual (parallel)
+    │   ├── 🔧 Fix       → all issues in one session, full context
+    │   ├── 🔁 Retry     → up to 5 QA cycles until clean
+    │   ├── 📝 Review    → code review with actionable feedback
+    │   └── ✅ Merge     → PR merged to main, next phase
+    │
+    └── ✨ Polish      → one repo-wide warning cleanup, re-verify build, merge
 ```
 
 Every transition has an **artifact gate** — a file that must exist with valid content before the pipeline moves forward. No hallucinated progress. No skipped steps.
@@ -232,6 +234,9 @@ On attempt 2+, visual QA gets the previous report so it verifies fixes instead o
 ### ⚖️ Blockers vs Warnings
 Blockers = broken functionality, dead elements, failed acceptance criteria. Warnings = cosmetic polish. Zero blockers = pass, regardless of warning count.
 
+### ✨ Defer Warnings, Polish Once
+By default, phases gate on **blockers only** so a functionally-correct phase merges immediately instead of stalling on lint/style. Warnings accumulate, then a single **polish pass** after the last phase fixes them all coherently across the repo and **re-verifies the build** before merging — a cleanup that breaks compilation or boot is reverted, never merged. The end state is still ZERO warnings, just batched and verified at the end. Use `--strict-phases` to gate every phase on zero warnings (no polish pass), or `--allow-warnings` to leave warnings as-is.
+
 ## Architecture
 
 ```
@@ -246,7 +251,7 @@ project/
 │   │   ├── scope-decisions.md  # Decisions + corrections log
 │   │   ├── scope.done          # Scope gate artifact
 │   │   └── research.done       # Research gate artifact
-│   ├── phase-plan.json         # 2-5 phases with deliverables
+│   ├── phase-plan.json         # build phases with deliverables (as many as needed)
 │   ├── phases/
 │   │   └── phase-1.done        # Build completion gate
 │   ├── qa/
@@ -258,7 +263,8 @@ project/
 │   │       └── fixes-1.md      # Fix report
 │   ├── screenshots/            # Visual QA captures
 │   ├── reviews/                # Code review reports
-│   └── aar/                    # After-action reviews
+│   ├── aar/                    # After-action reviews (opt-in: --aar)
+│   └── polish/                 # End-of-build warning cleanup pass
 └── src/                        # Your app's source code
 ```
 
@@ -288,13 +294,24 @@ turkeycode resume                # Resume from last checkpoint
 turkeycode status                # Show current state
 turkeycode reset --force         # Nuke state, start fresh
 
-Options:
-  --spec <file>           Spec file for additional context (skips the scope loop)
+turkeycode story <description>   # Estimate, file, and run a Jira ticket
+turkeycode run-ticket <KEY>      # Run an existing Jira ticket (triage → build)
+turkeycode my-tickets            # Pick from tickets assigned to you
+
+Options (run):
+  -s, --spec <file>       Spec file for additional context (skips the scope loop)
   --persona <file>        Operating manual the scope agent embodies
-  --verbose               Show detailed output
-  --allow-warnings        Let cosmetic warnings pass QA
-  --jira <project>        Create Jira tickets per phase
-  --github <owner/repo>   Create PRs per phase
+  -v, --verbose           Show detailed output
+  -w, --allow-warnings    Let cosmetic warnings pass QA (no polish pass)
+  --strict-phases         Gate every phase on ZERO warnings (no polish pass)
+  --aar                   Generate a per-phase After-Action Report (extra session/phase)
+  --type <type>           Force project type (skips auto-detection)
+  --base <branch>         Base branch override (defaults to detected main/master)
+  --feature <branch>      Feature branch — phases branch off and merge back into it
+  --no-push               Skip git push (local-only repos or no_push remotes)
+  --no-pr                 Skip gh pr create (implied by --no-push)
+  -j, --jira <project>    Create Jira tickets per phase
+  -g, --github <repo>     Create PRs per phase (owner/repo)
 ```
 
 ## Deploy
@@ -437,7 +454,7 @@ links epics on both team- and company-managed projects.
 |------|----------|------------|
 | scope | `reference/scope.done` | starts with `DONE`, specs.md > 200 chars |
 | research | `reference/research.done` | exists, specs.md > 200 chars |
-| plan | `phase-plan.json` | valid JSON, 2-5 phases |
+| plan | `phase-plan.json` | valid JSON, ≥1 phase |
 | build | `phases/phase-N.done` | exists |
 | qa-smoke | `qa/phase-N/smoke-M.done` | exists |
 | qa-functional | `qa/phase-N/functional-M.done` | exists |
@@ -477,7 +494,7 @@ PRs welcome. The orchestrator is intentionally simple — it's a deterministic l
 - **Gates:** `src/gates.ts` — artifact validation logic
 - **Orchestrator:** `src/orchestrator.ts` — the main loop
 - **Scope:** `src/prompts/scope.ts` + `src/scope-session.ts` — the converge-first correction loop
-- **Tests:** `npm test` — 174 tests across 14 modules
+- **Tests:** `npm test` — 248 tests across 26 modules
 
 Please include tests for new features.
 

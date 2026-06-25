@@ -36,7 +36,8 @@ import {
   buildQaCombinedPrompt,
   buildCodeReviewPrompt,
   buildAarPrompt,
-  buildPolishPrompt
+  buildPolishPrompt,
+  buildMergeFixPrompt
 } from './prompts';
 import {
   RESEARCH_TIMEOUT_MS,
@@ -134,6 +135,68 @@ export function isBuildDoneStale(workDir: string, buildDonePath: string): boolea
  */
 export function isNoopFix(currentHead: string | null, preFixSha: string | null): boolean {
   return !!preFixSha && !!currentHead && currentHead === preFixSha;
+}
+
+/** A finding as the verdict/visual JSON carries it. */
+export interface QaFinding {
+  type?: string;
+  description?: string;
+  location?: string;
+  severity?: string;
+}
+
+/**
+ * Pure merge: fold a visual QA report's findings into a phase verdict so its
+ * blockers gate the phase exactly like functional blockers. Visual findings are
+ * normalized to `type: 'visual'`; any visual blocker flips the verdict to
+ * NEEDS_FIX. Returns a new verdict object (does not mutate the input). Extracted
+ * from the orchestrator so the merge rules can be unit-tested without file I/O.
+ */
+export function mergeVisualIntoVerdict(
+  verdict: Record<string, unknown>,
+  visual: { blockers?: QaFinding[]; warnings?: QaFinding[] }
+): Record<string, unknown> {
+  const visualBlockers = Array.isArray(visual.blockers) ? visual.blockers : [];
+  const visualWarnings = Array.isArray(visual.warnings) ? visual.warnings : [];
+
+  const blockers = [
+    ...((verdict.blockers as QaFinding[]) || []),
+    ...visualBlockers.map((b) => ({
+      type: 'visual',
+      description: b.description || 'visual blocker',
+      location: b.location || 'unknown',
+      severity: b.severity || 'critical'
+    }))
+  ];
+  const warnings = [
+    ...((verdict.warnings as QaFinding[]) || []),
+    ...visualWarnings.map((w) => ({
+      type: 'visual',
+      description: w.description || 'visual warning',
+      location: w.location || 'unknown'
+    }))
+  ];
+
+  const summary = (verdict.summary as Record<string, unknown>) || undefined;
+  return {
+    ...verdict,
+    blockers,
+    warnings,
+    // A clean combined verdict must flip to NEEDS_FIX once visual adds a blocker.
+    verdict: blockers.length > 0 ? 'NEEDS_FIX' : verdict.verdict,
+    ...(summary
+      ? {
+          summary: {
+            ...summary,
+            visual: {
+              passed: visualBlockers.length === 0,
+              blockers: visualBlockers.length,
+              warnings: visualWarnings.length
+            }
+          }
+        }
+      : {})
+  };
 }
 
 export function isUnsafeWorkDir(dir: string, home: string): boolean {
@@ -864,6 +927,13 @@ export class Orchestrator {
     }
     await this.runQAFast(phaseNumber);
 
+    // ==================== CODE REVIEW ====================
+    // Runs on the QA-passed code, before merge. Produces reviews/phase-N.md and
+    // hard-gates on that artifact existing (the documented flow:
+    // QA → code review → AAR → merge). Unlike AAR this is not opt-in — it's a
+    // standard phase gate.
+    await this.runCodeReview(phaseNumber);
+
     // ==================== AAR PHASE (opt-in) ====================
     // Off by default: the report is write-only (no downstream prompt reads it,
     // and QA is told to distrust it), so it's pure cost + a failure surface.
@@ -908,7 +978,7 @@ export class Orchestrator {
       merged = this.github.mergePR(phase.prNumber);
       if (!merged) {
         this.log(`PR merge failed for #${phase.prNumber}, falling back to local merge...`);
-        merged = this.github.mergeBranch(phaseBranch, mergeTarget);
+        merged = await this.mergeWithResolution(phaseNumber, phaseBranch, mergeTarget);
         if (merged && this.github.hasRemote()) {
           this.github.push(mergeTarget);
         }
@@ -916,7 +986,7 @@ export class Orchestrator {
     } else {
       // No PR (no remote) — merge locally
       this.log(`Merging ${phaseBranch} into ${mergeTarget} locally (no PR)`);
-      merged = this.github.mergeBranch(phaseBranch, mergeTarget);
+      merged = await this.mergeWithResolution(phaseNumber, phaseBranch, mergeTarget);
     }
 
     if (!merged) {
@@ -946,47 +1016,41 @@ export class Orchestrator {
   private async runPhaseBuild(phase: BuildPhase, phaseBranch: string): Promise<void> {
     this.log(`\n--- Building Phase ${phase.number}: ${phase.name} ---`);
 
-    phase.buildAttempts = (phase.buildAttempts || 0) + 1;
-    saveState(this.state);
-
     // Build prompt and run session
     const prompt = buildBuildPhasePrompt(this.state, phase);
+    const buildDoneFile = `${PHASES_DIR}/phase-${phase.number}/build.done`;
     const startTime = Date.now();
 
-    const buildDoneFile = `${PHASES_DIR}/phase-${phase.number}/build.done`;
-    const result = await this.spawner.run({
-      cwd: this.workDir,
-      prompt,
-      timeoutMs: PHASE_BUILD_TIMEOUT_MS,
-      sessionName: `build-phase-${phase.number}`,
-      doneFile: buildDoneFile,
-      model: getModelForPhase('build')
-    });
-
-    const durationMs = Date.now() - startTime;
-    phase.buildTime = this.formatDuration(durationMs);
-    saveState(this.state);
-
-    // Check gate
+    // Local retry loop: up to MAX_BUILD_RETRIES build sessions PER invocation.
+    // The retry decision is gated on `localAttempt`, NOT the persisted
+    // `phase.buildAttempts`. That counter accumulates across resumes, so gating on
+    // it starved a resumed phase of retries (it would run once, see the counter
+    // already at the cap, and exit without the retry the constant promises).
+    let result!: SpawnResult;
     let gateResult = this.gates.checkPhaseBuild(phase.number);
-
-    // Retry once if failed
-    if (!gateResult.passed && phase.buildAttempts < MAX_BUILD_RETRIES) {
-      this.log(`Build gate failed for phase ${phase.number}, retrying...`);
-      phase.buildAttempts++;
+    for (let localAttempt = 0; localAttempt < MAX_BUILD_RETRIES; localAttempt++) {
+      phase.buildAttempts = (phase.buildAttempts || 0) + 1;
       saveState(this.state);
 
-      await this.spawner.run({
+      if (localAttempt > 0) {
+        this.log(`Build gate failed for phase ${phase.number}, retrying (${localAttempt + 1}/${MAX_BUILD_RETRIES})...`);
+      }
+
+      result = await this.spawner.run({
         cwd: this.workDir,
         prompt,
         timeoutMs: PHASE_BUILD_TIMEOUT_MS,
-        sessionName: `build-phase-${phase.number}-retry`,
+        sessionName: localAttempt === 0 ? `build-phase-${phase.number}` : `build-phase-${phase.number}-retry`,
         doneFile: buildDoneFile,
         model: getModelForPhase('build')
       });
 
       gateResult = this.gates.checkPhaseBuild(phase.number);
+      if (gateResult.passed) break;
     }
+
+    phase.buildTime = this.formatDuration(Date.now() - startTime);
+    saveState(this.state);
 
     if (!gateResult.passed) {
       // Better diagnostics for short output (common failure mode)
@@ -1132,6 +1196,11 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     if (!existsSync(qaDir)) {
       mkdirSync(qaDir, { recursive: true });
     }
+    // Clean stale screenshots so the visual pass captures this phase fresh
+    const screenshotsDir = `${SCREENSHOTS_DIR}/phase-${phaseNumber}`;
+    if (existsSync(screenshotsDir)) {
+      rmSync(screenshotsDir, { recursive: true, force: true });
+    }
 
     this.state.qaAttempts = 0;
     saveState(this.state);
@@ -1159,18 +1228,40 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
         diffStat = execSync(`git diff ${baseRef}...HEAD --stat`, { encoding: 'utf-8' }).trim();
       } catch { /* base branch may not exist on first run */ }
 
-      // Single combined QA session: smoke + functional + verdict
-      const qaResult = await this.spawner.run({
-        cwd: this.workDir,
-        prompt: buildQaCombinedPrompt(this.state, phaseNumber, attempt, diffStat, baseRef),
-        timeoutMs: QA_TIMEOUT_MS,
-        sessionName: `qa-combined-${attempt}`,
-        doneFile: `${QA_DIR}/phase-${phaseNumber}/verdict-${attempt}.done`,
-        model: getModelForPhase('qa-functional') // Sonnet for combined QA
-      });
+      // Combined QA session (smoke + functional + verdict) runs alongside a
+      // dedicated visual QA session (screenshots + blind fresh-context review).
+      // Visual is the secret sauce: a fresh agent that never saw the code judges
+      // the rendered UI from screenshots, with cross-attempt memory. It's skipped
+      // for non-visual project types (CLI/API/library/embedded).
+      const skipVisual = shouldSkipVisualQA(this.state.projectType || 'web-fullstack');
+      const qaTasks = [
+        {
+          cwd: this.workDir,
+          prompt: buildQaCombinedPrompt(this.state, phaseNumber, attempt, diffStat, baseRef),
+          timeoutMs: QA_TIMEOUT_MS,
+          sessionName: `qa-combined-${attempt}`,
+          doneFile: `${QA_DIR}/phase-${phaseNumber}/verdict-${attempt}.done`,
+          model: getModelForPhase('qa-functional') // Sonnet for combined QA
+        }
+      ];
+      if (skipVisual) {
+        this.log(`Skipping visual QA — project type "${this.state.projectType}" has no visual surface`);
+      } else {
+        this.log('--- Running combined QA + visual QA (parallel) ---');
+        qaTasks.push({
+          cwd: this.workDir,
+          prompt: buildQaVisualPrompt(this.state, phaseNumber, attempt),
+          timeoutMs: QA_TIMEOUT_MS,
+          sessionName: `qa-visual-${attempt}`,
+          doneFile: `${QA_DIR}/phase-${phaseNumber}/visual-${attempt}.done`,
+          model: getModelForPhase('qa-visual')
+        });
+      }
 
-      this.assertNotCreditExhausted(qaResult);
-      if (qaResult.rateLimited) {
+      const qaResults = await this.spawner.runParallel(qaTasks, skipVisual ? 1 : 2);
+
+      this.assertNotCreditExhausted(qaResults);
+      if (qaResults.some(r => r.rateLimited)) {
         rateLimitRetries = await this.waitForRateLimit(rateLimitRetries, 'QA');
         this.state.qaAttempts--;
         saveState(this.state);
@@ -1185,6 +1276,12 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
           this.log('Verdict file not created, creating fallback...');
           this.createFallbackVerdict(qaDir, phaseNumber, attempt);
         }
+      }
+
+      // Fold the visual pass's findings into the verdict so its blockers gate the
+      // phase exactly like functional blockers (and reach the fix agent).
+      if (!skipVisual) {
+        this.mergeVisualFindings(qaDir, phaseNumber, attempt);
       }
 
       // Check verdict
@@ -1581,6 +1678,107 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
   }
 
   /**
+   * Merge a phase branch into its target, recovering from conflicts with a
+   * merge-fix agent instead of hard-failing. A conflict means the target moved
+   * (e.g. a concurrent hotfix on main) in a way that overlaps the phase work;
+   * rather than discard a side (data loss) or stop the whole run, an agent
+   * resolves the conflict keeping both intents. Returns false only when the
+   * conflict is genuinely unresolvable (agent aborts or attempts exhaust) — the
+   * caller then stops with the work preserved on the phase branch.
+   */
+  private async mergeWithResolution(phaseNumber: number, sourceBranch: string, targetBranch: string): Promise<boolean> {
+    const outcome = this.github.tryMerge(sourceBranch, targetBranch);
+    if (outcome.status === 'clean') {
+      this.log(`Merged ${sourceBranch} into ${targetBranch}`);
+      return true;
+    }
+    if (outcome.status === 'error') {
+      this.log(`Merge error (${outcome.detail ?? 'unknown'}) — cannot auto-resolve.`);
+      this.github.abortMerge();
+      return false;
+    }
+
+    // status === 'conflict' — the merge is left in progress; resolve with an agent.
+    const MAX_MERGE_FIX_ATTEMPTS = 3;
+    let conflicted = outcome.conflictedPaths ?? this.github.getConflictedPaths();
+    this.log(`Merge conflict in ${conflicted.length} file(s): ${conflicted.join(', ')}. Running merge-fix...`);
+
+    for (let attempt = 1; attempt <= MAX_MERGE_FIX_ATTEMPTS; attempt++) {
+      const resolved = await this.runMergeFix(phaseNumber, sourceBranch, targetBranch, conflicted, attempt);
+      if (!resolved) {
+        this.log(`Merge-fix attempt ${attempt} did not resolve the conflict — aborting merge.`);
+        this.github.abortMerge();
+        return false;
+      }
+      // Agent reported success: it either committed the merge or just staged the
+      // resolutions. Complete the merge commit if needed, then verify it's clean.
+      const remaining = this.github.getConflictedPaths();
+      if (remaining.length === 0) {
+        if (this.github.completeMerge(`Merge ${sourceBranch} into ${targetBranch} (phase ${phaseNumber})`)) {
+          this.log(`Merge-fix resolved the conflict; merged ${sourceBranch} into ${targetBranch}`);
+          audit('phase_merge_fixed', { buildPhase: phaseNumber, details: { source: sourceBranch, target: targetBranch, attempt } });
+          return true;
+        }
+        this.log('Merge-fix staged a resolution but the merge commit failed — aborting.');
+        this.github.abortMerge();
+        return false;
+      }
+      conflicted = remaining; // still conflicted — try again on what's left
+    }
+
+    this.log(`Merge-fix exhausted ${MAX_MERGE_FIX_ATTEMPTS} attempts; conflict unresolved — aborting merge.`);
+    this.github.abortMerge();
+    return false;
+  }
+
+  /**
+   * Spawn a merge-fix agent to resolve an in-progress merge conflict. Returns
+   * true only on an explicit OK done-signal; an ABORTED signal, a missing done
+   * file, or a non-zero exit all return false.
+   */
+  private async runMergeFix(
+    phaseNumber: number,
+    sourceBranch: string,
+    targetBranch: string,
+    conflictedPaths: string[],
+    attempt: number
+  ): Promise<boolean> {
+    const phase = this.state.buildPhases.find(p => p.number === phaseNumber);
+    const qaDir = `${QA_DIR}/phase-${phaseNumber}`;
+    mkdirSync(qaDir, { recursive: true });
+    const doneFile = `${qaDir}/merge-fix-${attempt}.done`;
+    if (existsSync(doneFile)) { try { unlinkSync(doneFile); } catch { /* ignore */ } }
+
+    const result = await this.spawner.run({
+      cwd: this.workDir,
+      prompt: buildMergeFixPrompt({
+        repoPath: this.workDir,
+        branchName: sourceBranch,
+        baseBranch: targetBranch,
+        conflictedPaths,
+        mode: 'merge',
+        contextKey: `phase-${phaseNumber}`,
+        contextSummary: phase?.name,
+        doneFile,
+      }),
+      timeoutMs: FIX_TIMEOUT_MS,
+      sessionName: `merge-fix-phase-${phaseNumber}-${attempt}`,
+      doneFile,
+      model: getModelForPhase('qa-fix')
+    });
+
+    this.assertNotCreditExhausted(result);
+    if (result.exitCode !== 0 || !existsSync(doneFile)) return false;
+
+    const doneContent = readFileSync(doneFile, 'utf-8').trim();
+    if (doneContent.startsWith('ABORTED')) {
+      this.log(`Merge-fix reported it could not resolve the conflict: ${doneContent}`);
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * Run AAR phase
    */
   private async runAAR(phaseNumber: number): Promise<void> {
@@ -1862,6 +2060,46 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
 
     writeFileSync(verdictPath, JSON.stringify(verdictJson, null, 2));
     this.log(`Created fallback verdict: ${verdict} (${blockers.length} blockers)`);
+  }
+
+  /**
+   * Fold the dedicated visual QA pass's findings (visual-N.json) into the phase
+   * verdict (verdict-N.json). Visual blockers must gate the phase exactly like
+   * functional blockers — the verdict is the single source of truth the gate,
+   * blocker-count, warnings-only, and fix-prompt logic all read. Best-effort: a
+   * missing/garbled visual report never crashes QA (the combined verdict still
+   * carries its own design rubric as a safety net).
+   */
+  private mergeVisualFindings(qaDir: string, phaseNumber: number, attempt: number): void {
+    const visualJsonPath = `${qaDir}/visual-${attempt}.json`;
+    const verdictPath = `${qaDir}/verdict-${attempt}.json`;
+
+    if (!existsSync(visualJsonPath)) {
+      this.log('Visual QA produced no machine-readable report (visual-N.json) — skipping merge');
+      return;
+    }
+    if (!existsSync(verdictPath)) {
+      this.log('No verdict file to merge visual findings into — skipping merge');
+      return;
+    }
+
+    try {
+      const visual = JSON.parse(readFileSync(visualJsonPath, 'utf-8'));
+      const visualBlockers = Array.isArray(visual.blockers) ? visual.blockers : [];
+      const visualWarnings = Array.isArray(visual.warnings) ? visual.warnings : [];
+
+      if (visualBlockers.length === 0 && visualWarnings.length === 0) {
+        this.log('Visual QA: 0 blockers, 0 warnings — verdict unchanged');
+        return;
+      }
+
+      const verdict = JSON.parse(readFileSync(verdictPath, 'utf-8'));
+      const merged = mergeVisualIntoVerdict(verdict, visual);
+      writeFileSync(verdictPath, JSON.stringify(merged, null, 2));
+      this.log(`Merged visual QA into verdict: +${visualBlockers.length} blockers, +${visualWarnings.length} warnings`);
+    } catch (err) {
+      this.log(`Failed to merge visual findings (non-fatal): ${err}`);
+    }
   }
 
   /**

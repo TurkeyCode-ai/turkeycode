@@ -30,6 +30,7 @@ export function buildQaVisualPrompt(
   const qaDir = `${QA_DIR}/phase-${phaseNumber}`;
   const screenshotsDir = `${SCREENSHOTS_DIR}/phase-${phaseNumber}`;
   const visualReport = `${qaDir}/visual-${attempt}.md`;
+  const visualJson = `${qaDir}/visual-${attempt}.json`;
   const visualDone = `${qaDir}/visual-${attempt}.done`;
 
   // Format deliverables list
@@ -271,9 +272,31 @@ After getting the review agent's response, create this file:
 
 ---
 
+## MACHINE-READABLE OUTPUT: ${visualJson}
+
+ALSO write a JSON file so the orchestrator can fold these findings into the phase
+verdict. Every blocker here counts toward the QA gate exactly like a functional
+blocker — so be precise and do not invent nitpicks.
+
+\`\`\`json
+{
+  "blockers": [
+    { "type": "visual", "description": "[screenshot] what's broken", "location": "route/viewport", "severity": "critical" }
+  ],
+  "warnings": [
+    { "type": "visual", "description": "[screenshot] cosmetic issue", "location": "route/viewport" }
+  ]
+}
+\`\`\`
+
+If there are zero blockers and zero warnings, write \`{ "blockers": [], "warnings": [] }\`.
+The \`description\` and \`location\` MUST mirror what you wrote in the markdown report.
+
+---
+
 ## DONE SIGNAL: ${visualDone}
 
-When complete:
+When complete (both ${visualReport} AND ${visualJson} written):
 \`\`\`bash
 mkdir -p ${qaDir}
 echo "DONE - Visual test completed at $(date -Iseconds)" > ${visualDone}

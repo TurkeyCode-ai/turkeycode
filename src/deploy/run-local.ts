@@ -7,7 +7,7 @@
 
 import { existsSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { execSync, spawn } from 'child_process';
+import { execSync, execFileSync, spawn } from 'child_process';
 import type { ProjectDetection, Features, Runtime, Stack } from './detect';
 
 const COMPOSE_FILE = 'docker-compose.turkeycode.yml';
@@ -66,7 +66,7 @@ ${buildCmd}
 ENV NODE_ENV=production
 ENV PORT=3000
 EXPOSE 3000
-CMD ["sh", "-c", "${startCmd}"]
+CMD ["sh", "-c", ${JSON.stringify(startCmd)}]
 `;
     }
 
@@ -89,7 +89,7 @@ RUN ${installCmd}
 COPY . .
 ENV PORT=3000
 EXPOSE 3000
-CMD ["sh", "-c", "${startCmd}"]
+CMD ["sh", "-c", ${JSON.stringify(startCmd)}]
 `;
     }
 
@@ -107,7 +107,7 @@ WORKDIR /app
 COPY --from=builder /app/app .
 ENV PORT=3000
 EXPOSE 3000
-CMD ["${startCmd}"]
+CMD [${JSON.stringify(startCmd)}]
 `;
     }
 
@@ -139,7 +139,7 @@ RUN bundle install
 COPY . .
 ENV PORT=3000
 EXPOSE 3000
-CMD ["sh", "-c", "${startCmd}"]
+CMD ["sh", "-c", ${JSON.stringify(startCmd)}]
 `;
     }
 
@@ -169,6 +169,26 @@ EXPOSE 3000
 CMD ["npm", "start"]
 `;
   }
+}
+
+/**
+ * Resolve the migration command to run before the app boots. Falls back to
+ * Prisma's `db push` for Node+Postgres projects that ship Prisma but declare no
+ * explicit migrate script — without this fallback such an app boots against an
+ * empty database and every query 500s. (Previously this fallback was computed in
+ * buildCompose but discarded, and runLocal only read detection.scripts.migrate.)
+ */
+export function resolveMigrateCmd(detection: ProjectDetection, cwd: string): string | undefined {
+  if (detection.scripts.migrate) return detection.scripts.migrate;
+  if (detection.features.database === 'postgres' && detection.runtime === 'node') {
+    try {
+      const pkg = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf-8'));
+      if (pkg.dependencies?.['@prisma/client'] || pkg.devDependencies?.prisma) {
+        return 'npx prisma db push';
+      }
+    } catch { /* ignore */ }
+  }
+  return undefined;
 }
 
 function buildCompose(detection: ProjectDetection, cwd: string): ComposeFile {
@@ -293,20 +313,6 @@ function buildCompose(detection: ProjectDetection, cwd: string): ComposeFile {
     }
   }
 
-  // Migration command
-  let migrateCmd: string | undefined;
-  if (detection.scripts.migrate) {
-    migrateCmd = detection.scripts.migrate;
-  } else if (features.database === 'postgres' && detection.runtime === 'node') {
-    // Check for Prisma
-    try {
-      const pkg = JSON.parse(readFileSync(join(cwd, 'package.json'), 'utf-8'));
-      if (pkg.dependencies?.['@prisma/client'] || pkg.devDependencies?.prisma) {
-        migrateCmd = 'npx prisma db push';
-      }
-    } catch { /* ignore */ }
-  }
-
   services.app = {
     build: { context: '.', dockerfile: dockerfileName },
     ports: ['3000:3000'],
@@ -388,8 +394,8 @@ export async function runLocal(cwd: string, detection: ProjectDetection): Promis
   writeFileSync(composePath, yaml);
   console.log(`  Written to ${COMPOSE_FILE}`);
 
-  // Run migrations if needed
-  const migrateCmd = detection.scripts.migrate;
+  // Run migrations if needed (includes the Prisma db-push fallback)
+  const migrateCmd = resolveMigrateCmd(detection, cwd);
 
   // List services
   const serviceNames = Object.keys(compose.services).filter(s => s !== 'app');
@@ -436,14 +442,17 @@ export async function runLocal(cwd: string, detection: ProjectDetection): Promis
       await new Promise(r => setTimeout(r, 3000));
     }
 
-    // Run migrations
+    // Run migrations. migrateCmd is passed as a discrete argv element to
+    // `sh -c` (no outer shell), so a script containing quotes can't break the
+    // command. composeCmd is the hardcoded `docker compose`.
     if (migrateCmd) {
       console.log(`  Running migrations: ${migrateCmd}`);
       try {
-        execSync(`${composeCmd} -f ${COMPOSE_FILE} -p ${appName} run --rm app sh -c "${migrateCmd}"`, {
-          cwd,
-          stdio: 'inherit',
-        });
+        execFileSync(
+          'docker',
+          ['compose', '-f', COMPOSE_FILE, '-p', appName, 'run', '--rm', 'app', 'sh', '-c', migrateCmd],
+          { cwd, stdio: 'inherit' }
+        );
       } catch {
         console.log('  ⚠️  Migration failed — app may still work');
       }

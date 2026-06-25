@@ -11,9 +11,13 @@ import type { ProjectDetection } from './detect';
 const EXCLUDE_PATTERNS = [
   'node_modules',
   '.git',
+  // Env files carry secrets and must never ship in the image. `.env` + `.env.*`
+  // covers every variant (.env.local, .env.production, .env.staging, …) at any
+  // depth — the previous list missed .env.production/.env.development, so a
+  // monorepo's backend/.env.production was tarred and uploaded off-box. Config is
+  // injected at deploy time (turkey deploy --env), not baked into the tarball.
   '.env',
-  '.env.local',
-  '.env.*.local',
+  '.env.*',
   '.turkey',
   '.DS_Store',
   'Thumbs.db',
