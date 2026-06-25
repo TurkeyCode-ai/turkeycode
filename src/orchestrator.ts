@@ -1699,7 +1699,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     }
 
     // status === 'conflict' — the merge is left in progress; resolve with an agent.
-    const MAX_MERGE_FIX_ATTEMPTS = 2;
+    const MAX_MERGE_FIX_ATTEMPTS = 3;
     let conflicted = outcome.conflictedPaths ?? this.github.getConflictedPaths();
     this.log(`Merge conflict in ${conflicted.length} file(s): ${conflicted.join(', ')}. Running merge-fix...`);
 
