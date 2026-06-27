@@ -1734,15 +1734,18 @@ export function aiTellsInLine(line: string): Array<'em-dash' | 'emoji'> {
   return tells;
 }
 
+// Em-dashes / emojis are a DESIGN bar, so only scan USER-FACING UI files - the
+// markup, component, and style files that render to the screen. Backend code
+// (seeds, scripts, API routes, server libs in .ts/.js), config (.json), and docs
+// (.md) are NOT user-facing; an emoji in a seed's console.log is fine.
 const AI_TELL_EXTS = new Set([
-  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.html', '.css', '.scss',
-  '.md', '.mdx', '.vue', '.svelte', '.astro', '.json',
+  '.tsx', '.jsx', '.vue', '.svelte', '.astro', '.html', '.css', '.scss', '.mdx',
 ]);
 const AI_TELL_SKIP_DIRS = new Set([
   'node_modules', '.next', 'dist', 'build', 'out', 'coverage', '.git', '.turkey', '.vercel', '.cache',
 ]);
 
-function scanAiTells(workDir: string, cap = 50): Array<{ file: string; line: number; kind: string; snippet: string }> {
+export function scanAiTells(workDir: string, cap = 50): Array<{ file: string; line: number; kind: string; snippet: string }> {
   const hits: Array<{ file: string; line: number; kind: string; snippet: string }> = [];
   const walk = (dir: string): void => {
     if (hits.length >= cap) return;
@@ -1760,6 +1763,8 @@ function scanAiTells(workDir: string, cap = 50): Array<{ file: string; line: num
       try { content = readFileSync(p, 'utf-8'); } catch { continue; }
       const lines = content.split('\n');
       for (let i = 0; i < lines.length && hits.length < cap; i++) {
+        // Debug/log output is not user-facing even in a UI file - skip console.* lines.
+        if (/\bconsole\s*\.\s*(log|warn|error|info|debug|trace)\b/.test(lines[i])) continue;
         for (const kind of aiTellsInLine(lines[i])) {
           hits.push({ file: relative(workDir, p), line: i + 1, kind, snippet: lines[i].trim().slice(0, 80) });
         }
@@ -2035,12 +2040,15 @@ export async function runQuickChecks(workDir: string): Promise<QuickCheckResult>
   }
 
   // 4.6 No AI tells - em-dashes / emojis are banned (design bar). Deterministic.
-  console.log('[quick-check] Checking for AI tells (em-dashes / emojis)...');
-  const aiTellCheck = checkNoAiTells(workDir);
-  checks.push(aiTellCheck);
-  if (!aiTellCheck.passed) {
-    console.log(`[quick-check] AI-tells check failed - ${aiTellCheck.message.split('\n')[0]}`);
-    return { passed: false, checks, duration: Date.now() - startTime };
+  // Frontend-only: this is a visual design rule, scanned over user-facing UI files.
+  if (project.hasFrontend) {
+    console.log('[quick-check] Checking for AI tells (em-dashes / emojis)...');
+    const aiTellCheck = checkNoAiTells(workDir);
+    checks.push(aiTellCheck);
+    if (!aiTellCheck.passed) {
+      console.log(`[quick-check] AI-tells check failed - ${aiTellCheck.message.split('\n')[0]}`);
+      return { passed: false, checks, duration: Date.now() - startTime };
+    }
   }
 
   // 4.7 No dead affordances - links/handlers that look interactive but go nowhere.
