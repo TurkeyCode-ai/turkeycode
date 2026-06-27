@@ -65,7 +65,7 @@ program
   .command('run')
   .description('Run the full orchestration loop (a bare description auto-enters the interactive scope loop first on a TTY; skip with --spec)')
   .argument('<description>', 'Project description')
-  .option('-j, --jira <project>', 'Jira project key')
+  .option('-j, --jira <project>', 'Opt in to Jira tracking with this project key (Jira is off by default; or set JIRA_ENABLED=1)')
   .option('-g, --github <repo>', 'GitHub repo (owner/repo)')
   .option('-s, --spec <file>', 'Spec file path')
   .option('--persona <file>', 'Operating-manual persona the scope agent embodies (else ./.turkey/persona.md or ~/.turkeycode/persona.md)')

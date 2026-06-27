@@ -154,6 +154,8 @@ export class Orchestrator {
   private spawner: Spawner;
   private gates: Gates;
   private jira: JiraClient;
+  /** Jira is opt-in for builds: configured AND explicitly requested (--jira / JIRA_ENABLED). */
+  private jiraEnabled = false;
   private github: GitHubClient;
   private verbose: boolean;
   private workDir: string;
@@ -171,6 +173,17 @@ export class Orchestrator {
     this.spawner = createSpawner({ verbose: this.verbose });
     this.gates = createGates();
     this.jira = createJiraClient(options.jiraProject || this.state.jiraProject);
+    // Jira is OPT-IN for a build: it engages only when explicitly requested via
+    // --jira <project> (or a resumed build that already had one), or JIRA_ENABLED=1.
+    // Without an opt-in, a build never touches Jira even if JIRA_* env vars are present
+    // (so the platform does not have to strip them).
+    const jiraOptIn =
+      !!(options.jiraProject || this.state.jiraProject) ||
+      /^(1|true|yes)$/i.test(process.env.JIRA_ENABLED || '');
+    this.jiraEnabled = jiraOptIn && this.jira.isEnabled();
+    if (this.jira.isEnabled() && !jiraOptIn) {
+      console.log('[jira] Configured but not enabled for this build - pass --jira <project> or set JIRA_ENABLED=1 to opt in.');
+    }
     this.github = createGitHubClient();
     this.github.workDir = this.workDir;
     if (options.noPush) this.github.noPush = true;
@@ -252,7 +265,7 @@ export class Orchestrator {
       }
 
       // Auto-create Jira project if configured
-      if (this.jira.isEnabled()) {
+      if (this.jiraEnabled) {
         const projectKey = await this.jira.ensureProject(description);
         if (projectKey) {
           this.state.jiraProject = projectKey;
@@ -752,7 +765,7 @@ export class Orchestrator {
 
     // Create or reuse Jira ticket for phase
     let jiraTicketKey: string | null = phase.jiraTicketKey || null;
-    if (!jiraTicketKey && this.jira.isEnabled()) {
+    if (!jiraTicketKey && this.jiraEnabled) {
       const deliverables = phase.deliverables.map(d => `- ${d}`).join('\n');
       jiraTicketKey = await this.jira.createTicket({
         summary: `Phase ${phaseNumber}: ${phase.name}`,
