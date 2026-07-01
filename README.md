@@ -217,13 +217,13 @@ ps aux | grep turkeycode # check it's alive
 ## Key Design Principles
 
 ### 🎯 One Session = One Job
-Each Claude session gets a single, scoped prompt. Build ONE phase. Run ONE QA tier. Fix ALL issues in one shot. No sprawling multi-hour sessions that lose context.
+Each Claude session gets a single, scoped prompt. Build ONE phase. Run ONE QA tier. Fix ALL issues in one shot.
 
 ### 🧱 Gates Are Walls
 Between every step, the orchestrator checks for specific artifacts on disk. If they don't exist or are invalid: hard stop. Not a warning. This is what makes it reliable.
 
 ### 📦 Phases Over Tickets
-No Jira-style ticket fragmentation. Each phase has a name, scope, deliverables, and acceptance criteria. The build agent gets full context. One phase = one coherent chunk of work.
+No Jira-style ticket fragmentation. Each phase has a name, scope, deliverables, and acceptance criteria, and merges only after a QA pass proves those criteria. One phase = one verifiable unit of work.
 
 ### 🔧 Fix Agents See Everything
 Fix sessions get the comprehensive picture: phase deliverables, all blockers, all warnings, smoke report, and previous attempt history. One session fixes everything coherently.
@@ -454,7 +454,7 @@ links epics on both team- and company-managed projects.
 |------|----------|------------|
 | scope | `reference/scope.done` | starts with `DONE`, specs.md > 200 chars |
 | research | `reference/research.done` | exists, specs.md > 200 chars |
-| plan | `phase-plan.json` | valid JSON, ≥1 phase |
+| plan | `phase-plan.json` | valid JSON, ≥1 phase, each with number, name, scope, deliverables, acceptance criteria |
 | build | `phases/phase-N.done` | exists |
 | qa-smoke | `qa/phase-N/smoke-M.done` | exists |
 | qa-functional | `qa/phase-N/functional-M.done` | exists |

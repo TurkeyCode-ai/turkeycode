@@ -6,14 +6,14 @@ Phase-based orchestrator for Claude Code build workflows. Spawns Claude sessions
 
 A TypeScript CLI that orchestrates multi-phase software builds:
 - **Research** → **Plan** → **Build (1 session per phase)** → **QA (parallel)** → **Review** → **AAR** → **Ship**
-- As many coherent build phases as the work needs — 1 for a small ticket, many for a big project — instead of dozens of micro-tickets
+- As many verifiable build phases as the work needs — 1 for a small ticket, many for a big project — instead of dozens of micro-tickets
 - QA functional + visual tests run concurrently
 - Blocker fixes run in parallel
 - State persists in `.turkey/state.json`
 
 ## Key Insight
 
-Scrum tickets exist for human coordination. AI doesn't need them — it works better with bigger, coherent chunks because context is its superpower. Every new session = cold start + lost knowledge. Fewer, larger sessions = better results.
+Scrum tickets exist for human coordination. turkeycode phases exist for machine verification: each phase is sized so one session can build it and one QA pass can prove it, and nothing merges past a deterministic gate. See `docs/REPOSITIONING.md` for the full rationale.
 
 ## Run Commands
 
@@ -84,11 +84,12 @@ appending a `## Technical Survey` section instead of overwriting the confirmed i
 
 ## Phase Model
 
-Each build phase is one Claude session that builds a coherent chunk of the project:
+Each build phase is one Claude session that builds a verifiable unit of the project:
 - Phase 1 is always foundation (project setup, core infrastructure)
 - Each phase has scope, deliverables, and acceptance criteria
-- Phases build on each other (context from prior phases carried forward)
-- 60-90 minute target per phase build session
+- Code persists between phases; each phase is verified and merged before the next starts
+- Each phase ends at a merge gate: quick check, QA verdict with zero blockers, code review artifact
+- 60-90 minute budget per phase build session
 
 ## QA Pipeline
 
@@ -164,7 +165,7 @@ src/
 
 ## Key Design Decisions
 
-1. **Phase-based, not ticket-based**: N phases (as many as the work needs) instead of dozens of micro-tickets — far fewer sessions, each with enough context to do a good job
+1. **Phase-based, not ticket-based**: phases are verification units, sized to one buildable session and one verifiable QA pass — as many as the work needs, no micro-ticket fragmentation
 
 2. **Single planning session**: One session produces the full phase plan (not analyze + detail loops)
 

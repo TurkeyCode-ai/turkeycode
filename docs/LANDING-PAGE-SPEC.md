@@ -28,7 +28,7 @@ npx turkeycode run "Build me a job board with Stripe payments"
 ## What You Get
 
 - Research & architecture planning
-- 2-5 phased build with focused coding sessions
+- Phased build with hard verification gates: as many phases as the work needs, each merged only after QA passes
 - Automated QA: smoke, functional, and visual testing
 - Bug detection and fixing (up to 5 cycles)
 - Code review
