@@ -394,3 +394,34 @@ describe('deploy/apps', () => {
     consoleSpy.mockRestore();
   });
 });
+
+// ============================================================================
+// package.ts — "Packaging:" log must agree with tar's glob excludes
+// ============================================================================
+
+import { isExcludedEntry } from '../deploy/package';
+
+describe('deploy/package isExcludedEntry', () => {
+  it('hides glob-matched env files the way tar --exclude does', () => {
+    for (const entry of ['.env', '.env.local', '.env.production', '.env.staging', '.env.example']) {
+      expect(isExcludedEntry(entry), entry).toBe(true);
+    }
+  });
+
+  it('hides exact-name and wildcard patterns', () => {
+    expect(isExcludedEntry('node_modules')).toBe(true);
+    expect(isExcludedEntry('.turkey')).toBe(true);
+    expect(isExcludedEntry('build.log')).toBe(true); // *.log
+  });
+
+  it('does not hide normal project entries', () => {
+    for (const entry of ['src', 'package.json', 'environment.ts', 'env', 'loggers']) {
+      expect(isExcludedEntry(entry), entry).toBe(false);
+    }
+  });
+
+  it('path-scoped patterns never hide a top-level entry', () => {
+    // `.next/cache` is excluded, but top-level `.next` itself still ships
+    expect(isExcludedEntry('.next')).toBe(false);
+  });
+});

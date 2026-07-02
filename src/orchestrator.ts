@@ -1699,7 +1699,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
    * conflict is genuinely unresolvable (agent aborts or attempts exhaust) — the
    * caller then stops with the work preserved on the phase branch.
    */
-  private async mergeWithResolution(phaseNumber: number, sourceBranch: string, targetBranch: string): Promise<boolean> {
+  private async mergeWithResolution(contextKey: number | string, sourceBranch: string, targetBranch: string): Promise<boolean> {
     const outcome = this.github.tryMerge(sourceBranch, targetBranch);
     if (outcome.status === 'clean') {
       this.log(`Merged ${sourceBranch} into ${targetBranch}`);
@@ -1717,7 +1717,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     this.log(`Merge conflict in ${conflicted.length} file(s): ${conflicted.join(', ')}. Running merge-fix...`);
 
     for (let attempt = 1; attempt <= MAX_MERGE_FIX_ATTEMPTS; attempt++) {
-      const resolved = await this.runMergeFix(phaseNumber, sourceBranch, targetBranch, conflicted, attempt);
+      const resolved = await this.runMergeFix(contextKey, sourceBranch, targetBranch, conflicted, attempt);
       if (!resolved) {
         this.log(`Merge-fix attempt ${attempt} did not resolve the conflict — aborting merge.`);
         this.github.abortMerge();
@@ -1727,9 +1727,10 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       // resolutions. Complete the merge commit if needed, then verify it's clean.
       const remaining = this.github.getConflictedPaths();
       if (remaining.length === 0) {
-        if (this.github.completeMerge(`Merge ${sourceBranch} into ${targetBranch} (phase ${phaseNumber})`)) {
+        if (this.github.completeMerge(`Merge ${sourceBranch} into ${targetBranch} (phase ${contextKey})`)) {
           this.log(`Merge-fix resolved the conflict; merged ${sourceBranch} into ${targetBranch}`);
-          audit('phase_merge_fixed', { buildPhase: phaseNumber, details: { source: sourceBranch, target: targetBranch, attempt } });
+          const buildPhase = typeof contextKey === 'number' ? contextKey : undefined;
+          audit('phase_merge_fixed', { buildPhase, details: { source: sourceBranch, target: targetBranch, attempt, context: String(contextKey) } });
           return true;
         }
         this.log('Merge-fix staged a resolution but the merge commit failed — aborting.');
@@ -1750,14 +1751,14 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
    * file, or a non-zero exit all return false.
    */
   private async runMergeFix(
-    phaseNumber: number,
+    contextKey: number | string,
     sourceBranch: string,
     targetBranch: string,
     conflictedPaths: string[],
     attempt: number
   ): Promise<boolean> {
-    const phase = this.state.buildPhases.find(p => p.number === phaseNumber);
-    const qaDir = `${QA_DIR}/phase-${phaseNumber}`;
+    const phase = this.state.buildPhases.find(p => p.number === contextKey);
+    const qaDir = `${QA_DIR}/phase-${contextKey}`;
     mkdirSync(qaDir, { recursive: true });
     const doneFile = `${qaDir}/merge-fix-${attempt}.done`;
     if (existsSync(doneFile)) { try { unlinkSync(doneFile); } catch { /* ignore */ } }
@@ -1770,12 +1771,12 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
         baseBranch: targetBranch,
         conflictedPaths,
         mode: 'merge',
-        contextKey: `phase-${phaseNumber}`,
+        contextKey: `phase-${contextKey}`,
         contextSummary: phase?.name,
         doneFile,
       }),
       timeoutMs: FIX_TIMEOUT_MS,
-      sessionName: `merge-fix-phase-${phaseNumber}-${attempt}`,
+      sessionName: `merge-fix-phase-${contextKey}-${attempt}`,
       doneFile,
       model: getModelForPhase('qa-fix')
     });
@@ -1895,6 +1896,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
 
     let clean = false;
     let merged = false;
+    let mergeAttempted = false;
 
     for (let attempt = 1; attempt <= MAX_POLISH_ATTEMPTS; attempt++) {
       this.log(`\n--- Polish attempt ${attempt}/${MAX_POLISH_ATTEMPTS} ---\n`);
@@ -1958,13 +1960,14 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       }
 
       // Merge the verified cleanup into the default branch.
-      merged = this.mergePolishBranch(polishBranch, defaultBranch);
+      mergeAttempted = true;
+      merged = await this.mergePolishBranch(polishBranch, defaultBranch);
       break;
     }
 
-    if (clean && !merged) {
-      // "no warnings existed" path: nothing was committed, so just drop the branch.
-      this.log('Polish complete — nothing to merge.');
+    if (mergeAttempted && !merged) {
+      // Never claim success here: the verified cleanup exists but did not land.
+      this.log(`⚠ Polish cleanup could not be merged — it remains on ${polishBranch}. Merge it manually.`);
     }
 
     auditPhase('polish', 'completed', { clean, merged });
@@ -1982,8 +1985,10 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     }
   }
 
-  /** Merge the polish branch into the default branch (PR when a remote exists, else local). */
-  private mergePolishBranch(polishBranch: string, defaultBranch: string): boolean {
+  /** Merge the polish branch into the default branch (PR when a remote exists, else local).
+   * Conflicts get the same agent-driven recovery as phase merges (mergeWithResolution) —
+   * the bare mergeBranch aborts on conflict, which would strand the verified cleanup. */
+  private async mergePolishBranch(polishBranch: string, defaultBranch: string): Promise<boolean> {
     if (!this.github.branchExists(polishBranch)) {
       // Built directly on default — already merged.
       return true;
@@ -1999,12 +2004,12 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       });
       let merged = pr ? this.github.mergePR(pr) : false;
       if (!merged) {
-        merged = this.github.mergeBranch(polishBranch, defaultBranch);
+        merged = await this.mergeWithResolution('polish', polishBranch, defaultBranch);
         if (merged) this.github.push(defaultBranch);
       }
       return merged;
     }
-    return this.github.mergeBranch(polishBranch, defaultBranch);
+    return this.mergeWithResolution('polish', polishBranch, defaultBranch);
   }
 
   /**
