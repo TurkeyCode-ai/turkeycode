@@ -529,8 +529,9 @@ export class TicketOrchestrator {
       branchName,
       baseBranch: repo.base,
       conflictedPaths,
-      ticketKey: ticket.key,
-      ticketSummary: verdict.summary || ticket.summary,
+      mode: 'rebase',
+      contextKey: ticket.key,
+      contextSummary: verdict.summary || ticket.summary,
       doneFile,
     });
 

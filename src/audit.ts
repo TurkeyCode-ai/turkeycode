@@ -31,6 +31,7 @@ export type AuditEvent =
   | 'github_branch_created'
   | 'github_pr_created'
   | 'github_pr_merged'
+  | 'phase_merge_fixed'
   | 'ticket_run_started'
   | 'ticket_triage'
   | 'ticket_scope_resolved'

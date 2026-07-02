@@ -1,10 +1,15 @@
 /**
  * Combined QA prompt — smoke + functional + verdict in ONE session.
- * v3-fast: Replaces the 4-agent QA carousel (smoke → functional → visual → verdict)
- * with a single comprehensive session.
+ * v3-fast: collapses the smoke/functional/verdict trio into a single session.
+ * Visual QA is NOT folded in here — it runs as a dedicated parallel session
+ * (buildQaVisualPrompt) so a fresh, code-blind agent judges the rendered UI from
+ * screenshots; its findings are merged into this session's verdict by the
+ * orchestrator (mergeVisualFindings). The design rubric below is a safety net,
+ * not a replacement for that pass. For non-visual project types the visual pass
+ * is skipped (shouldSkipVisualQA) and this rubric is the only design check.
  */
 
-import { ProjectState, ProjectType, shouldSkipVisualQA } from '../types';
+import { ProjectState, ProjectType } from '../types';
 import { QA_DIR, SPECS_FILE } from '../constants';
 import { readFileSync, existsSync } from 'fs';
 
