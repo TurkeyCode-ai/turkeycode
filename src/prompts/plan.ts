@@ -57,12 +57,12 @@ ${state.jiraProject ? `### Jira Project: ${state.jiraProject}` : '### No Jira pr
 
 ## THE KEY INSIGHT
 
-You are NOT creating tickets for human developers. You are creating PHASES for an AI that:
-- Works best with big, coherent chunks (context is its superpower)
-- Loses all context between sessions (every new session = cold start)
-- Doesn't need coordination overhead (no ticket branches, no merging)
+You are NOT creating tickets for human developers. You are creating VERIFICATION UNITS for an automated pipeline:
+- Each sprint must be independently verifiable: one QA pass proves its deliverables from the diff and targeted tests
+- Each sprint merges through a deterministic gate; if QA cannot verify it in one pass, it is too big
+- No coordination overhead (no ticket branches, no standups); sprints exist to bound verification, not to divide labor
 
-**Each sprint is one focused session. Use as many sprints as the work truly needs — 1 for a small ticket, many for a big project. Do not force a fixed number; do not pad.**
+**Each sprint is one focused session sized to what QA can verify in one pass. Use as many sprints as the work truly needs: 1 for a small ticket, many for a big project. Do not force a fixed number; do not pad.**
 
 ## OUTPUT: ${PHASE_PLAN_FILE}
 
