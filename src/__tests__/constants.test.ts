@@ -49,8 +49,8 @@ describe('constants', () => {
   });
 
   it('getModelForPhase returns correct models', () => {
-    expect(getModelForPhase('build')).toBe('sonnet');
-    expect(getModelForPhase('qa-fix')).toBe('opus');
+    expect(getModelForPhase('build')).toBe('claude-fable-5');
+    expect(getModelForPhase('qa-fix')).toBe('claude-fable-5');
     expect(getModelForPhase('nonexistent')).toBeUndefined();
   });
 
