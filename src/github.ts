@@ -803,12 +803,37 @@ export class GitHubClient {
   }
 
   /**
-   * Check if current directory is a git repo
+   * Is the work directory ITSELF a git repo root?
+   *
+   * This asks a deliberately narrow question, because the broad one is
+   * dangerous. It used to run `git rev-parse --git-dir` with no cwd at all,
+   * so it answered about whatever directory turkeycode happened to be
+   * launched from, and `--git-dir` succeeds anywhere INSIDE a repo — so a
+   * build directory sitting under an unrelated repo reported "already a
+   * repo". initRepo() then skipped `git init`, and every later git call —
+   * checkout main, phase branches, commits, repacks — operated on that
+   * ancestor repo instead.
+   *
+   * That is not hypothetical: a build under ~ found the user's home-directory
+   * repo, tried to repack an object store containing their entire home
+   * folder, wrote 34GB of temp packs, filled the disk, and died mid-write to
+   * .turkey/state.json. The quieter version of the same bug commits phase
+   * branches into whatever repo happens to be upstairs.
+   *
+   * Comparing the toplevel to workDir means a nested `git init` still happens
+   * when we're inside someone else's repo — which is correct and safe, since
+   * the inner .git wins for everything under it.
    */
   isGitRepo(): boolean {
     try {
-      execSync('git rev-parse --git-dir', { stdio: ['pipe', 'pipe', 'pipe'] });
-      return true;
+      const toplevel = execSync('git rev-parse --show-toplevel', {
+        cwd: this.workDir,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
+        .toString()
+        .trim();
+      if (!toplevel) return false;
+      return path.resolve(toplevel) === path.resolve(this.workDir);
     } catch {
       return false;
     }
