@@ -50,7 +50,14 @@ export const SCOPE_TURN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per correction 
 export const RESEARCH_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
 export const PLAN_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 export const PHASE_BUILD_TIMEOUT_MS = 90 * 60 * 1000; // 90 minutes (phases are bigger than tickets)
-export const QA_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+// QA scales with the SIZE OF THE CODEBASE, not the size of the change — which
+// is why the build phase already gets 90 minutes and QA got 30. A 21-phase RPG
+// sailed through QA on phases 1-8 and hit this ceiling on phase 9: the session
+// was cut off at exactly 30m05s, and the phase then failed on a verdict file
+// nobody had written. Raising the ceiling is not the whole fix (a cut-off
+// session keeps running, and the fallback verdict invents a blocker that
+// describes nothing), but a session needing 40 minutes should not die at 30.
+export const QA_TIMEOUT_MS = 75 * 60 * 1000; // 75 minutes
 export const FIX_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 export const AAR_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes (writing markdown summary; large phases need headroom)
 export const POLISH_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes (repo-wide warning cleanup)
