@@ -126,6 +126,24 @@ export const PHASE_MODELS: Record<string, string> = {
  * Returns undefined if no specific model is configured (uses Claude default).
  */
 export function getModelForPhase(phase: string): string | undefined {
+  // Env overrides, checked before the table. Running out of credit on ONE
+  // model should not mean editing source and rebuilding mid-build — which is
+  // exactly what happened: a 16-phase run stopped dead at phase 6 on "You've
+  // hit your monthly spend limit ... keep using Fable 5 or switch models",
+  // and `resume` has no --model flag to answer that with.
+  //
+  //   TURKEYCODE_MODEL_BUILD=opus      one phase
+  //   TURKEYCODE_MODEL=sonnet          everything not otherwise set
+  //
+  // Phase names contain dashes; the env form uppercases and underscores them
+  // (qa-fix -> TURKEYCODE_MODEL_QA_FIX).
+  const key = 'TURKEYCODE_MODEL_' + phase.toUpperCase().replace(/-/g, '_');
+  const perPhase = process.env[key];
+  if (perPhase) return perPhase;
+
+  const global = process.env.TURKEYCODE_MODEL;
+  if (global) return global;
+
   return PHASE_MODELS[phase];
 }
 
