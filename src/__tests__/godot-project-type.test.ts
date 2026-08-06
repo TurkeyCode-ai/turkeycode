@@ -62,7 +62,11 @@ describe('Godot detection', () => {
 describe('Godot QA instructions', () => {
   const render = (type: string) => {
     return buildQaCombinedPrompt(
-      { projectType: type as any, buildPhases: [{ number: 1, name: 'Combat', deliverables: ['a'], acceptanceCriteria: ['b'] }], completedPhases: [] },
+      {
+        projectType: type,
+        buildPhases: [{ number: 1, name: 'Combat', deliverables: ['a'], acceptanceCriteria: ['b'] }],
+        completedPhases: [],
+      } as any,
       1, 1, '', 'main'
     ) as string;
   };
