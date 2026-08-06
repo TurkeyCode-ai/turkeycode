@@ -42,6 +42,12 @@ export function detectProjectTypeStrict(cwd: string): ProjectType {
  */
 export function inferProjectTypeFromDescription(description: string): ProjectType | null {
   const d = ` ${description.toLowerCase()} `;
+  // Godot by NAME only. Deliberately not "game" — the last game built here
+  // was a turn-based RPG that was correctly a web frontend, and stealing
+  // every "game" into an engine project would have been wrong. A greenfield
+  // directory has no project.godot to detect yet, so the description is the
+  // only signal there is, and it has to be an unambiguous one.
+  if (/\bgodot\b/.test(d)) return 'game-godot';
   if (/\b(cli|command[- ]?line|terminal(-based)?(\s+(app|tool|program|ui))?|tui|shell script)\b/.test(d)) return 'cli';
   if (/\b(desktop app|electron|tauri|menu ?bar app|system tray)\b/.test(d)) return 'desktop';
   if (/\b(mobile app|ios app|android app|react native|flutter|expo)\b/.test(d)) return 'mobile';

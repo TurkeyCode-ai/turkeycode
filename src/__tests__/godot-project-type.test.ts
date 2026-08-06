@@ -11,7 +11,7 @@ import { mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-import { detectProjectType } from '../detect-project-type';
+import { detectProjectType, inferProjectTypeFromDescription } from '../detect-project-type';
 import { buildQaCombinedPrompt } from '../prompts/qa-combined';
 import { VISUAL_PROJECT_TYPES, shouldSkipVisualQA } from '../types';
 
@@ -100,6 +100,24 @@ describe('Godot QA instructions', () => {
   it('never tells a game to open a web server', () => {
     const p = render('game-godot');
     expect(p).to.not.contain('localhost:5123');
+  });
+});
+
+describe('Greenfield Godot — inferred from the description', () => {
+  it('infers game-godot when the spec names the engine', () => {
+    // A greenfield build starts in an EMPTY directory: there is no
+    // project.godot to detect yet, so the description is the only signal.
+    // Without this the build falls through to web-fullstack and gets QA'd
+    // as a website — headless Chromium pointed at a 3D game.
+    expect(inferProjectTypeFromDescription('A 3D vertical slice in Godot 4.7')).to.equal('game-godot');
+    expect(inferProjectTypeFromDescription('build it with godot')).to.equal('game-godot');
+  });
+
+  it('does NOT steal every game into an engine project', () => {
+    // The last game built here was a turn-based squad RPG that was
+    // correctly a web frontend. "Game" alone must not mean Godot.
+    expect(inferProjectTypeFromDescription('a turn-based squad combat RPG with companions')).to.not.equal('game-godot');
+    expect(inferProjectTypeFromDescription('gamify the onboarding flow')).to.not.equal('game-godot');
   });
 });
 
