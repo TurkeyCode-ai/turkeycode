@@ -4,6 +4,7 @@
  */
 
 import { ProjectState, BuildPhase, ProjectType } from '../types';
+import { oneTurnRule } from './one-turn';
 import { PHASES_DIR } from '../constants';
 
 // ==================== Type-Specific Build Instructions ====================
@@ -246,6 +247,10 @@ When ALL deliverables are complete and ALL acceptance criteria pass:
 mkdir -p ${phaseDoneDir}
 echo "DONE - Phase ${phase.number} build completed at $(date -Iseconds)" > ${buildDone}
 \`\`\`
+
+---
+
+${oneTurnRule(`${buildDone}`)}
 
 ---
 

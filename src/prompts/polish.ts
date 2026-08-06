@@ -10,6 +10,7 @@
  */
 
 import { ProjectState } from '../types';
+import { oneTurnRule } from './one-turn';
 import { POLISH_DIR } from '../constants';
 
 export function buildPolishPrompt(
@@ -89,6 +90,10 @@ After writing the verdict:
 mkdir -p ${POLISH_DIR}
 echo "DONE - polish attempt ${attempt} at $(date -Iseconds)" > ${doneFile}
 \`\`\`
+
+---
+
+${oneTurnRule('the polish report')}
 
 ---
 
