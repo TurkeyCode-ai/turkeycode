@@ -482,7 +482,12 @@ function startProcess(cmd: string, cwd: string, readyCheck: (output: string) => 
     // kill a server the caller already holds).
     let settled = false;
     let cleanExitAt: number | null = null;
-    const CLEAN_EXIT_GRACE_MS = 5000;
+    // How long a daemonized server gets to bind its port after the foreground
+    // launcher exits 0. 5s missed real daemonizers (`rails server -d`, pm2, JVM
+    // wrappers) that take tens of seconds to bind — the old code polled the full
+    // 240s timeout for exactly this case. 45s keeps the fail-fast for commands
+    // that exited without starting anything, without failing slow-binding daemons.
+    const CLEAN_EXIT_GRACE_MS = 45000;
     const settle = (value: StartResult) => {
       if (settled) return;
       settled = true;

@@ -50,7 +50,14 @@ export const SCOPE_TURN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per correction 
 export const RESEARCH_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
 export const PLAN_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 export const PHASE_BUILD_TIMEOUT_MS = 90 * 60 * 1000; // 90 minutes (phases are bigger than tickets)
-export const QA_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+// QA scales with the SIZE OF THE CODEBASE, not the size of the change — which
+// is why the build phase already gets 90 minutes and QA got 30. A 21-phase RPG
+// sailed through QA on phases 1-8 and hit this ceiling on phase 9: the session
+// was cut off at exactly 30m05s, and the phase then failed on a verdict file
+// nobody had written. Raising the ceiling is not the whole fix (a cut-off
+// session keeps running, and the fallback verdict invents a blocker that
+// describes nothing), but a session needing 40 minutes should not die at 30.
+export const QA_TIMEOUT_MS = 75 * 60 * 1000; // 75 minutes
 export const FIX_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 export const AAR_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes (writing markdown summary; large phases need headroom)
 export const POLISH_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes (repo-wide warning cleanup)
@@ -78,7 +85,10 @@ export function setStrictQA(strict: boolean): void {
 }
 
 // Model selection per phase
-// Maps each phase/sub-phase to the optimal model for cost vs quality
+// Maps each phase/sub-phase to the optimal model for cost vs quality.
+// Values are passed to `claude --model`: bare aliases ('opus'/'sonnet'/'haiku')
+// float to the latest model in that tier (currently Opus 5 / Sonnet 5 / Haiku 4.5);
+// exact IDs pin a specific model.
 export const PHASE_MODELS: Record<string, string> = {
   // Scope — Opus: point-of-view-heavy reasoning (reflect, surface forks, catch tensions)
   'scope': 'opus',
@@ -87,8 +97,10 @@ export const PHASE_MODELS: Record<string, string> = {
   'research': 'sonnet',
   'plan': 'opus',
 
-  // Build phase — Sonnet is the coding sweet spot
-  'build': 'sonnet',
+  // Build phase — Fable 5: Anthropic's most capable model, built for exactly this
+  // shape of work (long-horizon agentic coding, 60-90 min sessions, self-verification).
+  // The build session is where quality is won or lost, so it gets the top tier.
+  'build': 'claude-fable-5',
 
   // QA phases — Haiku for mechanical tasks, Sonnet for reasoning
   'qa-smoke': 'haiku',
@@ -96,8 +108,9 @@ export const PHASE_MODELS: Record<string, string> = {
   'qa-visual': 'sonnet',
   'qa-verdict': 'sonnet',
 
-  // Fix phases — Opus for debugging (hardest task), Sonnet for compile fixes
-  'qa-fix': 'opus',
+  // Fix phases — Fable 5 for blocker debugging (the hardest coding task in the run,
+  // same tier as the build sessions it repairs), Sonnet for compile fixes
+  'qa-fix': 'claude-fable-5',
   'quick-fix': 'sonnet',
 
   // Post-build — Sonnet for review, Haiku for mechanical summarization
@@ -113,6 +126,24 @@ export const PHASE_MODELS: Record<string, string> = {
  * Returns undefined if no specific model is configured (uses Claude default).
  */
 export function getModelForPhase(phase: string): string | undefined {
+  // Env overrides, checked before the table. Running out of credit on ONE
+  // model should not mean editing source and rebuilding mid-build — which is
+  // exactly what happened: a 16-phase run stopped dead at phase 6 on "You've
+  // hit your monthly spend limit ... keep using Fable 5 or switch models",
+  // and `resume` has no --model flag to answer that with.
+  //
+  //   TURKEYCODE_MODEL_BUILD=opus      one phase
+  //   TURKEYCODE_MODEL=sonnet          everything not otherwise set
+  //
+  // Phase names contain dashes; the env form uppercases and underscores them
+  // (qa-fix -> TURKEYCODE_MODEL_QA_FIX).
+  const key = 'TURKEYCODE_MODEL_' + phase.toUpperCase().replace(/-/g, '_');
+  const perPhase = process.env[key];
+  if (perPhase) return perPhase;
+
+  const global = process.env.TURKEYCODE_MODEL;
+  if (global) return global;
+
   return PHASE_MODELS[phase];
 }
 

@@ -12,6 +12,48 @@ import { DEFAULT_TIMEOUT_MS } from './constants';
 
 const DEFAULT_MAX_CONCURRENT = 3;
 
+/**
+ * Every live session's process GROUP, so turkeycode can take them with it.
+ *
+ * Sessions spawn with `detached: true` so a timeout can reap the whole tree —
+ * claude plus the dev server and headless Chrome it backgrounds. The cost of
+ * detaching is that those groups SURVIVE turkeycode's own death: kill the
+ * parent and its timeout never fires, the children reparent to init, and they
+ * keep talking to the API with nobody left to read the answer.
+ *
+ * Seen in the wild: two QA sessions still running 5h32m after the builds that
+ * started them were dead, one still spawning playwright shells, and every
+ * retry stacked another pair. Killing turkeycode has to mean killing what
+ * turkeycode started.
+ *
+ * SIGKILL to turkeycode itself remains unstoppable — nothing can trap it, and
+ * those orphans still have to be reaped by hand.
+ */
+const liveGroups = new Set<number>();
+let reaperInstalled = false;
+
+function reapAllGroups(signal: NodeJS.Signals): void {
+  for (const pid of liveGroups) {
+    try { process.kill(-pid, signal); } catch { /* group already gone */ }
+  }
+}
+
+function installReaper(): void {
+  if (reaperInstalled) return;
+  reaperInstalled = true;
+
+  // 'exit' handlers must be synchronous — process.kill is, so this is fine.
+  process.on('exit', () => reapAllGroups('SIGKILL'));
+
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as NodeJS.Signals[]) {
+    process.on(sig, () => {
+      reapAllGroups('SIGTERM');
+      // Anything that ignores SIGTERM is caught by the 'exit' handler above.
+      process.exit(130);
+    });
+  }
+}
+
 const TRANSIENT_RATE_LIMIT_PATTERNS: RegExp[] = [
   /rate.?limit/i,
   /\b429\b/,
@@ -190,6 +232,14 @@ export class Spawner {
         try { process.kill(-proc.pid, signal); } catch { /* group already gone */ }
       };
 
+      // Register for the process-wide reaper: if turkeycode is killed before
+      // this session's own timeout fires, the session goes down with it
+      // instead of running on for hours as an orphan.
+      if (proc.pid) {
+        liveGroups.add(proc.pid);
+        installReaper();
+      }
+
       // Write prompt directly to stdin and close it
       if (proc.stdin) {
         proc.stdin.write(prompt);
@@ -270,6 +320,7 @@ export class Spawner {
         clearTimeout(timeoutHandle);
         clearInterval(watchdog);
         if (doneFileInterval) clearInterval(doneFileInterval);
+        if (proc.pid) liveGroups.delete(proc.pid);   // no longer ours to reap
         // Reap any dev server / Chrome the session backgrounded and left running —
         // this is what otherwise accumulates across phases until the jail OOMs.
         reapGroup();
@@ -423,3 +474,10 @@ export class Spawner {
 export function createSpawner(options?: { verbose?: boolean }): Spawner {
   return new Spawner(options);
 }
+
+/**
+ * Reaper internals, exported for tests only. The behaviour under test is
+ * "killing turkeycode kills its sessions", which needs real process groups —
+ * asserting on it any other way asserts on nothing.
+ */
+export const _reaperInternals = { liveGroups, reapAllGroups, installReaper };

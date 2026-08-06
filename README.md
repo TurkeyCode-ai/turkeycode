@@ -30,7 +30,7 @@ You: "Build me a recipe sharing app"
     │   ├── 🏗️  Build     → one focused coding session
     │   ├── 🧪 QA        → smoke → functional → visual (parallel)
     │   ├── 🔧 Fix       → all issues in one session, full context
-    │   ├── 🔁 Retry     → up to 5 QA cycles until clean
+    │   ├── 🔁 Retry     → up to 3 QA cycles until clean
     │   ├── 📝 Review    → code review with actionable feedback
     │   └── ✅ Merge     → PR merged to main, next phase
     │
@@ -476,7 +476,7 @@ docker run -it --rm \
 
 ## Troubleshooting
 
-**Build seems stuck?** Check `build.log` or run `turkeycode status`. Each QA cycle can take a few minutes — 5 cycles per phase is normal.
+**Build seems stuck?** Check `build.log` or run `turkeycode status`. Each QA cycle can take a few minutes — up to 3 cycles per phase is normal.
 
 **"Claude not found" error?** Make sure Claude Code is installed: `npm install -g @anthropic-ai/claude-code` then `claude login`.
 

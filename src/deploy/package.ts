@@ -141,6 +141,23 @@ function getExcludeArgs(): string {
   return EXCLUDE_PATTERNS.map(p => `--exclude='${p}'`).join(' ');
 }
 
+/**
+ * Whether a top-level directory entry is dropped from the tarball by EXCLUDE_PATTERNS.
+ * Mirrors tar's --exclude glob semantics for the "Packaging:" log — an exact-string
+ * check would miss glob patterns like `.env.*` and falsely list secret env files as
+ * packaged. Path-scoped patterns (containing '/') never hide a top-level entry.
+ */
+export function isExcludedEntry(entry: string, patterns: string[] = EXCLUDE_PATTERNS): boolean {
+  return patterns.some(p => {
+    if (p.includes('/')) return false;
+    if (p.includes('*')) {
+      const rx = p.split('*').map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*');
+      return new RegExp(`^${rx}$`).test(entry);
+    }
+    return p === entry;
+  });
+}
+
 function getIncludeFiles(cwd: string): string[] {
   return INCLUDE_CANDIDATES.filter(f => existsSync(join(cwd, f)));
 }
@@ -182,7 +199,7 @@ export async function packageApp(
   // that failed to build server-side. Excludes already drop
   // node_modules/.git/caches, and the 500MB cap below guards runaway size.
   const included = readdirSync(cwd)
-    .filter(entry => !EXCLUDE_PATTERNS.includes(entry))
+    .filter(entry => !isExcludedEntry(entry))
     .sort();
 
   console.log(`  Packaging: ${included.join(', ')}`);

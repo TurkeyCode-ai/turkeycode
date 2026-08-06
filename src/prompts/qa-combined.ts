@@ -83,6 +83,23 @@ fi
 
 **If the app won't build, that's a BLOCKER. Write verdict and stop.**`;
 
+    case 'game-godot':
+      return `### Import and build the project
+\`\`\`bash
+# Godot must import assets once before anything will run headlessly.
+timeout 300 godot --headless --import 2>&1 | tail -20
+
+# Then check the whole project actually loads and scripts compile.
+timeout 120 godot --headless --quit 2>&1 | tail -30
+\`\`\`
+
+Script errors and missing resources appear on stderr here. A project that
+will not import, or that reports a parse error in any .gd/.cs file, is a
+BLOCKER — write the verdict and stop.
+
+**Do not open the editor.** There is no display and no one to click.
+Everything below is command line.`;
+
     case 'embedded':
       return `### Build the firmware
 \`\`\`bash
@@ -126,6 +143,24 @@ sleep 10
 
 function getSmokeInstructions(projectType: ProjectType): string {
   switch (projectType) {
+    case 'game-godot':
+      return `Verify the project imports, scripts parse, and the game boots to
+a first frame without erroring:
+
+\`\`\`bash
+timeout 300 godot --headless --import 2>&1 | tail -20
+timeout 120 godot --headless --quit-after 120 2>&1 | tail -40
+\`\`\`
+
+Check for:
+- \`SCRIPT ERROR\` / \`Parse Error\` — always a blocker
+- \`Failed loading resource\` — a scene referencing something that isn't there
+- Orphan node or leaked instance warnings at exit
+- The main scene actually loading rather than an empty tree
+
+Godot exits 0 on some script errors, so JUDGE THE OUTPUT, not the exit code.`;
+
+
     case 'cli':
       return `Test every command and subcommand FOR THIS PHASE'S DELIVERABLES:
 
@@ -204,6 +239,27 @@ Open every outbound link and confirm it reaches a usable page, not a dead end.`;
 
 function getFunctionalInstructions(projectType: ProjectType): string {
   switch (projectType) {
+    case 'game-godot':
+      return `For each deliverable, drive the game and read what it prints.
+Script-level checks run headless; anything that looks at PIXELS must run
+windowed, because --headless uses a dummy renderer with no GPU context:
+
+\`\`\`bash
+# Project's test suite if it has one (GUT, gdUnit, or plain scripts)
+timeout 300 godot --headless -s res://test/run_tests.gd 2>&1 | tail -40 || true
+
+# Frames for the visual pass — WINDOWED, not headless. Headless writes a
+# ~300-byte stub that looks like success and contains nothing. Measured on
+# macOS + Godot 4.7: headless 332 bytes, windowed 592KB.
+timeout 180 godot --write-movie /tmp/qa-frames.avi --quit-after 300 2>&1 | tail -20 || true
+\`\`\`
+
+A game is judged on whether it can be PLAYED, not whether it compiles. Where
+a deliverable is a mechanic — combat resolves, a save round-trips, a scene
+transition fires — exercise it through a script and assert on the output.
+"It builds" is not evidence that any of that works.`;
+
+
     case 'cli':
       return `For each deliverable and acceptance criterion, verify correct OUTPUT:
 
@@ -395,6 +451,34 @@ Run a complete QA pass in this single session:
 
 ---
 
+## YOU GET ONE TURN — READ THIS BEFORE STARTING ANYTHING
+
+This session is non-interactive. You get **one response**. There is no next
+turn, nobody reads a message saying you are waiting, and when this response
+ends every process you started is killed.
+
+So:
+
+- **Never start something in the background and wait for it.** No \`cmd &\`,
+  no \`nohup\`, no "waiting for the script to finish; will resume analysis
+  once it completes". That sentence ends the session with no verdict, and the
+  phase then fails on a blocker that describes nothing.
+- **Run long checks in the foreground, bounded.** Use \`timeout 120 <command>\`
+  or shrink the work so it cannot outlive your turn. If a thorough test wants
+  10,000 combat iterations, run 200 and say so in \`notes\`.
+- **Never defer work to "after" something finishes.** If a check cannot
+  complete inside this turn, make it smaller until it can.
+- **Write the verdict before you stop — ALWAYS.** Even if setup failed, a test
+  hung, or you ran out of room. A missing verdict file is not read as "QA is
+  still thinking" — it is read as a critical failure, and it costs a full
+  rebuild cycle to discover. Partial results with an honest \`notes\` entry
+  are far more useful than silence.
+
+If you catch yourself about to explain what you are waiting for: stop, write
+the verdict with what you already have, and put the explanation in \`notes\`.
+
+---
+
 ## STEP 1: SETUP
 
 **Project type: ${state.projectType || 'web-fullstack'}**
@@ -480,6 +564,7 @@ echo "DONE - QA completed at $(date -Iseconds)" > ${verdictDone}
 6. **Write valid JSON** — the verdict file must parse correctly
 7. **NEVER paste terminal output into source files** — if you create test scripts, write clean code only
 8. **Playability check (games/interactive)** — if this is a game or interactive simulation, verify the core loop is actually completable. E.g., can you jump over the first obstacle? Can you score a point? An unbeatable/unplayable game is a BLOCKER, not a warning. Test with default settings — if the user can't succeed in the first 30 seconds, it's broken.
+9. **One turn, and the verdict is the deliverable** — never background a script and wait on it; bound long checks with \`timeout\`; and write ${verdictPath} plus ${verdictDone} before you finish, no matter how the pass went. Ending without a verdict fails the phase on a blocker nobody can act on.
 
 Then STOP.
 `.trim();
