@@ -12,6 +12,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 import { detectProjectType } from '../detect-project-type';
+import { buildQaCombinedPrompt } from '../prompts/qa-combined';
 import { VISUAL_PROJECT_TYPES, shouldSkipVisualQA } from '../types';
 
 const made: string[] = [];
@@ -55,6 +56,46 @@ describe('Godot detection', () => {
     writeFileSync(join(d, 'package.json'), JSON.stringify({ name: 'godot-docs-site' }));
     writeFileSync(join(d, 'README.md'), 'A site about godot');
     expect(detectProjectType(d)).to.not.equal('game-godot');
+  });
+});
+
+describe('Godot QA instructions', () => {
+  const render = (type: string) => {
+    return buildQaCombinedPrompt(
+      { projectType: type as any, buildPhases: [{ number: 1, name: 'Combat', deliverables: ['a'], acceptanceCriteria: ['b'] }], completedPhases: [] },
+      1, 1, '', 'main'
+    ) as string;
+  };
+
+  it('reaches all three sections — no duplicate cases in one switch', () => {
+    // These blocks were first written into the SAME switch, so two of the
+    // three were unreachable: JS takes the first matching case and the rest
+    // is dead code that still greps as present.
+    const p = render('game-godot');
+    expect(p, 'setup').to.contain('Import and build the project');
+    expect(p, 'smoke').to.contain('Failed loading resource');
+    expect(p, 'functional').to.contain('judged on whether it can be PLAYED');
+  });
+
+  it('captures frames WINDOWED — headless cannot render', () => {
+    // Measured on macOS + Godot 4.7: `--headless --write-movie` crashes and
+    // leaves a 332-byte stub that reads as success; windowed writes 592KB.
+    // Telling the agent to capture headlessly means visual QA passes on an
+    // empty file forever, which is worse than not looking.
+    const p = render('game-godot');
+    expect(p).to.not.contain('--headless --write-movie');
+    expect(p).to.contain('--write-movie');
+    expect(p).to.contain('WINDOWED');
+  });
+
+  it('still runs script and import checks headless', () => {
+    // Those read errors, not pixels — no GPU needed.
+    expect(render('game-godot')).to.contain('--headless --import');
+  });
+
+  it('never tells a game to open a web server', () => {
+    const p = render('game-godot');
+    expect(p).to.not.contain('localhost:5123');
   });
 });
 

@@ -100,40 +100,6 @@ BLOCKER — write the verdict and stop.
 **Do not open the editor.** There is no display and no one to click.
 Everything below is command line.`;
 
-    case 'game-godot':
-      return `Verify the project imports, scripts parse, and the game boots to
-a first frame without erroring:
-
-\`\`\`bash
-timeout 300 godot --headless --import 2>&1 | tail -20
-timeout 120 godot --headless --quit-after 120 2>&1 | tail -40
-\`\`\`
-
-Check for:
-- \`SCRIPT ERROR\` / \`Parse Error\` — always a blocker
-- \`Failed loading resource\` — a scene referencing something that isn't there
-- Orphan node or leaked instance warnings at exit
-- The main scene actually loading rather than an empty tree
-
-Godot exits 0 on some script errors, so JUDGE THE OUTPUT, not the exit code.`;
-
-    case 'game-godot':
-      return `For each deliverable, drive the game headlessly and read what it
-prints. Godot's own test runners work without a display:
-
-\`\`\`bash
-# Project's test suite if it has one (GUT, gdUnit, or plain scripts)
-timeout 300 godot --headless -s res://test/run_tests.gd 2>&1 | tail -40 || true
-
-# Capture frames so the visual pass has something to look at
-timeout 180 godot --headless --write-movie /tmp/qa-frames.avi --quit-after 300 2>&1 | tail -20 || true
-\`\`\`
-
-A game is judged on whether it can be PLAYED, not whether it compiles. Where
-a deliverable is a mechanic — combat resolves, a save round-trips, a scene
-transition fires — exercise it through a script and assert on the output.
-"It builds" is not evidence that any of that works.`;
-
     case 'embedded':
       return `### Build the firmware
 \`\`\`bash
@@ -177,6 +143,24 @@ sleep 10
 
 function getSmokeInstructions(projectType: ProjectType): string {
   switch (projectType) {
+    case 'game-godot':
+      return `Verify the project imports, scripts parse, and the game boots to
+a first frame without erroring:
+
+\`\`\`bash
+timeout 300 godot --headless --import 2>&1 | tail -20
+timeout 120 godot --headless --quit-after 120 2>&1 | tail -40
+\`\`\`
+
+Check for:
+- \`SCRIPT ERROR\` / \`Parse Error\` — always a blocker
+- \`Failed loading resource\` — a scene referencing something that isn't there
+- Orphan node or leaked instance warnings at exit
+- The main scene actually loading rather than an empty tree
+
+Godot exits 0 on some script errors, so JUDGE THE OUTPUT, not the exit code.`;
+
+
     case 'cli':
       return `Test every command and subcommand FOR THIS PHASE'S DELIVERABLES:
 
@@ -255,6 +239,27 @@ Open every outbound link and confirm it reaches a usable page, not a dead end.`;
 
 function getFunctionalInstructions(projectType: ProjectType): string {
   switch (projectType) {
+    case 'game-godot':
+      return `For each deliverable, drive the game and read what it prints.
+Script-level checks run headless; anything that looks at PIXELS must run
+windowed, because --headless uses a dummy renderer with no GPU context:
+
+\`\`\`bash
+# Project's test suite if it has one (GUT, gdUnit, or plain scripts)
+timeout 300 godot --headless -s res://test/run_tests.gd 2>&1 | tail -40 || true
+
+# Frames for the visual pass — WINDOWED, not headless. Headless writes a
+# ~300-byte stub that looks like success and contains nothing. Measured on
+# macOS + Godot 4.7: headless 332 bytes, windowed 592KB.
+timeout 180 godot --write-movie /tmp/qa-frames.avi --quit-after 300 2>&1 | tail -20 || true
+\`\`\`
+
+A game is judged on whether it can be PLAYED, not whether it compiles. Where
+a deliverable is a mechanic — combat resolves, a save round-trips, a scene
+transition fires — exercise it through a script and assert on the output.
+"It builds" is not evidence that any of that works.`;
+
+
     case 'cli':
       return `For each deliverable and acceptance criterion, verify correct OUTPUT:
 
