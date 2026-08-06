@@ -80,7 +80,7 @@ function checkExplicitType(cwd: string): ProjectType | null {
 function isValidProjectType(type: string): type is ProjectType {
   return [
     'web-fullstack', 'web-frontend', 'web-api', 'cli',
-    'library', 'desktop', 'mobile', 'embedded', 'legacy', 'monorepo', 'unknown'
+    'library', 'desktop', 'mobile', 'game-godot', 'embedded', 'legacy', 'monorepo', 'unknown'
   ].includes(type);
 }
 
@@ -94,6 +94,11 @@ function applyHeuristics(cwd: string): ProjectType {
   // these have none of the package.json/go.mod/etc. markers and would otherwise
   // fall through to the web-fullstack default, giving them a nonsensical web QA strategy.
   if (isLegacyProject(cwd)) return 'legacy';
+
+  // Godot before everything else: a Godot project can carry a package.json
+  // for tooling and would otherwise be read as a Node project and QA'd as a
+  // website, which is the same trap `legacy` was added to avoid.
+  if (isGodotProject(cwd)) return 'game-godot';
 
   // Check embedded/firmware projects (PlatformIO, Arduino)
   if (isEmbeddedProject(cwd)) return 'embedded';
@@ -247,6 +252,21 @@ function extLower(filename: string): string {
 }
 
 // ==================== Embedded/Firmware Detection ====================
+
+/**
+ * Godot announces itself with project.godot at the root — that file IS the
+ * project. Everything else (scenes, resources, scripts) is plain text under
+ * it, which is exactly why Godot is the engine an agent can actually author:
+ * a .tscn is readable and diffable, unlike a Unity scene or prefab.
+ */
+function isGodotProject(cwd: string): boolean {
+  if (existsSync(join(cwd, 'project.godot'))) return true;
+  // A monorepo may keep the game in a subdirectory.
+  for (const sub of ['game', 'client', 'app', 'src']) {
+    if (existsSync(join(cwd, sub, 'project.godot'))) return true;
+  }
+  return false;
+}
 
 function isEmbeddedProject(cwd: string): boolean {
   // PlatformIO project

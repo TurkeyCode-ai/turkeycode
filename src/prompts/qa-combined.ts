@@ -83,6 +83,57 @@ fi
 
 **If the app won't build, that's a BLOCKER. Write verdict and stop.**`;
 
+    case 'game-godot':
+      return `### Import and build the project
+\`\`\`bash
+# Godot must import assets once before anything will run headlessly.
+timeout 300 godot --headless --import 2>&1 | tail -20
+
+# Then check the whole project actually loads and scripts compile.
+timeout 120 godot --headless --quit 2>&1 | tail -30
+\`\`\`
+
+Script errors and missing resources appear on stderr here. A project that
+will not import, or that reports a parse error in any .gd/.cs file, is a
+BLOCKER — write the verdict and stop.
+
+**Do not open the editor.** There is no display and no one to click.
+Everything below is command line.`;
+
+    case 'game-godot':
+      return `Verify the project imports, scripts parse, and the game boots to
+a first frame without erroring:
+
+\`\`\`bash
+timeout 300 godot --headless --import 2>&1 | tail -20
+timeout 120 godot --headless --quit-after 120 2>&1 | tail -40
+\`\`\`
+
+Check for:
+- \`SCRIPT ERROR\` / \`Parse Error\` — always a blocker
+- \`Failed loading resource\` — a scene referencing something that isn't there
+- Orphan node or leaked instance warnings at exit
+- The main scene actually loading rather than an empty tree
+
+Godot exits 0 on some script errors, so JUDGE THE OUTPUT, not the exit code.`;
+
+    case 'game-godot':
+      return `For each deliverable, drive the game headlessly and read what it
+prints. Godot's own test runners work without a display:
+
+\`\`\`bash
+# Project's test suite if it has one (GUT, gdUnit, or plain scripts)
+timeout 300 godot --headless -s res://test/run_tests.gd 2>&1 | tail -40 || true
+
+# Capture frames so the visual pass has something to look at
+timeout 180 godot --headless --write-movie /tmp/qa-frames.avi --quit-after 300 2>&1 | tail -20 || true
+\`\`\`
+
+A game is judged on whether it can be PLAYED, not whether it compiles. Where
+a deliverable is a mechanic — combat resolves, a save round-trips, a scene
+transition fires — exercise it through a script and assert on the output.
+"It builds" is not evidence that any of that works.`;
+
     case 'embedded':
       return `### Build the firmware
 \`\`\`bash
