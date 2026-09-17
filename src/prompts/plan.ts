@@ -25,7 +25,7 @@ Sprint 1 is NOT "foundation/scaffolding" — the codebase already exists. Sprint
   } else if (isIterate) {
     modeBanner = `## MODE: ITERATE (existing codebase)
 A working codebase already exists in this directory. You are NOT scaffolding from scratch.
-Before planning, survey the repo (read CLAUDE.md if present, scan top-level dirs, package manifests) so each sprint is grounded in the actual code that exists. Sprint 1 is NOT "foundation/scaffolding" — it's the first chunk of NEW work the spec asks for.`;
+Before planning, survey the repo (read CLAUDE.md or AGENTS.md if present, scan top-level dirs, package manifests) so each sprint is grounded in the actual code that exists. Sprint 1 is NOT "foundation/scaffolding" — it's the first chunk of NEW work the spec asks for.`;
   } else {
     modeBanner = `## MODE: GREENFIELD (new project)
 There is no existing code. Sprint 1 must establish the foundation (scaffolding, core entities, baseline app that runs end-to-end).`;
@@ -35,7 +35,7 @@ There is no existing code. Sprint 1 must establish the foundation (scaffolding, 
 # PLAN PHASE
 
 ## YOUR SINGLE JOB
-Read the specifications and break the work into as many sprints as needed. Each sprint = one build phase = one Claude session. The orchestrator will auto-run all sprints sequentially — you just plan them.
+Read the specifications and break the work into as many sprints as needed. Each sprint = one build phase = one agent session. The orchestrator will auto-run all sprints sequentially — you just plan them.
 
 ${modeBanner}
 
@@ -141,7 +141,7 @@ Each sprint must be small enough that a QA agent can verify it by reading the gi
 ### Each sprint (phase) should be:
 - **Focused** — one logical concern (one entity, one feature, one migration, one UI page). NOT "backend + frontend + tests" bundled together.
 - **Independently verifiable** — after QA passes, you can prove THIS sprint's deliverables work without testing the entire app end-to-end.
-- **Buildable in one session** — one Claude session builds everything for this sprint.
+- **Buildable in one session** — one agent session builds everything for this sprint.
 - **Non-breaking** — the app still compiles and starts after this sprint. It doesn't have to be feature-complete yet, but it must not crash.
 
 ### How many sprints?

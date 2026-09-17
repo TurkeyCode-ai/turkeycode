@@ -57,7 +57,7 @@ First, understand what this project is and how to run it.
 Check for these files to identify the stack:
 \`\`\`bash
 ls -la package.json Cargo.toml requirements.txt go.mod build.gradle pom.xml *.csproj 2>/dev/null
-cat CLAUDE.md README.md 2>/dev/null | head -50
+cat CLAUDE.md AGENTS.md README.md 2>/dev/null | head -50
 \`\`\`
 
 ### 1.2 Determine Project Type

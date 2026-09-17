@@ -32,6 +32,7 @@ import {
   buildQaSmokePrompt,
   buildQaFunctionalPrompt,
   buildQaVisualPrompt,
+  buildQaVisualReviewPrompt,
   buildQaVerdictPrompt,
   buildQaFixPrompt,
   buildQaCombinedPrompt,
@@ -1051,7 +1052,7 @@ export class Orchestrator {
     this.log(`\n--- Building Phase ${phase.number}: ${phase.name} ---`);
 
     // Build prompt and run session
-    const prompt = buildBuildPhasePrompt(this.state, phase);
+    const prompt = buildBuildPhasePrompt(this.state, phase, getActiveBackend().capabilities);
     const buildDoneFile = `${PHASES_DIR}/phase-${phase.number}/build.done`;
     const startTime = Date.now();
 
@@ -1269,31 +1270,24 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       // the rendered UI from screenshots, with cross-attempt memory. It's skipped
       // for non-visual project types (CLI/API/library/embedded).
       const skipVisual = shouldSkipVisualQA(this.state.projectType || 'web-fullstack');
-      const qaTasks = [
-        {
-          cwd: this.workDir,
-          prompt: buildQaCombinedPrompt(this.state, phaseNumber, attempt, diffStat, baseRef),
-          timeoutMs: QA_TIMEOUT_MS,
-          sessionName: `qa-combined-${attempt}`,
-          doneFile: `${QA_DIR}/phase-${phaseNumber}/verdict-${attempt}.done`,
-          model: getModelForPhase('qa-functional') // Sonnet for combined QA
-        }
-      ];
+      const combinedTask = this.spawner.run({
+        cwd: this.workDir,
+        prompt: buildQaCombinedPrompt(this.state, phaseNumber, attempt, diffStat, baseRef),
+        timeoutMs: QA_TIMEOUT_MS,
+        sessionName: `qa-combined-${attempt}`,
+        doneFile: `${QA_DIR}/phase-${phaseNumber}/verdict-${attempt}.done`,
+        model: getModelForPhase('qa-functional') // Sonnet for combined QA
+      });
+
+      let visualTask: Promise<SpawnResult[]> = Promise.resolve([]);
       if (skipVisual) {
         this.log(`Skipping visual QA — project type "${this.state.projectType}" has no visual surface`);
       } else {
         this.log('--- Running combined QA + visual QA (parallel) ---');
-        qaTasks.push({
-          cwd: this.workDir,
-          prompt: buildQaVisualPrompt(this.state, phaseNumber, attempt),
-          timeoutMs: QA_TIMEOUT_MS,
-          sessionName: `qa-visual-${attempt}`,
-          doneFile: `${QA_DIR}/phase-${phaseNumber}/visual-${attempt}.done`,
-          model: getModelForPhase('qa-visual')
-        });
+        visualTask = this.runVisualQaSessions(phaseNumber, attempt);
       }
 
-      const qaResults = await this.spawner.runParallel(qaTasks, skipVisual ? 1 : 2);
+      const qaResults = [await combinedTask, ...(await visualTask)];
 
       this.assertNotCreditExhausted(qaResults);
       if (qaResults.some(r => r.rateLimited)) {
@@ -1530,33 +1524,25 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
 
       // ========== TIER 2+3: FUNCTIONAL + VISUAL (PARALLEL) ==========
       this.log('--- Tier 2+3: Functional + Visual (PARALLEL) ---');
-            // Build QA tasks — skip visual for non-visual project types
-      const qaTasks = [
-        {
-          cwd: this.workDir,
-          prompt: buildQaFunctionalPrompt(this.state, phaseNumber, attempt),
-          timeoutMs: QA_TIMEOUT_MS,
-          sessionName: `qa-functional-${attempt}`,
-          doneFile: `${QA_DIR}/phase-${phaseNumber}/functional-${attempt}.done`,
-          model: getModelForPhase('qa-functional')
-        }
-      ];
+      // Build QA tasks — skip visual for non-visual project types
+      const functionalTask = this.spawner.run({
+        cwd: this.workDir,
+        prompt: buildQaFunctionalPrompt(this.state, phaseNumber, attempt),
+        timeoutMs: QA_TIMEOUT_MS,
+        sessionName: `qa-functional-${attempt}`,
+        doneFile: `${QA_DIR}/phase-${phaseNumber}/functional-${attempt}.done`,
+        model: getModelForPhase('qa-functional')
+      });
 
       const skipVisual = shouldSkipVisualQA(this.state.projectType || 'web-fullstack');
+      let visualTask: Promise<SpawnResult[]> = Promise.resolve([]);
       if (skipVisual) {
         this.log(`Skipping visual QA — project type "${this.state.projectType}" has no visual component`);
       } else {
-        qaTasks.push({
-          cwd: this.workDir,
-          prompt: buildQaVisualPrompt(this.state, phaseNumber, attempt),
-          timeoutMs: QA_TIMEOUT_MS,
-          sessionName: `qa-visual-${attempt}`,
-          doneFile: `${QA_DIR}/phase-${phaseNumber}/visual-${attempt}.done`,
-          model: getModelForPhase('qa-visual')
-        });
+        visualTask = this.runVisualQaSessions(phaseNumber, attempt);
       }
 
-      const qaResults = await this.spawner.runParallel(qaTasks, skipVisual ? 1 : 2);
+      const qaResults = [await functionalTask, ...(await visualTask)];
 
       // Handle rate limiting in QA sessions
       this.assertNotCreditExhausted(qaResults);
@@ -1839,6 +1825,55 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     saveState(this.state);
 
     enforceGate(this.gates.checkAAR(phaseNumber));
+  }
+
+  /**
+   * Run the visual QA pass, shaped by the active backend's capabilities.
+   *
+   * With in-session subagents (Claude Code), ONE session captures screenshots
+   * and spawns the blind reviewer itself — the historical flow. Without them,
+   * a capture session runs first (gated on capture-N.done), then a SECOND
+   * session gets the review-only prompt; a fresh print-mode session has never
+   * seen the code, so the blindness property survives the backend swap.
+   */
+  private async runVisualQaSessions(phaseNumber: number, attempt: number): Promise<SpawnResult[]> {
+    const caps = getActiveBackend().capabilities;
+    const qaDir = `${QA_DIR}/phase-${phaseNumber}`;
+
+    if (caps.subagents) {
+      return [await this.spawner.run({
+        cwd: this.workDir,
+        prompt: buildQaVisualPrompt(this.state, phaseNumber, attempt, caps),
+        timeoutMs: QA_TIMEOUT_MS,
+        sessionName: `qa-visual-${attempt}`,
+        doneFile: `${qaDir}/visual-${attempt}.done`,
+        model: getModelForPhase('qa-visual')
+      })];
+    }
+
+    const captureResult = await this.spawner.run({
+      cwd: this.workDir,
+      prompt: buildQaVisualPrompt(this.state, phaseNumber, attempt, caps),
+      timeoutMs: QA_TIMEOUT_MS,
+      sessionName: `qa-visual-capture-${attempt}`,
+      doneFile: `${qaDir}/capture-${attempt}.done`,
+      model: getModelForPhase('qa-visual')
+    });
+    // Don't burn a review session on a failed/limited capture; the caller's
+    // rate-limit and verdict handling deal with the partial result.
+    if (captureResult.exitCode !== 0 || captureResult.rateLimited || captureResult.creditExhausted) {
+      return [captureResult];
+    }
+
+    const reviewResult = await this.spawner.run({
+      cwd: this.workDir,
+      prompt: buildQaVisualReviewPrompt(this.state, phaseNumber, attempt, caps),
+      timeoutMs: QA_TIMEOUT_MS / 2,
+      sessionName: `qa-visual-review-${attempt}`,
+      doneFile: `${qaDir}/visual-${attempt}.done`,
+      model: getModelForPhase('qa-visual')
+    });
+    return [captureResult, reviewResult];
   }
 
   /**
