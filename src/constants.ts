@@ -102,12 +102,14 @@ export function phaseModelEnvVar(phase: string): string {
 }
 
 /** Each distinct model this run can still use, with the phases that use it. */
-export function preflightModels(skipPhases: ReadonlySet<string> = new Set()): Map<string, string[]> {
-  const byModel = new Map<string, string[]>();
+export function preflightModels(skipPhases: ReadonlySet<string> = new Set()): Map<string | undefined, string[]> {
+  // undefined is a real key: it means the backend's default model, which is all
+  // a backend with no tier mappings has, and it still has to be probed.
+  const byModel = new Map<string | undefined, string[]>();
   for (const phase of Object.keys(PHASE_MODELS)) {
     if (skipPhases.has(phase)) continue;
     const model = getModelForPhase(phase);
-    if (model) byModel.set(model, [...(byModel.get(model) ?? []), phase]);
+    byModel.set(model, [...(byModel.get(model) ?? []), phase]);
   }
   return byModel;
 }

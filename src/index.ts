@@ -26,6 +26,25 @@ import {
   SCOPE_DONE,
   SCOPE_DECISIONS_FILE,
 } from './constants';
+import { resolveBackendId, setActiveBackend } from './agents';
+
+/**
+ * Resolve and activate the agent backend for this command.
+ * Precedence: --agent flag > TURKEYCODE_AGENT > state.json pin > claude.
+ * Exits with the registry's error on an unknown id or a resume conflict.
+ */
+function activateAgent(cliFlag: string | undefined, stateAgent?: string): void {
+  try {
+    const spec = setActiveBackend(resolveBackendId({ cliFlag, stateAgent }));
+    if (spec.id !== 'claude') {
+      console.log(`Agent backend: ${spec.displayName} (${spec.id})`);
+      console.log('');
+    }
+  } catch (err) {
+    console.error(`❌ ${(err as Error).message}`);
+    process.exit(1);
+  }
+}
 
 /**
  * Write a fatal error to .turkey/fatal.log via fs. console output can be lost when
@@ -79,6 +98,7 @@ program
   .option('--type <type>', `Force project type (skips auto-detection): ${PROJECT_TYPES.filter(t => t !== 'unknown').join(', ')}`)
   .option('--base <branch>', 'Base branch override (e.g. develop). Defaults to detected main/master.')
   .option('--feature <branch>', 'Feature branch — phase branches branch off this and merge back into it; the base branch stays untouched. Required for established gitflow repos.')
+  .option('-a, --agent <id>', 'Agent backend: claude (default), codex, gemini, opencode, or an id from ~/.turkeycode/agents.yaml (or set TURKEYCODE_AGENT)')
   .action(async (description: string, options) => {
     console.log('');
     console.log('╔══════════════════════════════════════════════════════════╗');
@@ -87,6 +107,9 @@ program
     console.log('║  Phase-based builds. Parallel QA. Hard gates.           ║');
     console.log('╚══════════════════════════════════════════════════════════╝');
     console.log('');
+
+    // `run` can be continuing an existing build — honor its agent pin.
+    activateAgent(options.agent, canResume() ? loadState().agent : undefined);
 
     // Warning policy (three modes):
     //  - default        → defer warnings: blockers-only per phase + end-of-build polish pass
@@ -219,6 +242,7 @@ program
     console.log('=== ORCHESTRATION STATUS ===');
     console.log('');
     console.log(`Project: ${state.projectDescription || '(not set)'}`);
+    if (state.agent) console.log(`Agent: ${state.agent}`);
     console.log(`Phase: ${state.currentPhase}`);
     console.log(`Step: ${state.currentStep || '(none)'}`);
     console.log('');
@@ -288,8 +312,10 @@ program
   .option('-s, --spec <file>', 'Seed spec/notes file to start the working model from')
   .option('--persona <file>', 'Operating-manual persona the scope agent embodies (else ./.turkey/persona.md or ~/.turkeycode/persona.md)')
   .option('--model <model>', 'Override the model used for the scoping agent')
+  .option('-a, --agent <id>', 'Agent backend: claude (default), codex, gemini, opencode, or an id from ~/.turkeycode/agents.yaml (or set TURKEYCODE_AGENT)')
   .option('-v, --verbose', 'Stream the underlying session output')
   .action(async (description: string, options) => {
+    activateAgent(options.agent);
     console.log('');
     console.log('╔══════════════════════════════════════════════════════════╗');
     console.log('║                    SCOPE  (How I Scope)                  ║');
@@ -440,11 +466,16 @@ program
   .option('--no-pr', 'Skip gh pr create (implied by --no-push)')
   .option('--base <branch>', 'Base branch override (seed/override; persisted to state)')
   .option('--feature <branch>', 'Feature branch (seed/override; persisted to state)')
+  .option('-a, --agent <id>', 'Agent backend (must match the agent the run started with)')
   .action(async (options) => {
     if (!canResume()) {
       console.log('Nothing to resume. Use "turkeycode run" to start.');
       process.exit(1);
     }
+
+    // Resume on the agent the run started with; an explicit conflicting
+    // --agent/TURKEYCODE_AGENT is a hard error inside activateAgent.
+    activateAgent(options.agent, loadState().agent);
 
     // Warning policy — mirror the `run` command (default: defer + polish).
     const strictPhases = options.strictPhases === true;
@@ -902,11 +933,13 @@ program
   .option('-v, --verbose', 'Verbose output')
   .option('--manifest <path>', 'Override the repos.yaml manifest path')
   .option('--mcp-config <path>', 'Override the MCP config path (else uses TURKEYCODE_MCP_CONFIG)')
+  .option('-a, --agent <id>', 'Agent backend: claude (default), codex, gemini, opencode, or an id from ~/.turkeycode/agents.yaml (or set TURKEYCODE_AGENT)')
   .option('--triage-only', 'Stop after triage. No branches cut, no build session, no Jira comment/worklog.')
   .option('--build-model <model>', 'Model for the build session (e.g. opus)')
   .option('--deep', 'Deep tier: plan session before the build, then review → fix rounds before pushing')
   .option('--review-rounds <n>', 'Deep tier: max review → fix rounds (default 2)')
   .action(async (key: string, options) => {
+    activateAgent(options.agent);
     const reviewRounds = options.reviewRounds != null ? Number(options.reviewRounds) : undefined;
     if (reviewRounds != null && (!Number.isInteger(reviewRounds) || reviewRounds < 1)) {
       console.error(`❌ --review-rounds must be a positive integer (got "${options.reviewRounds}").`);
@@ -948,7 +981,9 @@ program
   .option('-v, --verbose', 'Verbose output')
   .option('--manifest <path>', 'Override the repos.yaml manifest path')
   .option('--mcp-config <path>', 'Override the MCP config path (else uses TURKEYCODE_MCP_CONFIG)')
+  .option('-a, --agent <id>', 'Agent backend: claude (default), codex, gemini, opencode, or an id from ~/.turkeycode/agents.yaml (or set TURKEYCODE_AGENT)')
   .action(async (prompt: string, options) => {
+    activateAgent(options.agent);
     if (options.bug && options.story) {
       console.error('❌ Pass at most one of --bug / --story.');
       process.exit(1);
