@@ -1,6 +1,6 @@
 # turkeycode
 
-Phase-based orchestrator for Claude Code build workflows. Spawns Claude sessions per build phase with hard artifact gates and parallel QA.
+Phase-based orchestrator for agent-CLI build workflows. Spawns agent sessions per build phase with hard artifact gates and parallel QA. Claude Code is the default backend; Codex CLI, Gemini CLI, OpenCode, and custom `~/.turkeycode/agents.yaml` agents plug in via `--agent` / `TURKEYCODE_AGENT`.
 
 ## What This Is
 
@@ -131,7 +131,12 @@ The state file tracks:
 src/
 ├── index.ts          # CLI entry point
 ├── orchestrator.ts   # Main loop: research → plan → phase loop
-├── spawner.ts        # Runs Claude sessions (run, runParallel)
+├── spawner.ts        # Runs agent sessions (run, runParallel) — backend-neutral plumbing
+├── agents/           # Pluggable agent backends (data-driven specs)
+│   ├── types.ts      # AgentBackendSpec, capabilities, PHASE_TIERS, SpawnSessionOptions
+│   ├── spawn-config.ts # Pure arg/env builders, classifiers, resolveModelForPhase
+│   ├── registry.ts   # Built-ins + ~/.turkeycode/agents.yaml, active-backend global
+│   └── claude.ts, codex.ts, gemini.ts, opencode.ts   # Built-in specs
 ├── gates.ts          # Artifact validation (plan, build, QA gates)
 ├── state.ts          # State management (phases, not tickets)
 ├── types.ts          # BuildPhase, PhasePlan, ProjectState
@@ -176,10 +181,16 @@ src/
 
 6. **State survives compaction**: Tech context, entities, endpoints persisted in state.json
 
+7. **Pluggable agent backends**: every session runs on an `AgentBackendSpec` (binary, flags, prompt delivery, env policy, billing classifiers, model tiers, capabilities). One backend per run, pinned in state.json; prompts adapt to capabilities (no Task tool → visual QA's blind review runs as a second fresh session). Phase→tier is shared; tier→model is per backend; `TURKEYCODE_MODEL(_PHASE)` overrides both.
+
 ## Environment Variables
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-...     # Required
+ANTHROPIC_API_KEY=sk-ant-...     # For the claude backend (or use `claude login`)
+TURKEYCODE_AGENT=claude           # Agent backend: claude/codex/gemini/opencode or agents.yaml id
+TURKEYCODE_MODEL=sonnet           # Global model override (active backend's vocabulary)
+TURKEYCODE_MODEL_BUILD=opus       # Per-phase model override (qa-fix -> TURKEYCODE_MODEL_QA_FIX)
+TURKEYCODE_USE_API_KEY=1          # Keep the vendor API key instead of the CLI login session
 GH_TOKEN=ghp_...                  # For private repos
 GITHUB_OWNER=username-or-org      # For auto-creating repos
 JIRA_HOST=company.atlassian.net   # For Jira integration (REST API)

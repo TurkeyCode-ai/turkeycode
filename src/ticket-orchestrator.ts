@@ -303,7 +303,7 @@ export class TicketOrchestrator {
       timeoutMs: TRIAGE_TIMEOUT_MS,
       sessionName: `triage-${ticket.key}`,
       doneFile: 'triage.done',
-      model: getModelForPhase('qa-smoke') ?? 'haiku',
+      model: getModelForPhase('qa-smoke'),
       mcpConfig: this.mcpConfig,
     });
 
@@ -356,7 +356,7 @@ export class TicketOrchestrator {
       timeoutMs: TICKET_RESEARCH_TIMEOUT_MS,
       sessionName: `research-${ticket.key}`,
       doneFile: 'research.done',
-      model: getModelForPhase('research') ?? 'sonnet',
+      model: getModelForPhase('research'),
       mcpConfig: this.mcpConfig,
     });
 
@@ -724,7 +724,7 @@ export class TicketOrchestrator {
       timeoutMs: FIX_TIMEOUT_MS,
       sessionName: `merge-fix-${ticket.key}`,
       doneFile,
-      model: getModelForPhase('qa-fix') ?? 'sonnet',
+      model: getModelForPhase('qa-fix'),
       mcpConfig: this.mcpConfig,
     });
 

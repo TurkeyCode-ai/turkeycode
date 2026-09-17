@@ -223,7 +223,7 @@ export class StoryOrchestrator {
       timeoutMs: ESTIMATE_TIMEOUT_MS,
       sessionName: 'estimate',
       doneFile: 'estimate.done',
-      model: getModelForPhase('qa-smoke') ?? 'haiku',
+      model: getModelForPhase('qa-smoke'),
       mcpConfig: this.mcpConfig,
     });
 

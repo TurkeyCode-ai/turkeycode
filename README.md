@@ -17,7 +17,7 @@ It locks the scope with you first — a few quick picks, or skip with `--spec` �
 
 ## How It Works
 
-TurkeyCode doesn't write code. It **orchestrates** Claude Code through a deterministic pipeline — research, plan, build, test, fix, review — with hard gates between every step. No AI decides what happens next. The orchestrator does.
+TurkeyCode doesn't write code. It **orchestrates** a coding agent — Claude Code by default; Codex CLI, Gemini CLI, OpenCode, or your own via `--agent` — through a deterministic pipeline: research, plan, build, test, fix, review, with hard gates between every step. No AI decides what happens next. The orchestrator does.
 
 ```
 You: "Build me a recipe sharing app"
@@ -76,8 +76,8 @@ Load order (first found wins): `--persona <file>` → `./.turkey/persona.md` (pr
 
 ### Prerequisites
 
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated
-- Claude Max subscription ($100/mo) or Anthropic API key
+- An agent CLI installed and authenticated — [Claude Code](https://docs.anthropic.com/en/docs/claude-code) by default, or Codex CLI / Gemini CLI / OpenCode (see [Agent Backends](#agent-backends))
+- For the default backend: Claude Max subscription ($100/mo) or Anthropic API key
 - Node.js 20+
 - Git
 
@@ -130,7 +130,7 @@ turkeycode run "Portfolio site with dark mode. HTML + Tailwind + Alpine.js."
 turkeycode run "Build a microservice" --spec spec.md
 ```
 
-It builds wherever Claude Code runs — Mac, Linux, Docker, cloud VMs. No lock-in.
+It builds wherever your agent CLI runs — Mac, Linux, Docker, cloud VMs. No lock-in.
 
 ### With a Spec File
 
@@ -149,6 +149,69 @@ turkeycode resume
 ```bash
 turkeycode status
 ```
+
+## Agent Backends
+
+TurkeyCode is not married to one agent. Every phase runs on a pluggable backend; the
+orchestrator's contract with a session is agent-neutral (prompts in, artifacts and
+done-files on disk out), so anything that can run shell commands and write files can
+hold it up.
+
+Built in: `claude` (default), `codex`, `gemini`, `opencode`.
+
+```bash
+# Pick a backend per run (or set TURKEYCODE_AGENT)
+turkeycode run "your idea" --agent codex
+turkeycode run "your idea" --agent gemini
+
+# The choice is pinned in .turkey/state.json — resume stays on the same agent
+turkeycode resume
+```
+
+| Backend | CLI | Autonomy flags | Models |
+|---|---|---|---|
+| `claude` | `claude --print` | `--dangerously-skip-permissions` | opus / sonnet / haiku, Fable 5 pinned for build + blocker fixes |
+| `codex` | `codex exec` | `--dangerously-bypass-approvals-and-sandbox` | gpt-5-codex tiers |
+| `gemini` | `gemini` | `--yolo` | gemini-2.5-pro / flash |
+| `opencode` | `opencode run` | `--auto` | your configured opencode default (`-m provider/model`) |
+
+Phases map to backend-neutral tiers (high / medium / low); each backend maps tiers to
+its own model names. `TURKEYCODE_MODEL` and `TURKEYCODE_MODEL_<PHASE>` override either
+way, in the active backend's vocabulary.
+
+### Bring Your Own Agent
+
+Any print-mode agent CLI can be wired in with zero code changes via
+`~/.turkeycode/agents.yaml` (entries can also override the built-ins by id):
+
+```yaml
+agents:
+  - id: myagent
+    displayName: My Agent
+    binary: /usr/local/bin/myagent
+    baseArgs: ["run", "--auto-approve"]   # print mode + no approval prompts
+    promptDelivery: stdin                  # or: arg (prompt as final argv entry)
+    modelFlag: "-m"
+    env:
+      apiKeyVar: MYAGENT_API_KEY
+    versionArgs: ["--version"]
+    installHint: "brew install myagent"
+    classifiers:                           # regex strings, compiled case-insensitive
+      rateLimit: ["rate.?limit", "\\b429\\b"]
+      creditExhausted: ["quota exceeded"]
+      apiErrorContext: ["\\b429\\b", "myvendor"]
+    models:
+      tiers: { high: big-model, medium: mid-model, low: small-model }
+    capabilities:
+      subagents: false        # can it spawn subagents in-session? (Claude's Task tool)
+      skills: false           # can it load Claude Code skills?
+      mcpConfig: false        # does it take an MCP config file flag?
+      multimodalImages: false # can its model read screenshots?
+```
+
+Capabilities shape the prompts: backends without in-session subagents run visual QA's
+blind review as a second fresh session (same blindness, different plumbing), and
+backends without vision do a structural review instead of judging screenshots.
 
 ## Iterate with Tickets (Jira)
 
@@ -382,6 +445,10 @@ Free tool builds your app. [turkeycode.ai](https://turkeycode.ai) hosts it for y
 
 ## Setup
 
+These options apply to the default `claude` backend. Other backends authenticate
+through their own CLIs (`codex login`, `gemini`, `opencode auth login`) — see
+[Agent Backends](#agent-backends).
+
 ### Option A: Claude Max / Pro (Recommended — no API key needed)
 
 If you have a Claude Max or Pro subscription:
@@ -442,6 +509,9 @@ links epics on both team- and company-managed projects.
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `ANTHROPIC_API_KEY` | No* | Anthropic API key. *Not needed if using Claude Max/Pro via `claude login` |
+| `TURKEYCODE_AGENT` | No | Agent backend: `claude` (default), `codex`, `gemini`, `opencode`, or an `agents.yaml` id. Same as `--agent` |
+| `TURKEYCODE_MODEL` / `TURKEYCODE_MODEL_<PHASE>` | No | Model override (global / per phase, e.g. `TURKEYCODE_MODEL_QA_FIX`), in the active backend's vocabulary |
+| `TURKEYCODE_USE_API_KEY` | No | Set to `1` to keep the vendor API key as the auth source instead of the CLI login session |
 | `GH_TOKEN` | No | GitHub token (alternative to `gh auth login`) |
 | `JIRA_HOST` | No | Jira instance hostname (e.g. `company.atlassian.net`) |
 | `JIRA_EMAIL` | No | Jira account email |
@@ -478,7 +548,7 @@ docker run -it --rm \
 
 **Build seems stuck?** Check `build.log` or run `turkeycode status`. Each QA cycle can take a few minutes — up to 3 cycles per phase is normal.
 
-**"Claude not found" error?** Make sure Claude Code is installed: `npm install -g @anthropic-ai/claude-code` then `claude login`.
+**"Claude not found" error?** Make sure Claude Code is installed: `npm install -g @anthropic-ai/claude-code` then `claude login`. (On another backend, preflight prints that CLI's install and setup hints instead.)
 
 **QA keeps failing?** Try `--allow-warnings` to let cosmetic issues pass. If it's looping on real bugs, check `.turkey/qa/` for the latest report.
 
