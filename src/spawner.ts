@@ -1,14 +1,25 @@
 /**
- * Claude Code session runner for turkeycode
- * Spawns claude --print sessions with proper timeout handling
+ * Agent session runner for turkeycode
+ * Spawns print-mode agent CLI sessions (claude/codex/gemini/opencode/custom)
+ * with proper timeout handling. Which CLI is decided by the active backend
+ * spec (src/agents/) — everything here is backend-neutral process plumbing.
  * v3: Adds runParallel() for concurrent session execution
  */
 
 import { spawn, ChildProcess } from 'child_process';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { SpawnOptions, SpawnResult } from './types';
+import { SpawnResult } from './types';
 import { DEFAULT_TIMEOUT_MS } from './constants';
+import {
+  AgentBackendSpec,
+  SpawnSessionOptions,
+  buildAgentArgs,
+  buildAgentEnv,
+  detectAgentSignals,
+  getActiveBackend,
+  CLAUDE_BACKEND,
+} from './agents';
 
 const DEFAULT_MAX_CONCURRENT = 3;
 
@@ -99,79 +110,42 @@ function installReaper(): void {
   }
 }
 
-const TRANSIENT_RATE_LIMIT_PATTERNS: RegExp[] = [
-  /rate.?limit/i,
-  /\b429\b/,
-  /too many requests/i,
-];
-
-// Markers that the text is an actual Anthropic API error (not application content).
-// Credit wording only counts as exhaustion when it co-occurs with one of these — this
-// is the guardrail: the build/QA agents work on real apps, and finance/fintech domains
-// are saturated with "credit", "balance", "billing cycle", "monthly", "insufficient
-// funds". Without requiring API context, those false-trip exhaustion and kill the build.
-const API_ERROR_CONTEXT: RegExp[] = [
-  /rate.?limit/i,
-  /\b429\b/,
-  /too many requests/i,
-  /rate_limit_error/i,
-  /x-ratelimit/i,
-  /anthropic/i,
-];
-
-// Credit/usage-exhaustion wording. Deliberately omits bare "balance"/"funds"/"billing
-// cycle"/"monthly" — those are ordinary domain words. Even these only fire alongside
-// API_ERROR_CONTEXT (see detectRateLimitSignals).
-const CREDIT_EXHAUSTED_PATTERNS: RegExp[] = [
-  /credit balance is too low/i,
-  /insufficient credit/i,
-  /out of credit/i,
-  /credit[^.\n]{0,30}exhaust/i,
-  /usage limit reached/i,
-  /monthly credit/i,
-  /extra usage/i,
-  /purchase (more )?credit/i,
-];
-
 /**
- * Classify a chunk of CLI output for rate-limit signals. Credit exhaustion is only
- * declared when credit/usage wording co-occurs with an actual API-error marker —
- * otherwise application-domain text (e.g. a banking app's "insufficient credit") would
- * false-trip it and the orchestrator would fail the build for a non-existent rate limit.
+ * Classify a chunk of CLI output for rate-limit signals using a backend's
+ * classifiers (defaults to Claude Code's — the historical behavior and the
+ * signature the existing tests lock). Credit exhaustion is only declared when
+ * credit/usage wording co-occurs with an actual API-error marker — otherwise
+ * application-domain text (e.g. a banking app's "insufficient credit") would
+ * false-trip it and the orchestrator would fail the build for a non-existent
+ * rate limit.
  */
-export function detectRateLimitSignals(text: string): { rateLimited: boolean; creditExhausted: boolean } {
-  const hasApiContext = API_ERROR_CONTEXT.some(p => p.test(text));
-  const hasCreditWording = CREDIT_EXHAUSTED_PATTERNS.some(p => p.test(text));
-  const creditExhausted = hasCreditWording && hasApiContext;
-  const rateLimited = creditExhausted || TRANSIENT_RATE_LIMIT_PATTERNS.some(p => p.test(text));
-  return { rateLimited, creditExhausted };
+export function detectRateLimitSignals(
+  text: string,
+  spec: AgentBackendSpec = CLAUDE_BACKEND
+): { rateLimited: boolean; creditExhausted: boolean } {
+  return detectAgentSignals(spec, text);
 }
 
 /**
- * Spawner class for running Claude Code sessions
+ * Spawner class for running agent CLI sessions
  * Each session gets ONE job and exits when done
  */
 export class Spawner {
   private verbose: boolean;
+  private backend: AgentBackendSpec;
 
-  constructor(options: { verbose?: boolean } = {}) {
+  constructor(options: { verbose?: boolean; backend?: AgentBackendSpec } = {}) {
     this.verbose = options.verbose ?? false;
+    // Resolved at construction, not per-run: the active backend is set once
+    // at CLI entry and a run never switches agents midway.
+    this.backend = options.backend ?? getActiveBackend();
   }
 
   /**
-   * Run a Claude Code session with the given prompt
+   * Run one agent session with the given prompt
    * Returns when the session completes or times out
    */
-  async run(options: {
-    cwd: string;
-    prompt: string;
-    timeoutMs?: number;
-    sessionName?: string;
-    doneFile?: string;
-    model?: string;
-    /** Path to an MCP config JSON (e.g. for aimem). Defaults to TURKEYCODE_MCP_CONFIG env var. */
-    mcpConfig?: string;
-  }): Promise<SpawnResult> {
+  async run(options: SpawnSessionOptions): Promise<SpawnResult> {
     // Shutting down: the reaper exits this process within the grace period, and
     // anything started now would be killed mid-flight. Never resolving stops the
     // main loop here instead of letting it run the next session.
@@ -181,11 +155,12 @@ export class Spawner {
       cwd,
       prompt,
       timeoutMs = DEFAULT_TIMEOUT_MS,
-      sessionName = 'claude-session',
+      sessionName = 'agent-session',
       doneFile,
       model,
       mcpConfig = process.env.TURKEYCODE_MCP_CONFIG,
     } = options;
+    const backend = this.backend;
 
     const startTime = Date.now();
 
@@ -206,7 +181,7 @@ export class Spawner {
 
       // Scan a chunk of output for rate-limit / credit-exhaustion signals.
       const scanForLimits = (text: string) => {
-        const signal = detectRateLimitSignals(text);
+        const signal = detectAgentSignals(backend, text);
         if (signal.creditExhausted && !creditExhausted) {
           creditExhausted = true;
           this.log(`[${sessionName}] Credit/usage exhaustion detected in output (will not retry)`);
@@ -217,62 +192,44 @@ export class Spawner {
         }
       };
 
-      // Spawn claude directly, write prompt to stdin
-      // Pass through all env vars including ANTHROPIC_API_KEY
-      // On droplets: API key is required (no login session available)
-      // On server with Max login: Claude CLI prefers login over API key automatically
-      const cleanEnv = { ...process.env };
-
-      // Safety net: strip dangerous env vars even if caller forgot to
-      const NEVER_PASS_VARS = [
-        'DATABASE_URL', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET',
-        'SENDGRID_API_KEY', 'NEXTAUTH_SECRET', 'SESSION_SECRET',
-        'CLAUDECODE',  // Prevent "nested session" error when run inside Claude Code
-      ];
-      // By default strip ANTHROPIC_API_KEY so the CLI uses the Max login session.
-      // In headless / API-key mode (no login session — e.g. a CI or other
-      // non-interactive environment) set TURKEYCODE_USE_API_KEY=1 to KEEP the
-      // key as the auth source.
-      if (process.env.TURKEYCODE_USE_API_KEY !== '1') {
-        NEVER_PASS_VARS.push('ANTHROPIC_API_KEY');
-      }
-      for (const key of NEVER_PASS_VARS) {
-        delete cleanEnv[key];
-      }
-
-      const args = [
-        '--print',
-        '--dangerously-skip-permissions',
-        '--verbose',
-        '--input-format', 'text'
-      ];
+      // Env policy lives in the backend spec: global secret strip, vendor
+      // API-key handling (login session vs TURKEYCODE_USE_API_KEY=1), and
+      // nested-session guards. CI=true prevents interactive prompts.
+      const cleanEnv = buildAgentEnv(backend);
 
       if (model) {
-        args.push('--model', model);
-        this.log(`[${sessionName}] Using model: ${model}`);
+        if (backend.modelFlag) {
+          this.log(`[${sessionName}] Using model: ${model}`);
+        } else {
+          this.log(`[${sessionName}] WARNING: backend '${backend.id}' has no model flag — ignoring model '${model}'`);
+        }
       }
 
+      // Validate the MCP config before it reaches the argv: the file must
+      // exist and the backend must take one on the command line.
+      let usableMcpConfig: string | undefined;
       if (mcpConfig) {
-        if (!existsSync(mcpConfig)) {
+        if (!backend.mcpConfigFlag) {
+          this.log(`[${sessionName}] WARNING: backend '${backend.id}' has no MCP config flag — skipping ${mcpConfig}`);
+        } else if (!existsSync(mcpConfig)) {
           this.log(`[${sessionName}] WARNING: mcpConfig path not found: ${mcpConfig} — skipping`);
         } else {
-          args.push('--mcp-config', mcpConfig);
+          usableMcpConfig = mcpConfig;
           this.log(`[${sessionName}] MCP config: ${mcpConfig}`);
         }
       }
 
-      const proc: ChildProcess = spawn('claude', args, {
+      const args = buildAgentArgs(backend, { model, mcpConfig: usableMcpConfig, prompt });
+
+      const proc: ChildProcess = spawn(backend.binary, args, {
         cwd,
         stdio: ['pipe', 'pipe', 'pipe'], // stdin piped for prompt, stdout/stderr piped for capture
         // Own process group so we can reap the WHOLE tree. A QA/fix session
         // backgrounds a dev server and (for visual QA) headless Chrome with `&`;
-        // those outlive the claude process and, across a multi-phase build, pile
-        // up until the jail OOMs. detached:true puts them in claude's group.
+        // those outlive the agent process and, across a multi-phase build, pile
+        // up until the jail OOMs. detached:true puts them in the agent's group.
         detached: true,
-        env: {
-          ...cleanEnv,
-          CI: 'true' // Prevent interactive prompts
-        }
+        env: cleanEnv
       });
 
       // Kill claude AND everything it backgrounded (dev servers, Chrome) by
@@ -290,9 +247,13 @@ export class Spawner {
         installReaper();
       }
 
-      // Write prompt directly to stdin and close it
+      // Deliver the prompt: write to stdin for stdin-mode backends (arg-mode
+      // backends already carry it in argv); close stdin either way so the CLI
+      // sees EOF and stays non-interactive.
       if (proc.stdin) {
-        proc.stdin.write(prompt);
+        if (backend.promptDelivery === 'stdin') {
+          proc.stdin.write(prompt);
+        }
         proc.stdin.end();
       }
 
@@ -388,9 +349,9 @@ export class Spawner {
         this.log(`[${sessionName}] Duration: ${durationMs}ms`);
         this.log(`[${sessionName}] Output length: ${stdout.length} chars`);
 
-        // Warn if output is suspiciously short (< 100 chars usually means Claude didn't execute)
+        // Warn if output is suspiciously short (< 100 chars usually means the agent didn't execute)
         if (stdout.length < 100 && exitCode === 0 && !doneFileDetected) {
-          this.log(`[${sessionName}] WARNING: Suspiciously short output - Claude may not have executed the task`);
+          this.log(`[${sessionName}] WARNING: Suspiciously short output - ${backend.displayName} may not have executed the task`);
           this.log(`[${sessionName}] stdout: ${stdout.substring(0, 200)}`);
           if (stderr.length > 0) {
             this.log(`[${sessionName}] stderr: ${stderr.substring(0, 500)}`);
@@ -436,15 +397,7 @@ export class Spawner {
   /**
    * Run multiple sessions sequentially
    */
-  async runSequence(sessions: Array<{
-    cwd: string;
-    prompt: string;
-    timeoutMs?: number;
-    sessionName?: string;
-    doneFile?: string;
-    model?: string;
-    mcpConfig?: string;
-  }>): Promise<SpawnResult[]> {
+  async runSequence(sessions: SpawnSessionOptions[]): Promise<SpawnResult[]> {
     const results: SpawnResult[] = [];
 
     for (const session of sessions) {
@@ -466,15 +419,7 @@ export class Spawner {
    * Returns results in the same order as the input array.
    */
   async runParallel(
-    sessions: Array<{
-      cwd: string;
-      prompt: string;
-      timeoutMs?: number;
-      sessionName?: string;
-      doneFile?: string;
-      model?: string;
-      mcpConfig?: string;
-    }>,
+    sessions: SpawnSessionOptions[],
     maxConcurrent: number = DEFAULT_MAX_CONCURRENT
   ): Promise<SpawnResult[]> {
     if (sessions.length === 0) return [];
@@ -527,9 +472,9 @@ export class Spawner {
 }
 
 /**
- * Create a spawner instance
+ * Create a spawner instance bound to the active backend (or an explicit one).
  */
-export function createSpawner(options?: { verbose?: boolean }): Spawner {
+export function createSpawner(options?: { verbose?: boolean; backend?: AgentBackendSpec }): Spawner {
   return new Spawner(options);
 }
 
