@@ -178,6 +178,11 @@ export class TicketOrchestrator {
       console.log(`[ticket] (triage-only) Skipping Jira worklog. Wall clock: ${formatJiraDuration(totalMs)}`);
       return;
     }
+    // Time tracked elsewhere (e.g. a billing timer that posts its own worklogs): report it, don't log it twice
+    if (process.env.TURKEYCODE_NO_WORKLOG === '1') {
+      console.log(`[ticket] TURKEYCODE_NO_WORKLOG=1: skipping Jira worklog. Wall clock: ${formatJiraDuration(totalMs)} (${totalMs} ms)`);
+      return;
+    }
     const totalStr = formatJiraDuration(totalMs);
     const breakdown: string[] = [`turkeycode automated run — ${totalStr} total`];
     const labels: Array<[keyof PhaseTimings, string]> = [
