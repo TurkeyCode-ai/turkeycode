@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { scopeManifestToTriage } from '../ticket-orchestrator';
+import { parseReviewFindings, scopeManifestToTriage } from '../ticket-orchestrator';
 import { RepoManifest } from '../repos';
 
 const manifest: RepoManifest = {
@@ -59,5 +59,25 @@ describe('scopeManifestToTriage', () => {
     };
     const out = scopeManifestToTriage(withRefs, ['/r/inventory-api'], 'PROJ-1');
     expect(out.references).toEqual(withRefs.references);
+  });
+});
+
+describe('parseReviewFindings', () => {
+  it('returns an empty list for a clean review', () => {
+    expect(parseReviewFindings('{"findings": []}')).toEqual([]);
+  });
+
+  it('keeps the reviewer fields and defaults a missing severity to should-fix', () => {
+    const out = parseReviewFindings(
+      '{"findings": [{"severity": "bug", "file": "a.kt", "line": 12, "summary": "wrong rounding", "fix": "HALF_UP"}, {"summary": "missing test"}]}',
+    );
+    expect(out).toEqual([
+      { severity: 'bug', repo: undefined, file: 'a.kt', line: 12, summary: 'wrong rounding', fix: 'HALF_UP' },
+      { severity: 'should-fix', repo: undefined, file: undefined, line: undefined, summary: 'missing test', fix: undefined },
+    ]);
+  });
+
+  it('throws when there is no findings array', () => {
+    expect(() => parseReviewFindings('{"ok": true}')).toThrow(/no findings array/);
   });
 });
