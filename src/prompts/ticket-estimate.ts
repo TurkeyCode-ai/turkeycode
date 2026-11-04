@@ -6,6 +6,8 @@
  * and STOP. The orchestrator creates the real Jira ticket from this.
  */
 
+import { oneTurnRule } from './one-turn';
+
 export interface EstimatePromptInput {
   /** The user's plain-language request. */
   description: string;
@@ -75,6 +77,8 @@ Rules for the fields:
 - "points" MUST be exactly one of 1, 2, 3, 5, 8, 13.
 
 Then create ${doneFile} with any content to signal completion.
+
+${oneTurnRule(doneFile)}
 
 STOP after writing the done file.
 `.trim();

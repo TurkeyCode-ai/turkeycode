@@ -15,13 +15,18 @@ export type ProjectType =
   | 'library'          // npm package, pip package, Go module, crate, gem, etc.
   | 'desktop'          // Electron, Tauri, Qt, etc.
   | 'mobile'           // React Native, Flutter, Swift, Kotlin, etc.
+  | 'game-godot'       // Godot project (project.godot). Text scenes an agent can author
   | 'embedded'         // PlatformIO, Arduino, ESP32, STM32, firmware projects
   | 'legacy'           // Mainframe/legacy: COBOL, JCL, RPG, PL/I, Assembler (batch, no web UI)
   | 'monorepo'         // Multiple project types in one repo
   | 'unknown';         // Can't determine — fall back to basic compilation checks
 
 /** Project types that have a visual UI component */
-export const VISUAL_PROJECT_TYPES: ProjectType[] = ['web-fullstack', 'web-frontend', 'desktop', 'mobile'];
+// A game is judged on how it LOOKS more than anything else here, so it gets
+// the blind visual pass — a fresh agent reading captured frames who never saw
+// the code. Frames need a real renderer (--headless crashes on --write-movie),
+// so capture runs windowed, under xvfb where there is no display.
+export const VISUAL_PROJECT_TYPES: ProjectType[] = ['web-fullstack', 'web-frontend', 'desktop', 'mobile', 'game-godot'];
 
 /** Project types that should skip visual QA entirely */
 export function shouldSkipVisualQA(projectType: ProjectType): boolean {

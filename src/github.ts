@@ -4,7 +4,7 @@
  */
 
 import { execSync, execFileSync, ExecSyncOptions } from 'child_process';
-import fs, { writeFileSync, unlinkSync } from 'fs';
+import fs, { writeFileSync, unlinkSync, realpathSync } from 'fs';
 import path, { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -803,15 +803,59 @@ export class GitHubClient {
   }
 
   /**
-   * Check if current directory is a git repo
+   * Is the work directory ITSELF a git repo root?
+   *
+   * This asks a deliberately narrow question, because the broad one is
+   * dangerous. It used to run `git rev-parse --git-dir` with no cwd at all,
+   * so it answered about whatever directory turkeycode happened to be
+   * launched from, and `--git-dir` succeeds anywhere INSIDE a repo — so a
+   * build directory sitting under an unrelated repo reported "already a
+   * repo". initRepo() then skipped `git init`, and every later git call —
+   * checkout main, phase branches, commits, repacks — operated on that
+   * ancestor repo instead.
+   *
+   * That is not hypothetical: a build under ~ found the user's home-directory
+   * repo, tried to repack an object store containing their entire home
+   * folder, wrote 34GB of temp packs, filled the disk, and died mid-write to
+   * .turkey/state.json. The quieter version of the same bug commits phase
+   * branches into whatever repo happens to be upstairs.
+   *
+   * Comparing the toplevel to workDir means a nested `git init` still happens
+   * when we're inside someone else's repo — which is correct and safe, since
+   * the inner .git wins for everything under it.
    */
   isGitRepo(): boolean {
+    const toplevel = this.gitToplevel();
+    return toplevel !== null && toplevel === this.realWorkDir();
+  }
+
+  /**
+   * The repo workDir sits inside but is not the root of, or null. Running from a
+   * subdirectory of a project and building next to an unrelated parent repo look
+   * identical from here, so initRepo warns rather than guessing which one this is.
+   */
+  enclosingRepoRoot(): string | null {
+    const toplevel = this.gitToplevel();
+    return toplevel !== null && toplevel !== this.realWorkDir() ? toplevel : null;
+  }
+
+  private gitToplevel(): string | null {
     try {
-      execSync('git rev-parse --git-dir', { stdio: ['pipe', 'pipe', 'pipe'] });
-      return true;
+      const toplevel = execSync('git rev-parse --show-toplevel', {
+        cwd: this.workDir,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      })
+        .toString()
+        .trim();
+      return toplevel ? realpathSync(toplevel) : null;
     } catch {
-      return false;
+      return null;
     }
+  }
+
+  /** git reports the resolved path, so a symlinked workDir must be resolved to compare. */
+  private realWorkDir(): string {
+    return realpathSync(path.resolve(this.workDir));
   }
 
   /**
@@ -820,6 +864,15 @@ export class GitHubClient {
   initRepo(): boolean {
     if (this.isGitRepo()) {
       return true;
+    }
+    const enclosing = this.enclosingRepoRoot();
+    if (enclosing) {
+      console.warn('');
+      console.warn(`⚠ ${this.workDir} is inside the git repo ${enclosing}, but is not its root.`);
+      console.warn(`  turkeycode builds at a repo root, so it is creating a NEW nested repo here.`);
+      console.warn(`  Nothing from this run will land in ${enclosing}.`);
+      console.warn(`  To build in that repo instead: stop, cd ${enclosing}, and re-run.`);
+      console.warn('');
     }
     try {
       execSync('git init -b main', { stdio: 'inherit', cwd: this.workDir });

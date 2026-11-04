@@ -3,6 +3,7 @@
  * Job: fix every review finding on the ticket branch(es) and commit.
  */
 
+import { oneTurnRule } from './one-turn';
 import { TicketDetail } from '../jira';
 import { RepoManifest } from '../repos';
 import { renderReferenceBlock } from './ticket-common';
@@ -40,6 +41,8 @@ Each repo's CLAUDE.md / CLAUDE.local.md house rules apply.
 ## RULES
 - Do NOT switch, create or delete branches. Do NOT push. Stay on \`${branchName}\`.
 - Do NOT modify repos outside the list above or anything in the reference paths.
+
+${oneTurnRule(doneFile)}
 
 ## DONE SIGNAL
 Create ${doneFile} listing each finding as \`fixed: <summary>\` or \`rejected: <summary> — <why>\`. Then STOP.

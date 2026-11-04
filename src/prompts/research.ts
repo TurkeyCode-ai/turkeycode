@@ -3,6 +3,7 @@
  * Job: Read spec, write research.md, write research.done, STOP
  */
 
+import { oneTurnRule } from './one-turn';
 import { ProjectState } from '../types';
 import { REFERENCE_DIR, RESEARCH_DONE, SPECS_FILE } from '../constants';
 
@@ -96,6 +97,8 @@ Before finalizing specs, evaluate:
 - Be thorough - QA will test against this spec
 - Number all flows explicitly for testability
 
+${oneTurnRule(RESEARCH_DONE, { completionGate: true })}
+
 Then STOP.
 `.trim();
 }
@@ -143,6 +146,8 @@ When the survey is appended, create ${RESEARCH_DONE} with content:
 \`\`\`
 DONE - Research (augment) completed at [timestamp]
 \`\`\`
+
+${oneTurnRule(RESEARCH_DONE, { completionGate: true })}
 
 Then STOP.
 `.trim();

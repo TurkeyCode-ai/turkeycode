@@ -64,7 +64,11 @@ import {
   POLISH_DIR,
   POLISH_TIMEOUT_MS,
   MAX_POLISH_ATTEMPTS,
-  getModelForPhase
+  STATE_FILE,
+  getModelForPhase,
+  phaseModelEnvVar,
+  preflightModels,
+  preflightRerunCommand
 } from './constants';
 import { audit, auditGate, auditPhase, auditBuildPhase, auditQA } from './audit';
 import { runQuickChecks } from './quick-check';
@@ -1699,7 +1703,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
    * conflict is genuinely unresolvable (agent aborts or attempts exhaust) — the
    * caller then stops with the work preserved on the phase branch.
    */
-  private async mergeWithResolution(phaseNumber: number, sourceBranch: string, targetBranch: string): Promise<boolean> {
+  private async mergeWithResolution(contextKey: number | string, sourceBranch: string, targetBranch: string): Promise<boolean> {
     const outcome = this.github.tryMerge(sourceBranch, targetBranch);
     if (outcome.status === 'clean') {
       this.log(`Merged ${sourceBranch} into ${targetBranch}`);
@@ -1717,7 +1721,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     this.log(`Merge conflict in ${conflicted.length} file(s): ${conflicted.join(', ')}. Running merge-fix...`);
 
     for (let attempt = 1; attempt <= MAX_MERGE_FIX_ATTEMPTS; attempt++) {
-      const resolved = await this.runMergeFix(phaseNumber, sourceBranch, targetBranch, conflicted, attempt);
+      const resolved = await this.runMergeFix(contextKey, sourceBranch, targetBranch, conflicted, attempt);
       if (!resolved) {
         this.log(`Merge-fix attempt ${attempt} did not resolve the conflict — aborting merge.`);
         this.github.abortMerge();
@@ -1727,9 +1731,10 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       // resolutions. Complete the merge commit if needed, then verify it's clean.
       const remaining = this.github.getConflictedPaths();
       if (remaining.length === 0) {
-        if (this.github.completeMerge(`Merge ${sourceBranch} into ${targetBranch} (phase ${phaseNumber})`)) {
+        if (this.github.completeMerge(`Merge ${sourceBranch} into ${targetBranch} (phase ${contextKey})`)) {
           this.log(`Merge-fix resolved the conflict; merged ${sourceBranch} into ${targetBranch}`);
-          audit('phase_merge_fixed', { buildPhase: phaseNumber, details: { source: sourceBranch, target: targetBranch, attempt } });
+          const buildPhase = typeof contextKey === 'number' ? contextKey : undefined;
+          audit('phase_merge_fixed', { buildPhase, details: { source: sourceBranch, target: targetBranch, attempt, context: String(contextKey) } });
           return true;
         }
         this.log('Merge-fix staged a resolution but the merge commit failed — aborting.');
@@ -1750,14 +1755,14 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
    * file, or a non-zero exit all return false.
    */
   private async runMergeFix(
-    phaseNumber: number,
+    contextKey: number | string,
     sourceBranch: string,
     targetBranch: string,
     conflictedPaths: string[],
     attempt: number
   ): Promise<boolean> {
-    const phase = this.state.buildPhases.find(p => p.number === phaseNumber);
-    const qaDir = `${QA_DIR}/phase-${phaseNumber}`;
+    const phase = this.state.buildPhases.find(p => p.number === contextKey);
+    const qaDir = `${QA_DIR}/phase-${contextKey}`;
     mkdirSync(qaDir, { recursive: true });
     const doneFile = `${qaDir}/merge-fix-${attempt}.done`;
     if (existsSync(doneFile)) { try { unlinkSync(doneFile); } catch { /* ignore */ } }
@@ -1770,12 +1775,12 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
         baseBranch: targetBranch,
         conflictedPaths,
         mode: 'merge',
-        contextKey: `phase-${phaseNumber}`,
+        contextKey: `phase-${contextKey}`,
         contextSummary: phase?.name,
         doneFile,
       }),
       timeoutMs: FIX_TIMEOUT_MS,
-      sessionName: `merge-fix-phase-${phaseNumber}-${attempt}`,
+      sessionName: `merge-fix-phase-${contextKey}-${attempt}`,
       doneFile,
       model: getModelForPhase('qa-fix')
     });
@@ -1895,6 +1900,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
 
     let clean = false;
     let merged = false;
+    let mergeAttempted = false;
 
     for (let attempt = 1; attempt <= MAX_POLISH_ATTEMPTS; attempt++) {
       this.log(`\n--- Polish attempt ${attempt}/${MAX_POLISH_ATTEMPTS} ---\n`);
@@ -1958,13 +1964,14 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       }
 
       // Merge the verified cleanup into the default branch.
-      merged = this.mergePolishBranch(polishBranch, defaultBranch);
+      mergeAttempted = true;
+      merged = await this.mergePolishBranch(polishBranch, defaultBranch);
       break;
     }
 
-    if (clean && !merged) {
-      // "no warnings existed" path: nothing was committed, so just drop the branch.
-      this.log('Polish complete — nothing to merge.');
+    if (mergeAttempted && !merged) {
+      // Never claim success here: the verified cleanup exists but did not land.
+      this.log(`⚠ Polish cleanup could not be merged — it remains on ${polishBranch}. Merge it manually.`);
     }
 
     auditPhase('polish', 'completed', { clean, merged });
@@ -1982,8 +1989,10 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     }
   }
 
-  /** Merge the polish branch into the default branch (PR when a remote exists, else local). */
-  private mergePolishBranch(polishBranch: string, defaultBranch: string): boolean {
+  /** Merge the polish branch into the default branch (PR when a remote exists, else local).
+   * Conflicts get the same agent-driven recovery as phase merges (mergeWithResolution) —
+   * the bare mergeBranch aborts on conflict, which would strand the verified cleanup. */
+  private async mergePolishBranch(polishBranch: string, defaultBranch: string): Promise<boolean> {
     if (!this.github.branchExists(polishBranch)) {
       // Built directly on default — already merged.
       return true;
@@ -1999,12 +2008,52 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       });
       let merged = pr ? this.github.mergePR(pr) : false;
       if (!merged) {
-        merged = this.github.mergeBranch(polishBranch, defaultBranch);
-        if (merged) this.github.push(defaultBranch);
+        merged = await this.landPolishLocally(polishBranch, defaultBranch);
+        // --no-push makes push() a deliberate no-op, so false only means failure otherwise.
+        if (merged && !this.github.noPush) {
+          merged = this.github.push(defaultBranch);
+          if (!merged) {
+            this.log(`⚠ Polish merged into local ${defaultBranch}, but the push failed — the remote does not have it.`);
+          }
+        }
       }
       return merged;
     }
-    return this.github.mergeBranch(polishBranch, defaultBranch);
+    return this.landPolishLocally(polishBranch, defaultBranch);
+  }
+
+  /**
+   * Merge polish locally, then re-verify. The cleanup was verified on its own
+   * branch, but a merge can change that tree and a merge-fix agent rewrites it,
+   * so "a cleanup that breaks compilation/boot is reverted, never merged" has to
+   * hold for the merged result too.
+   */
+  private async landPolishLocally(polishBranch: string, defaultBranch: string): Promise<boolean> {
+    let preMerge = '';
+    try {
+      preMerge = execSync(`git rev-parse ${defaultBranch}`, { cwd: this.workDir, stdio: 'pipe' }).toString().trim();
+    } catch { /* unborn branch: nothing to go back to */ }
+
+    if (!await this.mergeWithResolution('polish', polishBranch, defaultBranch)) return false;
+
+    // Same tree as the branch that just passed verification: nothing new to check.
+    const treeOf = (ref: string) => execSync(`git rev-parse ${ref}^{tree}`, { cwd: this.workDir, stdio: 'pipe' }).toString().trim();
+    if (treeOf('HEAD') === treeOf(polishBranch)) return true;
+
+    this.log('Verifying build after merging polish...');
+    const check = await runQuickChecks(this.workDir);
+    for (const c of check.checks) {
+      this.log(`  ${c.passed ? '✓' : '✗'} ${c.name}: ${c.message}`);
+    }
+    if (check.passed) return true;
+
+    this.log('⚠ The merged result fails verification — undoing the polish merge.');
+    try {
+      execSync(`git reset --hard ${preMerge}`, { cwd: this.workDir, stdio: 'pipe' });
+    } catch (err) {
+      this.log(`⚠ Could not undo the merge — local ${defaultBranch} still contains it. Reset it to ${preMerge || 'its previous commit'} by hand. (${err})`);
+    }
+    return false;
   }
 
   /**
@@ -2414,6 +2463,20 @@ Generated by turkeycode (phase-based)
     process.exit(1);
   }
 
+  /**
+   * Phases this run can't reach. A model only those phases use mustn't block the
+   * run: on resume at phase 12, Opus being out of credit says nothing about
+   * whether the remaining phases can finish.
+   */
+  private phasesThatWontRun(): Set<string> {
+    const skip = new Set(['scope']); // runs in the CLI, before the orchestrator starts
+    if (!this.aar) skip.add('aar');
+    if (!this.polish) skip.add('polish');
+    if (existsSync(join(this.workDir, RESEARCH_DONE))) skip.add('research');
+    if (existsSync(join(this.workDir, PLAN_DONE))) skip.add('plan');
+    return skip;
+  }
+
   private async preflightCheck(): Promise<void> {
     this.log('Running preflight checks...');
 
@@ -2434,35 +2497,51 @@ Generated by turkeycode (phase-based)
     // stdout" makes claude run a tool (echo) instead of replying, leaving --print
     // output empty. Retry guards against a transient blank response.
     const PREFLIGHT_PROMPT = 'Reply with only the word TURKEY as plain text. Do not use any tools.';
-    let testResult = await this.spawner.run({
-      cwd: this.workDir,
-      prompt: PREFLIGHT_PROMPT,
-      timeoutMs: 30000,
-      sessionName: 'preflight',
-    });
-    for (let attempt = 2; attempt <= 3 && (testResult.exitCode !== 0 || testResult.stdout.trim().length < 3); attempt++) {
-      this.log(`Preflight smoke test inconclusive (exit ${testResult.exitCode}, ${testResult.stdout.trim().length} chars) — retry ${attempt}/3...`);
-      testResult = await this.spawner.run({
+    // Probe every model the run will use, not just the build's. With no model,
+    // Claude Code falls back to the user's default, and if that tier is out of
+    // credit preflight dies while the models the build needs answer fine. The
+    // reverse bites too: TURKEYCODE_MODEL_BUILD=opus passed while qa-fix stayed
+    // on Fable, and the run hit the limit hours in.
+    const probe = async (model: string): Promise<SpawnResult> => {
+      const once = () => this.spawner.run({
         cwd: this.workDir,
         prompt: PREFLIGHT_PROMPT,
         timeoutMs: 30000,
-        sessionName: 'preflight',
+        sessionName: `preflight-${model}`,
+        model,
       });
-    }
+      let result = await once();
+      for (let attempt = 2; attempt <= 3 && (result.exitCode !== 0 || result.stdout.trim().length < 3); attempt++) {
+        this.log(`Preflight on ${model} inconclusive (exit ${result.exitCode}, ${result.stdout.trim().length} chars) — retry ${attempt}/3`);
+        result = await once();
+      }
+      return result;
+    };
 
-    if (testResult.exitCode !== 0 || testResult.stdout.trim().length < 3) {
+    const models = [...preflightModels(this.phasesThatWontRun()).entries()];
+    this.log(`Preflight: checking ${models.map(([model]) => model).join(', ')}`);
+    const results = await Promise.all(models.map(([model]) => probe(model)));
+    const failed = models
+      .map(([model, phases], i) => ({ model, phases, result: results[i] }))
+      .filter(({ result }) => result.exitCode !== 0 || result.stdout.trim().length < 3);
+
+    if (failed.length > 0) {
+      const rerun = preflightRerunCommand(existsSync(join(this.workDir, STATE_FILE)));
       console.error('\n❌ Claude Code preflight failed.');
-      console.error(`Exit code: ${testResult.exitCode}`);
-      if (testResult.stdout.length > 0) {
-        console.error(`Output: ${testResult.stdout.substring(0, 500)}`);
+      for (const { model, phases, result } of failed) {
+        console.error(`\nModel: ${model} (used by: ${phases.join(', ')})`);
+        console.error(`Exit code: ${result.exitCode}`);
+        if (result.stdout.length > 0) console.error(`Output: ${result.stdout.substring(0, 500)}`);
+        if (result.stderr.length > 0) console.error(`Stderr: ${result.stderr.substring(0, 500)}`);
       }
-      if (testResult.stderr.length > 0) {
-        console.error(`Stderr: ${testResult.stderr.substring(0, 500)}`);
-      }
+      const overrides = failed.flatMap(({ phases }) => phases).map(phaseModelEnvVar);
       console.error('\nPossible fixes:');
       console.error('1. Run "claude" once to complete initial setup');
-      console.error('2. Make sure you have an active Claude subscription or API key');
-      console.error('3. Try: claude --print "hello" to verify it works\n');
+      console.error('2. If a model is out of credit, switch everything:');
+      console.error(`     TURKEYCODE_MODEL=sonnet ${rerun}`);
+      console.error('   or only the phases that need it:');
+      console.error(`     ${overrides.map(name => `${name}=sonnet`).join(' ')} ${rerun}`);
+      console.error(`3. Try: claude --print --model ${failed[0].model} "hello"\n`);
       process.exit(1);
     }
 

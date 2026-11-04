@@ -9,6 +9,8 @@
  * is skipped (shouldSkipVisualQA) and this rubric is the only design check.
  */
 
+import { GODOT_DIR_SHELL } from '../detect-project-type';
+import { oneTurnRule } from './one-turn';
 import { ProjectState, ProjectType } from '../types';
 import { QA_DIR, SPECS_FILE } from '../constants';
 import { readFileSync, existsSync } from 'fs';
@@ -83,6 +85,25 @@ fi
 
 **If the app won't build, that's a BLOCKER. Write verdict and stop.**`;
 
+    case 'game-godot':
+      return `### Import and build the project
+\`\`\`bash
+${GODOT_DIR_SHELL}
+
+# Godot must import assets once before anything will run headlessly.
+timeout 300 godot --headless --import --path "$GODOT_DIR" 2>&1 | tail -20
+
+# Then check the whole project actually loads and scripts compile.
+timeout 120 godot --headless --quit --path "$GODOT_DIR" 2>&1 | tail -30
+\`\`\`
+
+Script errors and missing resources appear on stderr here. A project that
+will not import, or that reports a parse error in any .gd/.cs file, is a
+BLOCKER — write the verdict and stop.
+
+**Do not open the editor.** No one is there to click. Everything below is
+command line. Run every Godot command from the repo root with --path "$GODOT_DIR".`;
+
     case 'embedded':
       return `### Build the firmware
 \`\`\`bash
@@ -126,6 +147,25 @@ sleep 10
 
 function getSmokeInstructions(projectType: ProjectType): string {
   switch (projectType) {
+    case 'game-godot':
+      return `Verify the project imports, scripts parse, and the game boots to
+a first frame without erroring:
+
+\`\`\`bash
+${GODOT_DIR_SHELL}
+timeout 300 godot --headless --import --path "$GODOT_DIR" 2>&1 | tail -20
+timeout 120 godot --headless --quit-after 120 --path "$GODOT_DIR" 2>&1 | tail -40
+\`\`\`
+
+Check for:
+- \`SCRIPT ERROR\` / \`Parse Error\` — always a blocker
+- \`Failed loading resource\` — a scene referencing something that isn't there
+- Orphan node or leaked instance warnings at exit
+- The main scene actually loading rather than an empty tree
+
+Godot exits 0 on some script errors, so JUDGE THE OUTPUT, not the exit code.`;
+
+
     case 'cli':
       return `Test every command and subcommand FOR THIS PHASE'S DELIVERABLES:
 
@@ -204,6 +244,23 @@ Open every outbound link and confirm it reaches a usable page, not a dead end.`;
 
 function getFunctionalInstructions(projectType: ProjectType): string {
   switch (projectType) {
+    case 'game-godot':
+      return `For each deliverable, drive the game and read what it prints. Script-level
+checks run headless. Do not capture frames here: a separate visual session does
+that, because anything that looks at pixels needs a real renderer.
+
+\`\`\`bash
+${GODOT_DIR_SHELL}
+# Project's test suite if it has one (GUT, gdUnit, or plain scripts)
+timeout 300 godot --headless --path "$GODOT_DIR" -s res://test/run_tests.gd 2>&1 | tail -40 || true
+\`\`\`
+
+A game is judged on whether it can be PLAYED, not whether it compiles. Where
+a deliverable is a mechanic — combat resolves, a save round-trips, a scene
+transition fires — exercise it through a script and assert on the output.
+"It builds" is not evidence that any of that works.`;
+
+
     case 'cli':
       return `For each deliverable and acceptance criterion, verify correct OUTPUT:
 
@@ -395,6 +452,10 @@ Run a complete QA pass in this single session:
 
 ---
 
+${oneTurnRule('the verdict file', { explainIn: '\`notes\`' })}
+
+---
+
 ## STEP 1: SETUP
 
 **Project type: ${state.projectType || 'web-fullstack'}**
@@ -480,6 +541,7 @@ echo "DONE - QA completed at $(date -Iseconds)" > ${verdictDone}
 6. **Write valid JSON** — the verdict file must parse correctly
 7. **NEVER paste terminal output into source files** — if you create test scripts, write clean code only
 8. **Playability check (games/interactive)** — if this is a game or interactive simulation, verify the core loop is actually completable. E.g., can you jump over the first obstacle? Can you score a point? An unbeatable/unplayable game is a BLOCKER, not a warning. Test with default settings — if the user can't succeed in the first 30 seconds, it's broken.
+9. **One turn, and the verdict is the deliverable** — never background a script and wait on it; bound long checks with \`timeout\`; and write ${verdictPath} plus ${verdictDone} before you finish, no matter how the pass went. Ending without a verdict fails the phase on a blocker nobody can act on.
 
 Then STOP.
 `.trim();

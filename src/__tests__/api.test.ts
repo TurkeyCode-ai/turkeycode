@@ -8,23 +8,36 @@ import {
   type CachedContext,
 } from '../api';
 
-// Minimal fake of the SDK client. Captures the last params passed to messages.create.
-function makeFakeClient(text: string, usage?: Partial<any>) {
-  const captured: { params?: any } = {};
+// Minimal fake of the SDK client. Captures the last params passed to a create call
+// (plain path for haiku/sonnet, beta path — with server-side fallbacks — for opus/fable).
+function makeFakeClient(text: string, usage?: Partial<any>, stopReason: string = 'end_turn') {
+  const captured: { params?: any; betaParams?: any } = {};
+  const respond = () => ({
+    content: [{ type: 'text', text }],
+    stop_reason: stopReason,
+    stop_details: stopReason === 'refusal' ? { type: 'refusal', category: 'cyber' } : null,
+    usage: {
+      input_tokens: 100,
+      output_tokens: 50,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+      ...usage,
+    },
+  });
   const client = {
     messages: {
       create: async (params: any) => {
         captured.params = params;
-        return {
-          content: [{ type: 'text', text }],
-          usage: {
-            input_tokens: 100,
-            output_tokens: 50,
-            cache_creation_input_tokens: 0,
-            cache_read_input_tokens: 0,
-            ...usage,
-          },
-        };
+        return respond();
+      },
+    },
+    beta: {
+      messages: {
+        create: async (params: any) => {
+          captured.params = params;
+          captured.betaParams = params;
+          return respond();
+        },
       },
     },
   };
@@ -41,8 +54,9 @@ afterEach(() => setClient(null));
 
 describe('api module', () => {
   it('maps tiers to exact model IDs (no date suffixes)', () => {
-    expect(MODEL_IDS.opus).toBe('claude-opus-4-8');
-    expect(MODEL_IDS.sonnet).toBe('claude-sonnet-4-6');
+    expect(MODEL_IDS.fable).toBe('claude-fable-5');
+    expect(MODEL_IDS.opus).toBe('claude-opus-5');
+    expect(MODEL_IDS.sonnet).toBe('claude-sonnet-5');
     expect(MODEL_IDS.haiku).toBe('claude-haiku-4-5');
   });
 
@@ -84,16 +98,73 @@ describe('api module', () => {
     expect(opus.captured.params.output_config?.effort).toBe('high');
   });
 
-  it('defaults thinking off and enables adaptive only when asked', async () => {
+  it('defaults thinking off (sent explicitly — omission means adaptive on Sonnet 5) and enables adaptive when asked', async () => {
     const off = makeFakeClient('ok');
     setClient(off.client);
     await message({ context: ctx, prompt: 'q' });
-    expect(off.captured.params.thinking).toBeUndefined();
+    expect(off.captured.params.thinking).toEqual({ type: 'disabled' });
 
     const on = makeFakeClient('ok');
     setClient(on.client);
     await message({ context: ctx, prompt: 'q', thinking: 'adaptive' });
     expect(on.captured.params.thinking).toEqual({ type: 'adaptive' });
+  });
+
+  it('gives every call that will think room in max_tokens', async () => {
+    const cases: Array<[Parameters<typeof message>[0], number]> = [
+      [{ model: 'fable', context: ctx, prompt: 'q' }, 16000],
+      [{ model: 'sonnet', context: ctx, prompt: 'q', thinking: 'adaptive' }, 16000],
+      [{ model: 'opus', context: ctx, prompt: 'q', effort: 'xhigh' }, 16000],
+      [{ model: 'opus', context: ctx, prompt: 'q', effort: 'high' }, 4096],
+      [{ model: 'haiku', context: ctx, prompt: 'q', thinking: 'adaptive' }, 4096],
+    ];
+    for (const [opts, expected] of cases) {
+      const fake = makeFakeClient('ok');
+      setClient(fake.client);
+      await message(opts);
+      const params = fake.captured.betaParams ?? fake.captured.params;
+      expect(params.max_tokens).toBe(expected);
+    }
+  });
+
+  it('never sends a thinking config on Fable (always-on) or Haiku (unsupported)', async () => {
+    const fable = makeFakeClient('ok');
+    setClient(fable.client);
+    await message({ model: 'fable', context: ctx, prompt: 'q' });
+    expect(fable.captured.params.thinking).toBeUndefined();
+
+    const haiku = makeFakeClient('ok');
+    setClient(haiku.client);
+    await message({ model: 'haiku', context: ctx, prompt: 'q', thinking: 'adaptive' });
+    expect(haiku.captured.params.thinking).toBeUndefined();
+  });
+
+  it('keeps thinking on for Opus at xhigh/max effort (explicit disabled 400s there)', async () => {
+    const { client, captured } = makeFakeClient('ok');
+    setClient(client);
+    await message({ model: 'opus', context: ctx, prompt: 'q', effort: 'xhigh' });
+    expect(captured.params.thinking).toBeUndefined();
+  });
+
+  it('routes Fable/Opus through the beta path with server-side fallbacks', async () => {
+    const fable = makeFakeClient('ok');
+    setClient(fable.client);
+    await message({ model: 'fable', context: ctx, prompt: 'q' });
+    expect(fable.captured.betaParams.fallbacks).toBe('default');
+    expect(fable.captured.betaParams.betas).toEqual(['server-side-fallback-2026-07-01']);
+
+    const sonnet = makeFakeClient('ok');
+    setClient(sonnet.client);
+    await message({ context: ctx, prompt: 'q' });
+    expect(sonnet.captured.betaParams).toBeUndefined();
+  });
+
+  it('throws a descriptive error when the whole fallback chain refuses', async () => {
+    const { client } = makeFakeClient('', undefined, 'refusal');
+    setClient(client);
+    await expect(message({ model: 'fable', context: ctx, prompt: 'q' })).rejects.toThrow(
+      /refusal.*category: cyber/
+    );
   });
 
   it('classify() wires the JSON schema and parses the response', async () => {
@@ -129,9 +200,9 @@ describe('api module', () => {
   });
 
   it('estimateCostUsd prices cache reads at 0.1x input and output at the model rate', () => {
-    // Sonnet: input $3/MTok, output $15/MTok. 1M cache-read input = $0.30; 1M output = $15.
+    // Sonnet: input $2/MTok, output $10/MTok. 1M cache-read input = $0.20; 1M output = $10.
     const cost = estimateCostUsd('sonnet', { input: 0, output: 1_000_000, cacheWrite: 0, cacheRead: 1_000_000 });
-    expect(cost).toBeCloseTo(0.3 + 15, 5);
+    expect(cost).toBeCloseTo(0.2 + 10, 5);
   });
 
   it('estimateCostUsd charges 2x for a 1h cache write vs 1.25x for 5m', () => {

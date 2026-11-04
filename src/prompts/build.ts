@@ -4,6 +4,7 @@
  */
 
 import { ProjectState, BuildPhase, ProjectType } from '../types';
+import { oneTurnRule } from './one-turn';
 import { PHASES_DIR } from '../constants';
 
 // ==================== Type-Specific Build Instructions ====================
@@ -86,6 +87,14 @@ function getTypeSpecificRules(projectType: ProjectType): string {
 15. **Safe defaults** - Servos to center, LEDs off, outputs low on boot. Never leave pins floating.
 16. **platformio.ini** - Keep board, framework, and lib_deps accurate. Pin library versions to avoid breaking changes.`;
 
+  const godotRules = `
+## GODOT RULES
+- Author scenes and resources as text (.tscn, .tres) and scripts as .gd, or .cs if the project already uses C#. Never open the editor. Everything is files and the command line.
+- project.godot must set run/main_scene. QA and the visual review start the game from that scene, so every deliverable must be reachable from it.
+- Verify with \`godot --headless --import --path <project dir>\`, then \`godot --headless --quit-after 120 --path <project dir>\`. Godot exits 0 on script errors, so read the output: any SCRIPT ERROR, Parse Error or Failed to load means it is broken.
+- Put script-level tests in res://test/run_tests.gd so QA can run them headless.
+- No web scaffolding: no server, routes, auth, favicon or database unless the spec asks for one.`;
+
   switch (projectType) {
     case 'web-fullstack':
     case 'web-frontend':
@@ -102,6 +111,8 @@ function getTypeSpecificRules(projectType: ProjectType): string {
       return mobileRules;
     case 'embedded':
       return embeddedRules;
+    case 'game-godot':
+      return godotRules;
     default:
       return webRules; // fallback to web rules
   }
@@ -151,6 +162,7 @@ export function buildBuildPhasePrompt(
   // Phase artifacts path
   const phaseDoneDir = `${PHASES_DIR}/phase-${phase.number}`;
   const buildDone = `${phaseDoneDir}/build.done`;
+  const buildPartial = `${phaseDoneDir}/build-partial.md`;
 
   return `
 # BUILD PHASE ${phase.number}: ${phase.name}
@@ -240,12 +252,19 @@ git commit -m "phase-${phase.number}: ${phase.name} - all deliverables complete"
 
 ## DONE SIGNAL
 
+If ${buildPartial} exists, an earlier attempt stopped short. Read it first and pick up from there.
+
 When ALL deliverables are complete and ALL acceptance criteria pass:
 
 \`\`\`bash
 mkdir -p ${phaseDoneDir}
+rm -f ${buildPartial}
 echo "DONE - Phase ${phase.number} build completed at $(date -Iseconds)" > ${buildDone}
 \`\`\`
+
+---
+
+${oneTurnRule(buildDone, { completionGate: true, partialNotes: buildPartial })}
 
 ---
 

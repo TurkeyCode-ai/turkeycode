@@ -4,6 +4,7 @@
  * SMOKE finds "does it respond?" - FUNCTIONAL finds "does it work correctly?"
  */
 
+import { oneTurnRule } from './one-turn';
 import { ProjectState } from '../types';
 import { QA_DIR, SPECS_FILE } from '../constants';
 import { readFileSync, existsSync } from 'fs';
@@ -261,6 +262,8 @@ Flag missing security controls as **BLOCKERS** — an app that lets anyone post 
 5. **Test EVERY acceptance criterion** - This is the contract
 6. **Do NOT fix** - Just report failures
 7. **Test security basics** - Auth guards, input sanitization, rate limiting (see Security section above)
+
+${oneTurnRule('the functional report')}
 
 Then STOP.
 `.trim();

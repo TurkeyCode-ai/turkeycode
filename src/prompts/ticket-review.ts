@@ -4,6 +4,7 @@
  * plan and the read-only references; write findings as JSON. No edits.
  */
 
+import { oneTurnRule } from './one-turn';
 import { TicketDetail } from '../jira';
 import { RepoManifest } from '../repos';
 import { renderReferenceBlock, renderTicketBlock } from './ticket-common';
@@ -51,6 +52,8 @@ Each repo's CLAUDE.md / CLAUDE.local.md house rules are part of the bar.
 - House-rule violations (scope creep, forbidden files committed, conventions).
 
 Report only defects you'd block a merge on (\`bug\`) or would ask to change (\`should-fix\`). No style nits, no praise.
+
+${oneTurnRule(doneFile, { completionGate: true })}
 
 ## OUTPUT
 Write \`${findingsPath}\` as JSON:

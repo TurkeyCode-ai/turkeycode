@@ -4,6 +4,7 @@
  */
 
 import { ProjectState } from '../types';
+import { oneTurnRule } from './one-turn';
 import { QA_DIR } from '../constants';
 import { readFileSync, existsSync } from 'fs';
 
@@ -280,6 +281,10 @@ After fixing ALL issues (blockers AND warnings):
 \`\`\`bash
 echo "DONE - All ${totalIssues} issues fixed at $(date -Iseconds)" > ${fixDone}
 \`\`\`
+
+---
+
+${oneTurnRule('the fix report')}
 
 ---
 

@@ -5,6 +5,7 @@
  * and pushes each one's branch separately.
  */
 
+import { oneTurnRule } from './one-turn';
 import { TicketDetail } from '../jira';
 import { RepoManifest } from '../repos';
 
@@ -93,6 +94,8 @@ Touched repos: <list>
 Summary: <2-3 sentence description of what you changed>
 Follow-ups: <anything left for the reviewer to verify, or 'none'>
 \`\`\`
+
+${oneTurnRule(doneFile, { completionGate: true })}
 
 Then STOP.
 `.trim();

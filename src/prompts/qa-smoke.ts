@@ -4,6 +4,7 @@
  * Job: DISCOVER project type, install tools, test interactive elements
  */
 
+import { oneTurnRule } from './one-turn';
 import { ProjectState } from '../types';
 import { QA_DIR } from '../constants';
 
@@ -298,6 +299,8 @@ echo "DONE - Smoke test completed at $(date -Iseconds)" > ${smokeDone}
 4. **DEAD = no response** - Element does nothing when activated
 5. **Be thorough** - This catches obvious breakage
 6. **Do NOT fix** - Just report
+
+${oneTurnRule('the smoke report')}
 
 Then STOP.
 `.trim();

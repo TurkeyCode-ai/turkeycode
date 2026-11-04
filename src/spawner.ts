@@ -12,6 +12,93 @@ import { DEFAULT_TIMEOUT_MS } from './constants';
 
 const DEFAULT_MAX_CONCURRENT = 3;
 
+/**
+ * Every live session's process GROUP, so turkeycode can take them with it.
+ *
+ * Sessions spawn with `detached: true` so a timeout can reap the whole tree —
+ * claude plus the dev server and headless Chrome it backgrounds. The cost of
+ * detaching is that those groups SURVIVE turkeycode's own death: kill the
+ * parent and its timeout never fires, the children reparent to init, and they
+ * keep talking to the API with nobody left to read the answer.
+ *
+ * Seen in the wild: two QA sessions still running 5h32m after the builds that
+ * started them were dead, one still spawning playwright shells, and every
+ * retry stacked another pair. Killing turkeycode has to mean killing what
+ * turkeycode started.
+ *
+ * SIGKILL to turkeycode itself remains unstoppable — nothing can trap it, and
+ * those orphans still have to be reaped by hand.
+ */
+const liveGroups = new Set<number>();
+let reaperInstalled = false;
+let shuttingDown = false;
+
+/** How long sessions get to exit on SIGTERM before the 'exit' handler SIGKILLs them. */
+const REAP_GRACE_MS = 3000;
+
+/** Conventional 128+n, so callers can tell which signal stopped the run. */
+const SIGNAL_EXIT_CODES: Partial<Record<NodeJS.Signals, number>> = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 };
+
+function exitCodeForSignal(signal: NodeJS.Signals): number {
+  return SIGNAL_EXIT_CODES[signal] ?? 1;
+}
+
+function anyGroupAlive(): boolean {
+  for (const pid of liveGroups) {
+    try {
+      process.kill(-pid, 0);
+      return true;
+    } catch { /* group gone */ }
+  }
+  return false;
+}
+
+/**
+ * Track a detached process group this process started, so it dies with us.
+ * For anything spawned outside the session path (quick-check's dev servers).
+ */
+export function trackProcessGroup(pid: number): void {
+  liveGroups.add(pid);
+  installReaper();
+}
+
+export function untrackProcessGroup(pid: number): void {
+  liveGroups.delete(pid);
+}
+
+function reapAllGroups(signal: NodeJS.Signals): void {
+  for (const pid of liveGroups) {
+    try { process.kill(-pid, signal); } catch { /* group already gone */ }
+  }
+}
+
+function installReaper(): void {
+  if (reaperInstalled) return;
+  reaperInstalled = true;
+
+  // 'exit' handlers must be synchronous — process.kill is, so this is fine.
+  process.on('exit', () => reapAllGroups('SIGKILL'));
+
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as NodeJS.Signals[]) {
+    process.on(sig, () => {
+      const code = exitCodeForSignal(sig);
+      // A second signal means stop waiting.
+      if (shuttingDown) process.exit(code);
+      shuttingDown = true;
+      reapAllGroups('SIGTERM');
+      // Give sessions the grace period instead of exiting in this tick, which
+      // would SIGKILL them immediately. Anything that ignores SIGTERM is caught
+      // by the 'exit' handler above.
+      const deadline = Date.now() + REAP_GRACE_MS;
+      const poll = setInterval(() => {
+        if (anyGroupAlive() && Date.now() < deadline) return;
+        clearInterval(poll);
+        process.exit(code);
+      }, 100);
+    });
+  }
+}
+
 const TRANSIENT_RATE_LIMIT_PATTERNS: RegExp[] = [
   /rate.?limit/i,
   /\b429\b/,
@@ -85,6 +172,11 @@ export class Spawner {
     /** Path to an MCP config JSON (e.g. for aimem). Defaults to TURKEYCODE_MCP_CONFIG env var. */
     mcpConfig?: string;
   }): Promise<SpawnResult> {
+    // Shutting down: the reaper exits this process within the grace period, and
+    // anything started now would be killed mid-flight. Never resolving stops the
+    // main loop here instead of letting it run the next session.
+    if (shuttingDown) return new Promise<SpawnResult>(() => {});
+
     const {
       cwd,
       prompt,
@@ -190,6 +282,14 @@ export class Spawner {
         try { process.kill(-proc.pid, signal); } catch { /* group already gone */ }
       };
 
+      // Register for the process-wide reaper: if turkeycode is killed before
+      // this session's own timeout fires, the session goes down with it
+      // instead of running on for hours as an orphan.
+      if (proc.pid) {
+        liveGroups.add(proc.pid);
+        installReaper();
+      }
+
       // Write prompt directly to stdin and close it
       if (proc.stdin) {
         proc.stdin.write(prompt);
@@ -270,9 +370,14 @@ export class Spawner {
         clearTimeout(timeoutHandle);
         clearInterval(watchdog);
         if (doneFileInterval) clearInterval(doneFileInterval);
+        if (proc.pid) liveGroups.delete(proc.pid);   // no longer ours to reap
         // Reap any dev server / Chrome the session backgrounded and left running —
         // this is what otherwise accumulates across phases until the jail OOMs.
         reapGroup();
+        // A session we killed on the way out is not a finished session. Resolving
+        // would let the caller commit its half-edited tree or fail a gate and
+        // exit with the wrong code, so leave it pending; the reaper exits next.
+        if (shuttingDown) return;
         const durationMs = Date.now() - startTime;
 
         // Exit code: 0 if done file was detected (task succeeded), 124 for timeout, otherwise actual code
@@ -308,6 +413,10 @@ export class Spawner {
         clearInterval(watchdog);
         if (doneFileInterval) clearInterval(doneFileInterval);
         reapGroup();
+        // A session we killed on the way out is not a finished session. Resolving
+        // would let the caller commit its half-edited tree or fail a gate and
+        // exit with the wrong code, so leave it pending; the reaper exits next.
+        if (shuttingDown) return;
         const durationMs = Date.now() - startTime;
 
         this.log(`[${sessionName}] Spawn error: ${err.message}`);
@@ -423,3 +532,10 @@ export class Spawner {
 export function createSpawner(options?: { verbose?: boolean }): Spawner {
   return new Spawner(options);
 }
+
+/**
+ * Reaper internals, exported for tests only. The behaviour under test is
+ * "killing turkeycode kills its sessions", which needs real process groups —
+ * asserting on it any other way asserts on nothing.
+ */
+export const _reaperInternals = { liveGroups, reapAllGroups, installReaper, exitCodeForSignal };

@@ -6,6 +6,7 @@
  */
 
 import { ProjectState } from '../types';
+import { oneTurnRule } from './one-turn';
 import { AAR_DIR } from '../constants';
 
 export function buildAarPrompt(
@@ -145,6 +146,10 @@ After creating the AAR markdown:
 mkdir -p ${AAR_DIR}
 echo "DONE - AAR completed at $(date -Iseconds)" > ${aarDone}
 \`\`\`
+
+---
+
+${oneTurnRule('the AAR file')}
 
 ---
 

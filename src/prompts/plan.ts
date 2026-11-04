@@ -5,6 +5,7 @@
  * The orchestrator auto-runs all sprints sequentially until the project is complete.
  */
 
+import { oneTurnRule } from './one-turn';
 import { ProjectState } from '../types';
 import { PHASE_PLAN_FILE, PLAN_DONE, SPECS_FILE } from '../constants';
 
@@ -178,6 +179,8 @@ Phases: [count]
 - Do NOT write any code
 - Do NOT create tickets — create SPRINTS
 - Do NOT plan placeholder pages. If a page is in the navigation, it MUST be fully built in the sprint that creates the navigation. Every deliverable must specify what the page actually does, not just "placeholder"
+
+${oneTurnRule(PLAN_DONE, { completionGate: true })}
 
 Then STOP.
 `.trim();

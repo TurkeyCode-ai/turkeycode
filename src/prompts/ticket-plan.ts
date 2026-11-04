@@ -4,6 +4,7 @@
  * the build session follows. No code changes.
  */
 
+import { oneTurnRule } from './one-turn';
 import { TicketDetail } from '../jira';
 import { RepoManifest } from '../repos';
 import { renderReferenceBlock, renderTicketBlock } from './ticket-common';
@@ -48,6 +49,8 @@ Read each repo's CLAUDE.md / CLAUDE.local.md first; their house rules apply to t
 6. **Open questions.** Only real gaps the ticket and references can't answer; for each, the default you recommend.
 
 Keep it concrete and short: a builder should be able to follow it without re-researching.
+
+${oneTurnRule(doneFile, { completionGate: true })}
 
 ## DONE SIGNAL
 Write the plan to \`${planPath}\`, then create ${doneFile} containing one line: \`plan written\`. Then STOP.

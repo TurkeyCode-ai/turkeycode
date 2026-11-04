@@ -3,6 +3,7 @@
  * Job: Read all QA results, write verdict JSON (CLEAN or NEEDS_FIX), STOP
  */
 
+import { oneTurnRule } from './one-turn';
 import { ProjectState, shouldSkipVisualQA } from '../types';
 import { QA_DIR } from '../constants';
 import { readFileSync, existsSync } from 'fs';
@@ -303,6 +304,8 @@ echo "DONE - Verdict completed at $(date -Iseconds)" > ${verdictDone}
 7. The verdict JSON must be valid JSON
 8. Do NOT fix anything - just judge
 9. **NEEDS_FIX only if blockers > 0** - Cosmetic warnings alone do NOT trigger NEEDS_FIX
+
+${oneTurnRule('the verdict file')}
 
 Then STOP.
 `.trim();

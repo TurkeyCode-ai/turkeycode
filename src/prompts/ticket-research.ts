@@ -4,6 +4,7 @@
  * produce a Markdown draft to be posted back as a Jira comment, then STOP.
  */
 
+import { oneTurnRule } from './one-turn';
 import { TicketDetail } from '../jira';
 import { RepoManifest } from '../repos';
 
@@ -78,6 +79,8 @@ Then create ${doneFile} with any content to signal completion.
 - Do NOT run builds, tests, or migrations.
 - It's fine to read files, run read-only git commands, and query aimem.
 - If the ticket turns out to actually require code changes, say so explicitly in the draft and stop — the human will reroute it.
+
+${oneTurnRule(doneFile)}
 
 STOP after writing the done file.
 `.trim();
