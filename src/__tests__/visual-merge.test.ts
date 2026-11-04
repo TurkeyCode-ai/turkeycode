@@ -89,3 +89,56 @@ describe('mergeVisualIntoVerdict', () => {
     expect((merged.warnings as unknown[]).length).toBe(0);
   });
 });
+
+describe('findings the frames cannot prove', () => {
+  const clean = { verdict: 'CLEAN', blockers: [], warnings: [] };
+  const missing = { kind: 'not-shown', description: 'No Game Over screen in any frame' };
+  const files = ['frame00000000.png', 'frame00000090.png'];
+
+  it('does not fail a game whose functional QA passed', () => {
+    const merged = mergeVisualIntoVerdict(
+      clean,
+      { blockers: [missing], framesReviewed: files },
+      { isGame: true, capturedFiles: files }
+    );
+    expect(merged.verdict).toBe('CLEAN');
+    expect((merged.blockers as unknown[]).length).toBe(0);
+    expect((merged.warnings as Array<{ description: string }>)[0].description).toContain('[not shown in capture]');
+  });
+
+  it('does not trust "missing" from a reviewer that skipped frames, on any project', () => {
+    const merged = mergeVisualIntoVerdict(
+      clean,
+      { blockers: [missing], framesReviewed: ['.turkey/screenshots/phase-6/frame00000000.png'] },
+      { capturedFiles: files }
+    );
+    expect(merged.verdict).toBe('CLEAN');
+  });
+
+  it('still fails a web app when a reviewer saw every file and the page is missing', () => {
+    const merged = mergeVisualIntoVerdict(
+      clean,
+      { blockers: [missing], framesReviewed: files },
+      { capturedFiles: files }
+    );
+    expect(merged.verdict).toBe('NEEDS_FIX');
+  });
+
+  it('still fails on a problem the reviewer saw, even with frames skipped', () => {
+    const merged = mergeVisualIntoVerdict(
+      clean,
+      { blockers: [{ kind: 'seen', description: 'magenta placeholder texture' }], framesReviewed: [] },
+      { isGame: true, capturedFiles: files }
+    );
+    expect(merged.verdict).toBe('NEEDS_FIX');
+  });
+
+  it('leaves it gating when functional QA failed too', () => {
+    const merged = mergeVisualIntoVerdict(
+      { verdict: 'NEEDS_FIX', blockers: [{ description: 'crash on third wreck' }], warnings: [] },
+      { blockers: [missing], framesReviewed: files },
+      { isGame: true, capturedFiles: files }
+    );
+    expect((merged.blockers as unknown[]).length).toBe(2);
+  });
+});

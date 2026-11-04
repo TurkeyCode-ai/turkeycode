@@ -74,6 +74,7 @@ import {
 } from './constants';
 import { audit, auditGate, auditPhase, auditBuildPhase, auditQA } from './audit';
 import { runQuickChecks } from './quick-check';
+import { captureGodotFrames, GODOT_CAPTURE_TIMELINE } from './godot-capture';
 import { detectProjectTypeStrict, inferProjectTypeFromDescription } from './detect-project-type';
 import { shouldSkipVisualQA } from './types';
 
@@ -149,6 +150,39 @@ export interface QaFinding {
   description?: string;
   location?: string;
   severity?: string;
+  /** "not-shown": absent from every capture, as opposed to visibly broken. */
+  kind?: string;
+}
+
+export interface VisualMergeOptions {
+  isGame?: boolean;
+  /** Every file captured for this review. */
+  capturedFiles?: string[];
+}
+
+/**
+ * "It never appeared" is the one visual finding that can be wrong about the
+ * product. It can't gate when the reviewer skipped captured files, which is how
+ * a real Game Over frame got reported as missing. It also can't gate a game whose
+ * functional QA passed: tests already covered that state, and frames only prove
+ * what a fixed capture happened to reach. A blocker the reviewer saw still gates.
+ */
+export function splitVisualBlockers(
+  verdict: Record<string, unknown>,
+  visual: { blockers?: QaFinding[]; framesReviewed?: string[] },
+  options: VisualMergeOptions = {}
+): { gating: QaFinding[]; notShown: QaFinding[] } {
+  const blockers = Array.isArray(visual.blockers) ? visual.blockers : [];
+  const reviewed = Array.isArray(visual.framesReviewed) ? visual.framesReviewed : [];
+  const skippedFiles = (options.capturedFiles ?? []).some(
+    file => !reviewed.some(path => path === file || path.endsWith(`/${file}`))
+  );
+  const functionalBlockers = ((verdict.blockers as QaFinding[]) || []).length;
+  const unproven = skippedFiles || (options.isGame === true && functionalBlockers === 0);
+  return {
+    gating: blockers.filter(b => !(b.kind === 'not-shown' && unproven)),
+    notShown: blockers.filter(b => b.kind === 'not-shown' && unproven),
+  };
 }
 
 /**
@@ -160,10 +194,14 @@ export interface QaFinding {
  */
 export function mergeVisualIntoVerdict(
   verdict: Record<string, unknown>,
-  visual: { blockers?: QaFinding[]; warnings?: QaFinding[] }
+  visual: { blockers?: QaFinding[]; warnings?: QaFinding[]; framesReviewed?: string[] },
+  options: VisualMergeOptions = {}
 ): Record<string, unknown> {
-  const visualBlockers = Array.isArray(visual.blockers) ? visual.blockers : [];
-  const visualWarnings = Array.isArray(visual.warnings) ? visual.warnings : [];
+  const { gating: visualBlockers, notShown } = splitVisualBlockers(verdict, visual, options);
+  const visualWarnings = [
+    ...(Array.isArray(visual.warnings) ? visual.warnings : []),
+    ...notShown.map(b => ({ ...b, description: `[not shown in capture] ${b.description || 'visual blocker'}` }))
+  ];
 
   const blockers = [
     ...((verdict.blockers as QaFinding[]) || []),
@@ -1840,6 +1878,10 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     const backend = getActiveBackend();
     const qaDir = `${QA_DIR}/phase-${phaseNumber}`;
 
+    if (this.state.projectType === 'game-godot') {
+      return this.runGodotVisualQa(phaseNumber, attempt, qaDir);
+    }
+
     // A subagent inherits its parent's MCP servers, and the capture session may
     // need them, so a backend that can run a blind session reviews in its own.
     // In-session review is only for backends with no way to enforce blindness.
@@ -1881,6 +1923,49 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       blind: true
     });
     return [captureResult, reviewResult];
+  }
+
+  /**
+   * Games: turkeycode records the frames itself, then a blind session reviews
+   * them. There is nothing here for an agent to do between the two.
+   */
+  private async runGodotVisualQa(phaseNumber: number, attempt: number, qaDir: string): Promise<SpawnResult[]> {
+    const framesDir = `${SCREENSHOTS_DIR}/phase-${phaseNumber}`;
+    mkdirSync(qaDir, { recursive: true });
+
+    this.log('Recording frames from the main scene...');
+    const capture = await captureGodotFrames(this.workDir, framesDir);
+    writeFileSync(
+      `${qaDir}/capture-${attempt}.md`,
+      `# Frame Capture - Phase ${phaseNumber}, Attempt ${attempt}\n\n` +
+      `Recorded by turkeycode. Input timeline: ${capture.usedTimeline ? GODOT_CAPTURE_TIMELINE : 'none'}.\n\n` +
+      `${capture.frames.map(frame => `- ${frame}`).join('\n') || capture.error}\n`
+    );
+    writeFileSync(`${qaDir}/capture-${attempt}.done`, `DONE - Capture completed at ${new Date().toISOString()}\n`);
+
+    if (capture.error) {
+      this.log(`Frame capture failed: ${capture.error.split('\n')[0]}`);
+      const description = `The game could not be recorded: ${capture.error}`;
+      writeFileSync(`${qaDir}/visual-${attempt}.md`, `# Visual Review - Phase ${phaseNumber}, Attempt ${attempt}\n\n${description}\n`);
+      writeFileSync(`${qaDir}/visual-${attempt}.json`, JSON.stringify({
+        blockers: [{ type: 'visual', kind: 'seen', description, location: 'main scene', severity: 'critical' }],
+        warnings: []
+      }, null, 2));
+      writeFileSync(`${qaDir}/visual-${attempt}.done`, `DONE - Visual test completed at ${new Date().toISOString()}\n`);
+      return [];
+    }
+    this.log(`Recorded ${capture.frames.length} frames${capture.usedTimeline ? ` using ${GODOT_CAPTURE_TIMELINE}` : ''}`);
+
+    const backend = getActiveBackend();
+    return [await this.spawner.run({
+      cwd: this.workDir,
+      prompt: buildQaVisualReviewPrompt(this.state, phaseNumber, attempt, { ...backend.capabilities, subagents: false }),
+      timeoutMs: QA_TIMEOUT_MS / 2,
+      sessionName: `qa-visual-review-${attempt}`,
+      doneFile: `${qaDir}/visual-${attempt}.done`,
+      model: getModelForPhase('qa-visual'),
+      blind: true
+    })];
   }
 
   /**
@@ -2217,9 +2302,18 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       }
 
       const verdict = JSON.parse(readFileSync(verdictPath, 'utf-8'));
-      const merged = mergeVisualIntoVerdict(verdict, visual);
+      const framesDir = `${SCREENSHOTS_DIR}/phase-${phaseNumber}`;
+      const options = {
+        isGame: this.state.projectType === 'game-godot',
+        capturedFiles: existsSync(framesDir) ? readdirSync(framesDir) : [],
+      };
+      const merged = mergeVisualIntoVerdict(verdict, visual, options);
       writeFileSync(verdictPath, JSON.stringify(merged, null, 2));
-      this.log(`Merged visual QA into verdict: +${visualBlockers.length} blockers, +${visualWarnings.length} warnings`);
+      const { gating, notShown } = splitVisualBlockers(verdict, visual, options);
+      this.log(`Merged visual QA into verdict: +${gating.length} blockers, +${visualWarnings.length + notShown.length} warnings`);
+      if (notShown.length > 0) {
+        this.log(`Kept ${notShown.length} "not shown in capture" finding(s) as warnings: the frames can't prove them`);
+      }
     } catch (err) {
       this.log(`Failed to merge visual findings (non-fatal): ${err}`);
     }
