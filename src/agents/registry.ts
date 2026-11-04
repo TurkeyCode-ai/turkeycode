@@ -10,7 +10,7 @@ import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { parse as parseYaml } from 'yaml';
-import { AgentBackendSpec } from './types';
+import { AgentBackendSpec, HTTP_429_PATTERN } from './types';
 import { CLAUDE_BACKEND } from './claude';
 import { CODEX_BACKEND } from './codex';
 import { GEMINI_BACKEND } from './gemini';
@@ -92,7 +92,7 @@ function parseAgentEntry(raw: unknown, idx: number): AgentBackendSpec {
     classifiers: {
       rateLimit: compileCheck(
         classifiers.rateLimit === undefined
-          ? ['rate.?limit', '\\b429\\b', 'too many requests']
+          ? ['rate.?limit', HTTP_429_PATTERN, 'too many requests']
           : asStringArray(classifiers.rateLimit, `${where}.classifiers.rateLimit`),
         `${where}.classifiers.rateLimit`
       ),
@@ -102,7 +102,7 @@ function parseAgentEntry(raw: unknown, idx: number): AgentBackendSpec {
       ),
       apiErrorContext: compileCheck(
         classifiers.apiErrorContext === undefined
-          ? ['rate.?limit', '\\b429\\b', 'too many requests']
+          ? ['rate.?limit', HTTP_429_PATTERN, 'too many requests']
           : asStringArray(classifiers.apiErrorContext, `${where}.classifiers.apiErrorContext`),
         `${where}.classifiers.apiErrorContext`
       ),

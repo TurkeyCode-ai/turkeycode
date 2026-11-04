@@ -7,7 +7,7 @@
  * `--approval-mode yolo`).
  */
 
-import { AgentBackendSpec } from './types';
+import { AgentBackendSpec, HTTP_429_PATTERN } from './types';
 
 export const GEMINI_BACKEND: AgentBackendSpec = {
   id: 'gemini',
@@ -29,7 +29,7 @@ export const GEMINI_BACKEND: AgentBackendSpec = {
   classifiers: {
     rateLimit: [
       'rate.?limit',
-      '\\b429\\b',
+      HTTP_429_PATTERN,
       'too many requests',
       'RESOURCE_EXHAUSTED',
     ],
@@ -41,7 +41,7 @@ export const GEMINI_BACKEND: AgentBackendSpec = {
     ],
     apiErrorContext: [
       'rate.?limit',
-      '\\b429\\b',
+      HTTP_429_PATTERN,
       'too many requests',
       'RESOURCE_EXHAUSTED',
       'googleapis',

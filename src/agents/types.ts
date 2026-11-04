@@ -111,6 +111,13 @@ export interface AgentBackendSpec {
  * backend gets the same cost/quality shape: 'high' where judgment is won or
  * lost (scope, plan, build, blocker debugging), 'low' for mechanical work.
  */
+/**
+ * An HTTP 429, not the digits 429. A bare \b429\b tripped on "34,429 bytes" in a
+ * session's summary, which threw away a clean QA result and slept 5 minutes.
+ */
+export const HTTP_429_PATTERN =
+  '(?:status|code|http|error)[^\\n]{0,24}\\b429\\b|\\b429\\b[^\\n]{0,24}(?:too many|rate|error)';
+
 export const PHASE_TIERS: Record<string, keyof AgentModels['tiers']> = {
   'scope': 'high',
   'research': 'medium',
