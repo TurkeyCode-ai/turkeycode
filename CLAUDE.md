@@ -174,7 +174,7 @@ src/
 
 2. **Single planning session**: One session produces the full phase plan (not analyze + detail loops)
 
-3. **Fresh-context QA**: QA spawns new agents that haven't seen the build code. Blindness is enforced, not just requested: the visual reviewer runs as `blind: true`, so on backends with `blindFlags` it can't reach user-level MCP servers. A memory server like aimem holds the conversation that built the code. "It never appeared" findings (`kind: "not-shown"`) can't gate when the reviewer skipped captured files, or for a game whose functional QA passed: they stay as warnings.
+3. **Fresh-context QA**: QA spawns new agents that haven't seen the build code. Blindness is enforced, not just requested: the visual reviewer runs as `blind: true`, so on backends with `blindFlags` it can't reach user-level MCP servers. A memory server like aimem holds the conversation that built the code. "It never appeared" findings (`kind: "not-shown"`) can't gate when the reviewer skipped captured files, or for a game whose functional QA passed: they stay as warnings. Visual QA fails closed: no report, or a clean report with no frames, is a blocker.
 
 3a. **turkeycode captures games itself**: `src/godot-capture.ts` records the real main scene with Movie Maker through a driver under `.turkey`, so a QA pass needs no capture session and games need no test hooks. Input lives in `capture-timeline.json` next to `project.godot`, which is data, not game code.
 

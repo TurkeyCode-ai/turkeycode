@@ -186,6 +186,24 @@ export function splitVisualBlockers(
 }
 
 /**
+ * Why a visual pass can't count as a review, if it can't. A session that died
+ * leaves no report, and a reviewer given no frames can still write a clean one.
+ * A report with blockers stands on its own: it already fails the phase.
+ */
+export function visualEvidenceProblem(reportJson: string | null, capturedFiles: string[]): string | null {
+  if (reportJson === null) return 'Visual QA produced no report, so the UI was not reviewed.';
+  let report: { blockers?: unknown };
+  try {
+    report = JSON.parse(reportJson);
+  } catch {
+    return 'Visual QA wrote an unreadable report, so the UI was not reviewed.';
+  }
+  const hasBlockers = Array.isArray(report?.blockers) && report.blockers.length > 0;
+  const hasFrames = capturedFiles.some(file => /\.(png|jpe?g|txt|json)$/i.test(file));
+  return hasBlockers || hasFrames ? null : 'Visual QA captured no screenshots, so the UI was not reviewed.';
+}
+
+/**
  * The agent pin only binds a run in progress, matching canResume(): the CLI
  * ignores the pin on a finished run, so enforcing it here would block a new
  * iteration on any other backend.
@@ -1363,6 +1381,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       // Fold the visual pass's findings into the verdict so its blockers gate the
       // phase exactly like functional blockers (and reach the fix agent).
       if (!skipVisual) {
+        this.requireVisualEvidence(qaDir, phaseNumber, attempt);
         this.mergeVisualFindings(qaDir, phaseNumber, attempt);
       }
 
@@ -1607,6 +1626,8 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
         continue;
       }
 
+      const visualUnreviewed = !skipVisual && this.requireVisualEvidence(qaDir, phaseNumber, attempt);
+
       // ========== VERDICT ==========
       this.log('--- Generating Verdict ---');
       await this.spawner.run({
@@ -1623,6 +1644,11 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       if (!existsSync(verdictPath)) {
         this.log('Verdict file not created by agent, creating fallback from smoke report...');
         this.createFallbackVerdict(qaDir, phaseNumber, attempt);
+      }
+
+      // The verdict session only reads the visual report, so this can't rest on it.
+      if (visualUnreviewed) {
+        this.mergeVisualFindings(qaDir, phaseNumber, attempt);
       }
 
       // Check verdict gate
@@ -1961,13 +1987,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
 
     if (capture.error) {
       this.log(`Frame capture failed: ${capture.error.split('\n')[0]}`);
-      const description = `The game could not be recorded: ${capture.error}`;
-      writeFileSync(`${qaDir}/visual-${attempt}.md`, `# Visual Review - Phase ${phaseNumber}, Attempt ${attempt}\n\n${description}\n`);
-      writeFileSync(`${qaDir}/visual-${attempt}.json`, JSON.stringify({
-        blockers: [{ type: 'visual', kind: 'seen', description, location: 'main scene', severity: 'critical' }],
-        warnings: []
-      }, null, 2));
-      writeFileSync(`${qaDir}/visual-${attempt}.done`, `DONE - Visual test completed at ${new Date().toISOString()}\n`);
+      this.writeVisualBlocker(qaDir, phaseNumber, attempt, `The game could not be recorded: ${capture.error}`, 'main scene');
       return [];
     }
     this.log(`Recorded ${capture.frames.length} frames${capture.usedTimeline ? ` using ${GODOT_CAPTURE_TIMELINE}` : ''}`);
@@ -1982,6 +2002,33 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       model: getModelForPhase('qa-visual'),
       blind: true
     })];
+  }
+
+  private writeVisualBlocker(qaDir: string, phaseNumber: number, attempt: number, description: string, location: string): void {
+    mkdirSync(qaDir, { recursive: true });
+    writeFileSync(`${qaDir}/visual-${attempt}.md`, `# Visual Review - Phase ${phaseNumber}, Attempt ${attempt}\n\n${description}\n`);
+    writeFileSync(`${qaDir}/visual-${attempt}.json`, JSON.stringify({
+      blockers: [{ type: 'visual', kind: 'seen', description, location, severity: 'critical' }],
+      warnings: []
+    }, null, 2));
+    writeFileSync(`${qaDir}/visual-${attempt}.done`, `DONE - Visual test completed at ${new Date().toISOString()}\n`);
+  }
+
+  /**
+   * Visual QA fails closed: when the pass left nothing that counts as a review,
+   * its report becomes a blocker. Returns true if it did.
+   */
+  private requireVisualEvidence(qaDir: string, phaseNumber: number, attempt: number): boolean {
+    const reportPath = `${qaDir}/visual-${attempt}.json`;
+    const framesDir = `${SCREENSHOTS_DIR}/phase-${phaseNumber}`;
+    const problem = visualEvidenceProblem(
+      existsSync(reportPath) ? readFileSync(reportPath, 'utf-8') : null,
+      existsSync(framesDir) ? readdirSync(framesDir) : []
+    );
+    if (!problem) return false;
+    this.log(`Visual QA failed closed: ${problem}`);
+    this.writeVisualBlocker(qaDir, phaseNumber, attempt, problem, 'visual QA');
+    return true;
   }
 
   /**

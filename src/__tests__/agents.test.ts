@@ -379,6 +379,8 @@ describe('rate-limit detection on numbers', () => {
     for (const text of ['Error: 429 Too Many Requests', 'API Error: 429', 'HTTP 429', 'status code 429']) {
       expect(detectAgentSignals(backend, text).rateLimited, text).toBe(true);
     }
+  });
+});
 
 describe('agent pin', () => {
   it('rejects a different backend on a run in progress', () => {

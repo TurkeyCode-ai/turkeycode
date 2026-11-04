@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mergeVisualIntoVerdict } from '../orchestrator';
+import { visualEvidenceProblem, mergeVisualIntoVerdict } from '../orchestrator';
 
 /**
  * Visual QA is a dedicated parallel session that writes its findings to
@@ -140,5 +140,31 @@ describe('findings the frames cannot prove', () => {
       { isGame: true, capturedFiles: files }
     );
     expect((merged.blockers as unknown[]).length).toBe(2);
+  });
+});
+
+describe('visualEvidenceProblem', () => {
+  const clean = JSON.stringify({ blockers: [], warnings: [] });
+
+  it('accepts a clean report backed by frames', () => {
+    expect(visualEvidenceProblem(clean, ['home.png'])).toBeNull();
+  });
+
+  it('fails when the session left no report', () => {
+    expect(visualEvidenceProblem(null, ['home.png'])).toMatch(/no report/);
+  });
+
+  it('fails on an unreadable report', () => {
+    expect(visualEvidenceProblem('{ nope', ['home.png'])).toMatch(/unreadable/);
+  });
+
+  it('fails a clean report with nothing captured', () => {
+    expect(visualEvidenceProblem(clean, [])).toMatch(/no screenshots/);
+    expect(visualEvidenceProblem(clean, ['.DS_Store'])).toMatch(/no screenshots/);
+  });
+
+  it('leaves a report that already has blockers alone', () => {
+    const failed = JSON.stringify({ blockers: [{ description: 'could not record' }] });
+    expect(visualEvidenceProblem(failed, [])).toBeNull();
   });
 });
