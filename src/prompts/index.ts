@@ -8,7 +8,7 @@ export { buildPlanPrompt } from './plan';
 export { buildBuildPhasePrompt } from './build';
 export { buildQaSmokePrompt } from './qa-smoke';
 export { buildQaFunctionalPrompt } from './qa-functional';
-export { buildQaVisualPrompt } from './qa-visual';
+export { buildQaVisualPrompt, buildQaVisualReviewPrompt } from './qa-visual';
 export { buildQaVerdictPrompt } from './qa-verdict';
 export { buildQaFixPrompt } from './qa-fix';
 export { buildQaCombinedPrompt } from './qa-combined';

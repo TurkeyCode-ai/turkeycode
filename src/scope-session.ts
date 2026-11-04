@@ -2,7 +2,7 @@
  * Interactive scope correction loop, extracted so both `turkeycode scope` and
  * `turkeycode run` (auto-scope on a bare description) drive the same engine.
  *
- * The loop re-spawns `claude --print` each turn with the transcript re-embedded
+ * The loop re-spawns a print-mode agent session each turn with the transcript re-embedded
  * (the spawner has no session-resume), reads back the agent's working model to
  * show the human, and emits the spec on an explicit confirmation. See
  * `src/prompts/scope.ts` for the method/contract the agent follows.
@@ -12,7 +12,8 @@ import { existsSync, readFileSync, writeFileSync, rmSync, statSync, mkdirSync } 
 import { homedir } from 'os';
 import { join } from 'path';
 import { createInterface } from 'readline/promises';
-import { Spawner } from './spawner';
+import { createSpawner } from './spawner';
+import { getActiveBackend } from './agents';
 import { buildScopePrompt, ScopeTurn } from './prompts/scope';
 import { DEFAULT_PERSONA } from './prompts/persona';
 import {
@@ -148,7 +149,7 @@ export async function runScopeSession(opts: ScopeSessionOptions): Promise<ScopeS
   // a fresh emit (e.g. abort, or a misbehaving agent that overwrote it pre-confirmation).
   const priorScopeDone = existsSync(SCOPE_DONE) ? readFileSync(SCOPE_DONE, 'utf-8') : null;
 
-  const spawner = new Spawner({ verbose: verbose === true });
+  const spawner = createSpawner({ verbose: verbose === true });
   const model = opts.model || getModelForPhase('scope');
   const transcript: ScopeTurn[] = [];
   let workingModel = '';
@@ -233,7 +234,7 @@ export async function runScopeSession(opts: ScopeSessionOptions): Promise<ScopeS
       if (!workingModel.trim()) {
         if (++emptyStreak >= MAX_EMPTY_STREAK) {
           console.log(`\nThe session produced no working model ${MAX_EMPTY_STREAK} times running — stopping.`);
-          console.log('Check your Claude CLI/auth, then re-run.');
+          console.log(`Check your ${getActiveBackend().displayName} CLI/auth, then re-run.`);
           break;
         }
         console.log('\n(The session produced no working model this turn. Retrying — rephrase if this repeats.)');

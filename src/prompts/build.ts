@@ -6,12 +6,21 @@
 import { ProjectState, BuildPhase, ProjectType } from '../types';
 import { oneTurnRule } from './one-turn';
 import { PHASES_DIR } from '../constants';
+import { AgentCapabilities, CLAUDE_BACKEND } from '../agents';
 
 // ==================== Type-Specific Build Instructions ====================
 
-function getTypeSpecificRules(projectType: ProjectType): string {
+function getTypeSpecificRules(projectType: ProjectType, caps: AgentCapabilities): string {
+  // The design rules are self-contained; the skill reference only helps
+  // backends that can actually load Claude Code skills.
+  const designLead = caps.skills
+    ? 'use the `frontend-design` skill and follow its hard rules without exception.'
+    : 'follow these hard rules without exception.';
+  const designSections = caps.skills
+    ? "Follow the skill's Identity, Motion, and Personality sections. "
+    : '';
   const webRules = `
-**DESIGN - do this for every screen: use the \`frontend-design\` skill and follow its hard rules without exception.** NO em-dashes anywhere in copy (hyphens only). NO emojis (use real SVG icons like Lucide). NO gradients, and not the default purple/indigo "AI" palette. ONE consistent alignment, left by default - never center-everything. Derive color, typography, and layout from THIS product, not a template. The result must look hand-crafted, not AI-generated; a bland default-Tailwind look is a failure. **AIM HIGH (not just "not AI-made"):** give the app a real IDENTITY (generate an SVG logo/wordmark when none is provided, plus a coherent palette + type + motion system), purposeful and restrained MOTION (entrance, transitions, hover/focus, loading - respect \`prefers-reduced-motion\`, never gratuitous), and a VOICE matched to the domain (carried into the empty/loading/error states, with ONE signature moment). Follow the skill's Identity, Motion, and Personality sections. If the spec contains a "Genre Quality Bar," BUILD TO IT - match its table-stakes features and at least one signature interaction. The bar is a product someone would be excited to use, not the literal minimum.
+**DESIGN - do this for every screen: ${designLead}** NO em-dashes anywhere in copy (hyphens only). NO emojis (use real SVG icons like Lucide). NO gradients, and not the default purple/indigo "AI" palette. ONE consistent alignment, left by default - never center-everything. Derive color, typography, and layout from THIS product, not a template. The result must look hand-crafted, not AI-generated; a bland default-Tailwind look is a failure. **AIM HIGH (not just "not AI-made"):** give the app a real IDENTITY (generate an SVG logo/wordmark when none is provided, plus a coherent palette + type + motion system), purposeful and restrained MOTION (entrance, transitions, hover/focus, loading - respect \`prefers-reduced-motion\`, never gratuitous), and a VOICE matched to the domain (carried into the empty/loading/error states, with ONE signature moment). ${designSections}If the spec contains a "Genre Quality Bar," BUILD TO IT - match its table-stakes features and at least one signature interaction. The bar is a product someone would be excited to use, not the literal minimum.
 **DATA - real and correct:** If the app's value depends on data (listings, places, prices, weather, reviews), wire a REAL source - a live API or a genuine imported dataset. NEVER fabricate facts (addresses, ratings, hours, phone numbers) or ship hardcoded placeholder seed as if it were real; invented data is a failure. If you seed a database, seed accurate, realistic data and enough of it to feel alive, and make seeds idempotent (safe to re-run). Create AND seed your schema at container startup for EVERY database setup, not just Prisma: if you use raw SQL migrations or a custom script, run them from your Dockerfile CMD or an entrypoint (for example \`npm run db:migrate && npm run db:seed\`) so the deployed database actually has tables and data. Any page or route that reads a database or external API must NOT be statically pre-rendered with build-time placeholder data - opt into dynamic rendering (Next.js: \`export const dynamic = 'force-dynamic'\` or proper revalidation) so it reads live data at request time, never stale build-time fakes. **Build-env proxy:** the build runs behind an HTTP proxy (\`HTTP_PROXY\` / \`HTTPS_PROXY\` env) and Node's built-in \`fetch\` IGNORES those, so any external request during the build (your data seed, an API call) dead-ends with \`EAI_AGAIN\`. Make external HTTP requests proxy-aware: route through the proxy when \`HTTP_PROXY\`/\`HTTPS_PROXY\` is set, direct otherwise (production has no proxy). Use undici's \`ProxyAgent\` as the dispatcher (add \`undici\` to dependencies if needed), e.g. in a seed: \`import { fetch as pfetch, ProxyAgent } from 'undici'; const proxy = process.env.HTTPS_PROXY || process.env.HTTP_PROXY; const res = await pfetch(url, proxy ? { dispatcher: new ProxyAgent(proxy) } : {});\`
 8. **No placeholder pages** - NEVER create stub pages with "coming soon" text. If a feature isn't in scope, don't create the page — remove the nav link instead.
 9. **No hardcoded localhost URLs** - Use environment variables for all URLs. For Next.js + Auth.js, use \`AUTH_TRUST_HOST=true\`. Never hardcode \`localhost:3000\`.
@@ -120,7 +129,8 @@ function getTypeSpecificRules(projectType: ProjectType): string {
 
 export function buildBuildPhasePrompt(
   state: ProjectState,
-  phase: BuildPhase
+  phase: BuildPhase,
+  caps: AgentCapabilities = CLAUDE_BACKEND.capabilities
 ): string {
   // Build tech context
   const techContext = Object.keys(state.tech).length > 0
@@ -277,7 +287,7 @@ ${oneTurnRule(buildDone, { completionGate: true, partialNotes: buildPartial })}
 5. **Do NOT build ahead** - Only implement what's in this phase's scope
 6. **Do NOT skip deliverables** - Every deliverable must be implemented
 7. **Push when done** - Ensure code is pushed to the phase branch
-${getTypeSpecificRules(state.projectType || 'web-fullstack')}
+${getTypeSpecificRules(state.projectType || 'web-fullstack', caps)}
 
 ---
 

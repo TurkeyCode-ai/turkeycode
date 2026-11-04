@@ -3,6 +3,13 @@
  * Phase-based orchestrator model
  */
 
+import {
+  CLAUDE_BACKEND,
+  PHASE_TIERS,
+  getActiveBackend,
+  resolveModelForPhase,
+} from './agents';
+
 // Base directories
 export const STATE_DIR = '.turkey';
 export const STATE_FILE = `${STATE_DIR}/state.json`;
@@ -84,42 +91,10 @@ export function setStrictQA(strict: boolean): void {
   STRICT_QA = strict;
 }
 
-// Model selection per phase
-// Maps each phase/sub-phase to the optimal model for cost vs quality.
-// Values are passed to `claude --model`: bare aliases ('opus'/'sonnet'/'haiku')
-// float to the latest model in that tier (currently Opus 5 / Sonnet 5 / Haiku 4.5);
-// exact IDs pin a specific model.
-export const PHASE_MODELS: Record<string, string> = {
-  // Scope — Opus: point-of-view-heavy reasoning (reflect, surface forks, catch tensions)
-  'scope': 'opus',
-
-  // Planning phases — Opus for architecture decisions, Sonnet for extraction
-  'research': 'sonnet',
-  'plan': 'opus',
-
-  // Build phase — Fable 5: Anthropic's most capable model, built for exactly this
-  // shape of work (long-horizon agentic coding, 60-90 min sessions, self-verification).
-  // The build session is where quality is won or lost, so it gets the top tier.
-  'build': 'claude-fable-5',
-
-  // QA phases — Haiku for mechanical tasks, Sonnet for reasoning
-  'qa-smoke': 'haiku',
-  'qa-functional': 'sonnet',
-  'qa-visual': 'sonnet',
-  'qa-verdict': 'sonnet',
-
-  // Fix phases — Fable 5 for blocker debugging (the hardest coding task in the run,
-  // same tier as the build sessions it repairs), Sonnet for compile fixes
-  'qa-fix': 'claude-fable-5',
-  'quick-fix': 'sonnet',
-
-  // Post-build — Sonnet for review, Haiku for mechanical summarization
-  'code-review': 'sonnet',
-  'aar': 'sonnet',
-
-  // Polish — Sonnet: warning cleanup is mechanical-ish but fixes need judgment
-  'polish': 'sonnet',
-};
+// Model selection per phase now lives in the agent backend specs
+// (src/agents/): phases map to backend-neutral tiers (PHASE_TIERS), each
+// backend maps tiers to its own model names, and exact pins go in a
+// backend's phaseOverrides (claude pins Fable 5 for build/qa-fix).
 
 /** qa-fix -> TURKEYCODE_MODEL_QA_FIX */
 export function phaseModelEnvVar(phase: string): string {
@@ -127,12 +102,14 @@ export function phaseModelEnvVar(phase: string): string {
 }
 
 /** Each distinct model this run can still use, with the phases that use it. */
-export function preflightModels(skipPhases: ReadonlySet<string> = new Set()): Map<string, string[]> {
-  const byModel = new Map<string, string[]>();
+export function preflightModels(skipPhases: ReadonlySet<string> = new Set()): Map<string | undefined, string[]> {
+  // undefined is a real key: it means the backend's default model, which is all
+  // a backend with no tier mappings has, and it still has to be probed.
+  const byModel = new Map<string | undefined, string[]>();
   for (const phase of Object.keys(PHASE_MODELS)) {
     if (skipPhases.has(phase)) continue;
     const model = getModelForPhase(phase);
-    if (model) byModel.set(model, [...(byModel.get(model) ?? []), phase]);
+    byModel.set(model, [...(byModel.get(model) ?? []), phase]);
   }
   return byModel;
 }
@@ -143,28 +120,33 @@ export function preflightRerunCommand(hasState: boolean): string {
 }
 
 /**
- * Get the model for a given phase.
- * Returns undefined if no specific model is configured (uses Claude default).
+ * Claude Code's phase → model table, derived from the claude backend spec.
+ * Kept exported for callers/tests that reason about the default backend's
+ * choices; sessions resolve their model via getModelForPhase.
+ */
+export const PHASE_MODELS: Record<string, string> = Object.fromEntries(
+  Object.entries(PHASE_TIERS).flatMap(([phase, tier]) => {
+    const model =
+      CLAUDE_BACKEND.models.phaseOverrides?.[phase] ?? CLAUDE_BACKEND.models.tiers[tier];
+    return model ? [[phase, model]] : [];
+  })
+);
+
+/**
+ * Get the model for a given phase, in the ACTIVE backend's vocabulary.
+ * Returns undefined if no specific model is configured (CLI default model).
+ *
+ * Env overrides are checked before the backend tables. Running out of credit
+ * on ONE model should not mean editing source and rebuilding mid-build:
+ *
+ *   TURKEYCODE_MODEL_BUILD=opus      one phase
+ *   TURKEYCODE_MODEL=sonnet          everything not otherwise set
+ *
+ * Phase names contain dashes; the env form uppercases and underscores them
+ * (qa-fix -> TURKEYCODE_MODEL_QA_FIX).
  */
 export function getModelForPhase(phase: string): string | undefined {
-  // Env overrides, checked before the table. Running out of credit on ONE
-  // model should not mean editing source and rebuilding mid-build — which is
-  // exactly what happened: a 16-phase run stopped dead at phase 6 on "You've
-  // hit your monthly spend limit ... keep using Fable 5 or switch models",
-  // and `resume` has no --model flag to answer that with.
-  //
-  //   TURKEYCODE_MODEL_BUILD=opus      one phase
-  //   TURKEYCODE_MODEL=sonnet          everything not otherwise set
-  //
-  // Phase names contain dashes; the env form uppercases and underscores them
-  // (qa-fix -> TURKEYCODE_MODEL_QA_FIX).
-  const perPhase = process.env[phaseModelEnvVar(phase)];
-  if (perPhase) return perPhase;
-
-  const global = process.env.TURKEYCODE_MODEL;
-  if (global) return global;
-
-  return PHASE_MODELS[phase];
+  return resolveModelForPhase(getActiveBackend(), phase);
 }
 
 // All directories that need to be created

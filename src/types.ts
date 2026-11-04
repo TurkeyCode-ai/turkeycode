@@ -160,6 +160,11 @@ export interface ProjectState {
   // Project type (stack-agnostic)
   projectType?: ProjectType;
 
+  // Agent backend the run started with ('claude'/'codex'/'gemini'/'opencode'
+  // or an agents.yaml id). Pinned so `resume` runs the rest of the build on
+  // the same agent — artifacts and branches assume one agent's behavior.
+  agent?: string;
+
   // Phase tracking
   currentPhase: Phase;
   currentStep: string;
@@ -238,14 +243,8 @@ export interface GateResult {
 // SPAWNER TYPES
 // ============================================================================
 
-export interface SpawnOptions {
-  /** Working directory */
-  cwd?: string;
-  /** Timeout in milliseconds */
-  timeoutMs?: number;
-  /** Session name for logging */
-  sessionName?: string;
-}
+// The per-session option shape lives in src/agents/types.ts
+// (SpawnSessionOptions) — one interface shared by run/runSequence/runParallel.
 
 export interface SpawnResult {
   /** Process exit code */

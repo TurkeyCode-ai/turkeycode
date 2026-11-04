@@ -21,6 +21,7 @@ import {
   advancePhase
 } from './state';
 import { Spawner, createSpawner } from './spawner';
+import { getActiveBackend } from './agents';
 import { Gates, createGates, enforceGate } from './gates';
 import { JiraClient, createJiraClient } from './jira';
 import { GitHubClient, createGitHubClient, slugify } from './github';
@@ -31,6 +32,7 @@ import {
   buildQaSmokePrompt,
   buildQaFunctionalPrompt,
   buildQaVisualPrompt,
+  buildQaVisualReviewPrompt,
   buildQaVerdictPrompt,
   buildQaFixPrompt,
   buildQaCombinedPrompt,
@@ -147,6 +149,19 @@ export interface QaFinding {
   description?: string;
   location?: string;
   severity?: string;
+}
+
+/**
+ * The agent pin only binds a run in progress, matching canResume(): the CLI
+ * ignores the pin on a finished run, so enforcing it here would block a new
+ * iteration on any other backend.
+ */
+export function agentPinConflicts(
+  state: Pick<ProjectState, 'agent' | 'currentPhase'>,
+  activeAgent: string
+): boolean {
+  const inProgress = state.currentPhase !== 'init' && state.currentPhase !== 'done';
+  return inProgress && !!state.agent && state.agent !== activeAgent;
 }
 
 /**
@@ -295,7 +310,7 @@ export class Orchestrator {
     // on ~/Library permission walls). Refuse those and point the user at an empty folder.
     this.assertSafeWorkDir();
 
-    // Preflight: verify Claude Code is available and working
+    // Preflight: verify the agent CLI is available and working
     await this.preflightCheck();
 
     const isResume = this.state.currentPhase !== 'init' && this.state.projectDescription;
@@ -340,6 +355,23 @@ export class Orchestrator {
           this.log(`Jira project ready: ${projectKey}`);
         }
       }
+    }
+
+    // Pin the agent backend to the run. The CLI already refuses an explicit
+    // --agent/TURKEYCODE_AGENT that conflicts with a resumed pin; this guard
+    // covers programmatic callers, and backfills the pin on runs started
+    // before backends existed. A finished run is not mid-run, so a new iteration
+    // may take the active backend.
+    const activeAgent = getActiveBackend().id;
+    if (agentPinConflicts(this.state, activeAgent)) {
+      throw new Error(
+        `This run is pinned to agent '${this.state.agent}' but the active backend is '${activeAgent}'. ` +
+        `Switching agents mid-run is not supported.`
+      );
+    }
+    if (this.state.agent !== activeAgent) {
+      this.state.agent = activeAgent;
+      saveState(this.state);
     }
 
     // Ensure feature branch exists if specified (branched off base).
@@ -1034,7 +1066,7 @@ export class Orchestrator {
     this.log(`\n--- Building Phase ${phase.number}: ${phase.name} ---`);
 
     // Build prompt and run session
-    const prompt = buildBuildPhasePrompt(this.state, phase);
+    const prompt = buildBuildPhasePrompt(this.state, phase, getActiveBackend().capabilities);
     const buildDoneFile = `${PHASES_DIR}/phase-${phase.number}/build.done`;
     const startTime = Date.now();
 
@@ -1073,15 +1105,16 @@ export class Orchestrator {
       // Better diagnostics for short output (common failure mode)
       if (result.stdout.length < 1000) {
         this.log(`\n⚠️  Build output was suspiciously short (${result.stdout.length} chars).`);
-        this.log(`This usually means Claude Code didn't execute the build properly.`);
-        this.log(`\nClaude output:\n${result.stdout.substring(0, 2000)}`);
+        const backend = getActiveBackend();
+        this.log(`This usually means ${backend.displayName} didn't execute the build properly.`);
+        this.log(`\nAgent output:\n${result.stdout.substring(0, 2000)}`);
         if (result.stderr.length > 0) {
           this.log(`\nStderr:\n${result.stderr.substring(0, 1000)}`);
         }
         this.log(`\nTroubleshooting:`);
-        this.log(`1. Run "claude --print 'hello'" to verify Claude Code works`);
-        this.log(`2. Check your Claude subscription is active`);
-        this.log(`3. Try running with a different model: turkeycode run --model opus "..."`);
+        this.log(`1. Verify the ${backend.displayName} CLI works on its own (${backend.binary} ${backend.versionArgs.join(' ')})`);
+        this.log(`2. Check your ${backend.displayName} subscription/credits are active`);
+        this.log(`3. Try a different model: TURKEYCODE_MODEL=<model> turkeycode resume`);
       }
       enforceGate(gateResult); // Will exit(1)
     }
@@ -1251,31 +1284,25 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       // the rendered UI from screenshots, with cross-attempt memory. It's skipped
       // for non-visual project types (CLI/API/library/embedded).
       const skipVisual = shouldSkipVisualQA(this.state.projectType || 'web-fullstack');
-      const qaTasks = [
-        {
-          cwd: this.workDir,
-          prompt: buildQaCombinedPrompt(this.state, phaseNumber, attempt, diffStat, baseRef),
-          timeoutMs: QA_TIMEOUT_MS,
-          sessionName: `qa-combined-${attempt}`,
-          doneFile: `${QA_DIR}/phase-${phaseNumber}/verdict-${attempt}.done`,
-          model: getModelForPhase('qa-functional') // Sonnet for combined QA
-        }
-      ];
+      const combinedTask = this.spawner.run({
+        cwd: this.workDir,
+        prompt: buildQaCombinedPrompt(this.state, phaseNumber, attempt, diffStat, baseRef),
+        timeoutMs: QA_TIMEOUT_MS,
+        sessionName: `qa-combined-${attempt}`,
+        doneFile: `${QA_DIR}/phase-${phaseNumber}/verdict-${attempt}.done`,
+        model: getModelForPhase('qa-functional') // Sonnet for combined QA
+      });
+
+      let visualTask: Promise<SpawnResult[]> = Promise.resolve([]);
       if (skipVisual) {
         this.log(`Skipping visual QA — project type "${this.state.projectType}" has no visual surface`);
       } else {
         this.log('--- Running combined QA + visual QA (parallel) ---');
-        qaTasks.push({
-          cwd: this.workDir,
-          prompt: buildQaVisualPrompt(this.state, phaseNumber, attempt),
-          timeoutMs: QA_TIMEOUT_MS,
-          sessionName: `qa-visual-${attempt}`,
-          doneFile: `${QA_DIR}/phase-${phaseNumber}/visual-${attempt}.done`,
-          model: getModelForPhase('qa-visual')
-        });
+        visualTask = this.runVisualQaSessions(phaseNumber, attempt);
       }
 
-      const qaResults = await this.spawner.runParallel(qaTasks, skipVisual ? 1 : 2);
+      const [combinedResult, visualResults] = await Promise.all([combinedTask, visualTask]);
+      const qaResults = [combinedResult, ...visualResults];
 
       this.assertNotCreditExhausted(qaResults);
       if (qaResults.some(r => r.rateLimited)) {
@@ -1512,33 +1539,26 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
 
       // ========== TIER 2+3: FUNCTIONAL + VISUAL (PARALLEL) ==========
       this.log('--- Tier 2+3: Functional + Visual (PARALLEL) ---');
-            // Build QA tasks — skip visual for non-visual project types
-      const qaTasks = [
-        {
-          cwd: this.workDir,
-          prompt: buildQaFunctionalPrompt(this.state, phaseNumber, attempt),
-          timeoutMs: QA_TIMEOUT_MS,
-          sessionName: `qa-functional-${attempt}`,
-          doneFile: `${QA_DIR}/phase-${phaseNumber}/functional-${attempt}.done`,
-          model: getModelForPhase('qa-functional')
-        }
-      ];
+      // Build QA tasks — skip visual for non-visual project types
+      const functionalTask = this.spawner.run({
+        cwd: this.workDir,
+        prompt: buildQaFunctionalPrompt(this.state, phaseNumber, attempt),
+        timeoutMs: QA_TIMEOUT_MS,
+        sessionName: `qa-functional-${attempt}`,
+        doneFile: `${QA_DIR}/phase-${phaseNumber}/functional-${attempt}.done`,
+        model: getModelForPhase('qa-functional')
+      });
 
       const skipVisual = shouldSkipVisualQA(this.state.projectType || 'web-fullstack');
+      let visualTask: Promise<SpawnResult[]> = Promise.resolve([]);
       if (skipVisual) {
         this.log(`Skipping visual QA — project type "${this.state.projectType}" has no visual component`);
       } else {
-        qaTasks.push({
-          cwd: this.workDir,
-          prompt: buildQaVisualPrompt(this.state, phaseNumber, attempt),
-          timeoutMs: QA_TIMEOUT_MS,
-          sessionName: `qa-visual-${attempt}`,
-          doneFile: `${QA_DIR}/phase-${phaseNumber}/visual-${attempt}.done`,
-          model: getModelForPhase('qa-visual')
-        });
+        visualTask = this.runVisualQaSessions(phaseNumber, attempt);
       }
 
-      const qaResults = await this.spawner.runParallel(qaTasks, skipVisual ? 1 : 2);
+      const [functionalResult, visualResults] = await Promise.all([functionalTask, visualTask]);
+      const qaResults = [functionalResult, ...visualResults];
 
       // Handle rate limiting in QA sessions
       this.assertNotCreditExhausted(qaResults);
@@ -1824,6 +1844,62 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
   }
 
   /**
+   * Run the visual QA pass, shaped by the active backend's capabilities.
+   *
+   * With in-session subagents (Claude Code), ONE session captures screenshots
+   * and spawns the blind reviewer itself — the historical flow. Without them,
+   * a capture session runs first (gated on capture-N.done), then a SECOND
+   * session gets the review-only prompt; a fresh print-mode session has never
+   * seen the code, so the blindness property survives the backend swap.
+   */
+  private async runVisualQaSessions(phaseNumber: number, attempt: number): Promise<SpawnResult[]> {
+    const backend = getActiveBackend();
+    const qaDir = `${QA_DIR}/phase-${phaseNumber}`;
+
+    // A subagent inherits its parent's MCP servers, and the capture session may
+    // need them, so a backend that can run a blind session reviews in its own.
+    // In-session review is only for backends with no way to enforce blindness.
+    const reviewInSession = backend.capabilities.subagents && !backend.blindFlags?.length;
+    const caps = { ...backend.capabilities, subagents: reviewInSession };
+
+    if (reviewInSession) {
+      return [await this.spawner.run({
+        cwd: this.workDir,
+        prompt: buildQaVisualPrompt(this.state, phaseNumber, attempt, caps),
+        timeoutMs: QA_TIMEOUT_MS,
+        sessionName: `qa-visual-${attempt}`,
+        doneFile: `${qaDir}/visual-${attempt}.done`,
+        model: getModelForPhase('qa-visual')
+      })];
+    }
+
+    const captureResult = await this.spawner.run({
+      cwd: this.workDir,
+      prompt: buildQaVisualPrompt(this.state, phaseNumber, attempt, caps),
+      timeoutMs: QA_TIMEOUT_MS,
+      sessionName: `qa-visual-capture-${attempt}`,
+      doneFile: `${qaDir}/capture-${attempt}.done`,
+      model: getModelForPhase('qa-visual')
+    });
+    // Don't burn a review session on a failed/limited capture; the caller's
+    // rate-limit and verdict handling deal with the partial result.
+    if (captureResult.exitCode !== 0 || captureResult.rateLimited || captureResult.creditExhausted) {
+      return [captureResult];
+    }
+
+    const reviewResult = await this.spawner.run({
+      cwd: this.workDir,
+      prompt: buildQaVisualReviewPrompt(this.state, phaseNumber, attempt, caps),
+      timeoutMs: QA_TIMEOUT_MS / 2,
+      sessionName: `qa-visual-review-${attempt}`,
+      doneFile: `${qaDir}/visual-${attempt}.done`,
+      model: getModelForPhase('qa-visual'),
+      blind: true
+    });
+    return [captureResult, reviewResult];
+  }
+
+  /**
    * Fail fast if any session was rejected for programmatic-credit exhaustion.
    * Unlike a transient 429, this won't recover by waiting — retrying just burns
    * the session timeout until the billing cycle resets. Throwing surfaces a clear,
@@ -1832,12 +1908,13 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
   private assertNotCreditExhausted(results: SpawnResult | SpawnResult[]): void {
     const arr = Array.isArray(results) ? results : [results];
     if (arr.some(r => r.creditExhausted)) {
+      const backend = getActiveBackend();
       throw new Error(
-        'Programmatic credit exhausted. The Claude Code session was rejected with a ' +
+        `Programmatic credit exhausted. The ${backend.displayName} session was rejected with a ` +
         'credit/usage-limit error that resets at the next billing cycle — not a transient ' +
-        'rate limit, so retrying will not help. To continue now, enable "extra usage" in the ' +
-        'Claude Console (Settings → Billing) so overflow bills at pay-as-you-go API rates ' +
-        '(set a spend cap), or wait for the monthly credit to reset. Then run `turkeycode resume`.'
+        'rate limit, so retrying will not help. ' +
+        (backend.billingHint ? backend.billingHint + ' ' : '') +
+        'Then run `turkeycode resume`.'
       );
     }
   }
@@ -1852,7 +1929,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       throw new Error(
         `Persistent rate limiting during ${context} after ${MAX_RATE_LIMIT_RETRIES} retries — aborting. ` +
         `If this recurs, your account may be at its per-minute limit or out of programmatic credit; ` +
-        `check the Claude Console. Resume with \`turkeycode resume\`.`
+        `check your provider's billing console. Resume with \`turkeycode resume\`.`
       );
     }
     this.log(`Rate limit detected during ${context} — waiting 5 minutes before retry (${retries + 1}/${MAX_RATE_LIMIT_RETRIES})...`);
@@ -2446,7 +2523,7 @@ Generated by turkeycode (phase-based)
   }
 
   /**
-   * Preflight check: verify Claude Code is installed and working
+   * Preflight check: verify the active agent CLI is installed and working
    * Catches common issues before wasting time on a full build
    */
   private assertSafeWorkDir(): void {
@@ -2469,7 +2546,8 @@ Generated by turkeycode (phase-based)
    * whether the remaining phases can finish.
    */
   private phasesThatWontRun(): Set<string> {
-    const skip = new Set(['scope']); // runs in the CLI, before the orchestrator starts
+    // scope runs in the CLI before the orchestrator starts; ticket-review is the ticket flow's.
+    const skip = new Set(['scope', 'ticket-review']);
     if (!this.aar) skip.add('aar');
     if (!this.polish) skip.add('polish');
     if (existsSync(join(this.workDir, RESEARCH_DONE))) skip.add('research');
@@ -2479,47 +2557,50 @@ Generated by turkeycode (phase-based)
 
   private async preflightCheck(): Promise<void> {
     this.log('Running preflight checks...');
+    const backend = getActiveBackend();
 
-    // 1. Check claude CLI exists
+    // 1. Check the agent CLI exists
     try {
       const { execSync } = require('child_process');
-      const version = execSync('claude --version 2>&1', { encoding: 'utf-8', timeout: 10000 }).trim();
-      this.log(`Claude CLI: ${version}`);
+      const versionCmd = [backend.binary, ...backend.versionArgs, '2>&1'].join(' ');
+      const version = execSync(versionCmd, { encoding: 'utf-8', timeout: 10000 }).trim();
+      this.log(`${backend.displayName}: ${version}`);
     } catch {
-      console.error('\n❌ Claude Code CLI not found.');
-      console.error('Install it: npm install -g @anthropic-ai/claude-code');
-      console.error('Then run: claude (to complete initial setup)\n');
+      console.error(`\n❌ ${backend.displayName} not found ('${backend.binary}').`);
+      console.error(`Install it: ${backend.installHint}`);
+      if (backend.setupHint) console.error(`Then: ${backend.setupHint}`);
+      console.error('');
       process.exit(1);
     }
 
-    // 2. Quick smoke test — verify --print and --dangerously-skip-permissions work.
+    // 2. Quick smoke test — verify print mode and permission bypass work.
     // Prompt must elicit a TEXT reply, not an action: phrasing like "write X to
-    // stdout" makes claude run a tool (echo) instead of replying, leaving --print
-    // output empty. Retry guards against a transient blank response.
+    // stdout" makes the agent run a tool (echo) instead of replying, leaving
+    // print-mode output empty. Retry guards against a transient blank response.
     const PREFLIGHT_PROMPT = 'Reply with only the word TURKEY as plain text. Do not use any tools.';
     // Probe every model the run will use, not just the build's. With no model,
-    // Claude Code falls back to the user's default, and if that tier is out of
+    // the CLI falls back to the user's default, and if that tier is out of
     // credit preflight dies while the models the build needs answer fine. The
     // reverse bites too: TURKEYCODE_MODEL_BUILD=opus passed while qa-fix stayed
     // on Fable, and the run hit the limit hours in.
-    const probe = async (model: string): Promise<SpawnResult> => {
+    const probe = async (model: string | undefined): Promise<SpawnResult> => {
       const once = () => this.spawner.run({
         cwd: this.workDir,
         prompt: PREFLIGHT_PROMPT,
         timeoutMs: 30000,
-        sessionName: `preflight-${model}`,
+        sessionName: `preflight-${model ?? 'default'}`,
         model,
       });
       let result = await once();
       for (let attempt = 2; attempt <= 3 && (result.exitCode !== 0 || result.stdout.trim().length < 3); attempt++) {
-        this.log(`Preflight on ${model} inconclusive (exit ${result.exitCode}, ${result.stdout.trim().length} chars) — retry ${attempt}/3`);
+        this.log(`Preflight on ${model ?? 'default'} inconclusive (exit ${result.exitCode}, ${result.stdout.trim().length} chars) — retry ${attempt}/3`);
         result = await once();
       }
       return result;
     };
 
     const models = [...preflightModels(this.phasesThatWontRun()).entries()];
-    this.log(`Preflight: checking ${models.map(([model]) => model).join(', ')}`);
+    this.log(`Preflight: checking ${models.map(([model]) => model ?? 'default').join(', ')}`);
     const results = await Promise.all(models.map(([model]) => probe(model)));
     const failed = models
       .map(([model, phases], i) => ({ model, phases, result: results[i] }))
@@ -2527,21 +2608,23 @@ Generated by turkeycode (phase-based)
 
     if (failed.length > 0) {
       const rerun = preflightRerunCommand(existsSync(join(this.workDir, STATE_FILE)));
-      console.error('\n❌ Claude Code preflight failed.');
+      console.error(`\n❌ ${backend.displayName} preflight failed.`);
       for (const { model, phases, result } of failed) {
-        console.error(`\nModel: ${model} (used by: ${phases.join(', ')})`);
+        console.error(`\nModel: ${model ?? `(${backend.displayName} default)`} (used by: ${phases.join(', ')})`);
         console.error(`Exit code: ${result.exitCode}`);
         if (result.stdout.length > 0) console.error(`Output: ${result.stdout.substring(0, 500)}`);
         if (result.stderr.length > 0) console.error(`Stderr: ${result.stderr.substring(0, 500)}`);
       }
       const overrides = failed.flatMap(({ phases }) => phases).map(phaseModelEnvVar);
       console.error('\nPossible fixes:');
-      console.error('1. Run "claude" once to complete initial setup');
+      console.error(`1. ${backend.setupHint || `Run "${backend.binary}" once to complete initial setup`}`);
       console.error('2. If a model is out of credit, switch everything:');
-      console.error(`     TURKEYCODE_MODEL=sonnet ${rerun}`);
+      console.error(`     TURKEYCODE_MODEL=<model> ${rerun}`);
       console.error('   or only the phases that need it:');
-      console.error(`     ${overrides.map(name => `${name}=sonnet`).join(' ')} ${rerun}`);
-      console.error(`3. Try: claude --print --model ${failed[0].model} "hello"\n`);
+      console.error(`     ${overrides.map(name => `${name}=<model>`).join(' ')} ${rerun}`);
+      const named = failed.filter(({ model }) => model).map(({ model }) => `'${model}'`);
+      if (named.length > 0) console.error(`3. Verify ${named.join(', ')} is valid for ${backend.displayName}`);
+      console.error('');
       process.exit(1);
     }
 
