@@ -152,6 +152,19 @@ export interface QaFinding {
 }
 
 /**
+ * The agent pin only binds a run in progress, matching canResume(): the CLI
+ * ignores the pin on a finished run, so enforcing it here would block a new
+ * iteration on any other backend.
+ */
+export function agentPinConflicts(
+  state: Pick<ProjectState, 'agent' | 'currentPhase'>,
+  activeAgent: string
+): boolean {
+  const inProgress = state.currentPhase !== 'init' && state.currentPhase !== 'done';
+  return inProgress && !!state.agent && state.agent !== activeAgent;
+}
+
+/**
  * Pure merge: fold a visual QA report's findings into a phase verdict so its
  * blockers gate the phase exactly like functional blockers. Visual findings are
  * normalized to `type: 'visual'`; any visual blocker flips the verdict to
@@ -347,9 +360,10 @@ export class Orchestrator {
     // Pin the agent backend to the run. The CLI already refuses an explicit
     // --agent/TURKEYCODE_AGENT that conflicts with a resumed pin; this guard
     // covers programmatic callers, and backfills the pin on runs started
-    // before backends existed.
+    // before backends existed. A finished run is not mid-run, so a new iteration
+    // may take the active backend.
     const activeAgent = getActiveBackend().id;
-    if (this.state.agent && this.state.agent !== activeAgent) {
+    if (agentPinConflicts(this.state, activeAgent)) {
       throw new Error(
         `This run is pinned to agent '${this.state.agent}' but the active backend is '${activeAgent}'. ` +
         `Switching agents mid-run is not supported.`
@@ -1287,7 +1301,8 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
         visualTask = this.runVisualQaSessions(phaseNumber, attempt);
       }
 
-      const qaResults = [await combinedTask, ...(await visualTask)];
+      const [combinedResult, visualResults] = await Promise.all([combinedTask, visualTask]);
+      const qaResults = [combinedResult, ...visualResults];
 
       this.assertNotCreditExhausted(qaResults);
       if (qaResults.some(r => r.rateLimited)) {
@@ -1542,7 +1557,8 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
         visualTask = this.runVisualQaSessions(phaseNumber, attempt);
       }
 
-      const qaResults = [await functionalTask, ...(await visualTask)];
+      const [functionalResult, visualResults] = await Promise.all([functionalTask, visualTask]);
+      const qaResults = [functionalResult, ...visualResults];
 
       // Handle rate limiting in QA sessions
       this.assertNotCreditExhausted(qaResults);
