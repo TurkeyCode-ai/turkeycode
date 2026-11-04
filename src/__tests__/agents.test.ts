@@ -366,3 +366,17 @@ describe('Spawner with a fake backend binary', () => {
     expect(result.stdout).toContain('argv:--auto prompt-in-argv');
   }, 40000);
 });
+
+describe('rate-limit detection on numbers', () => {
+  it.each([CLAUDE_BACKEND, CODEX_BACKEND, GEMINI_BACKEND, OPENCODE_BACKEND])('$id ignores 429 in ordinary output', backend => {
+    for (const text of ['Frames 60 through 210 are 34,429 bytes each', 'read 429 files', 'frame00000429.png', 'port 8429']) {
+      expect(detectAgentSignals(backend, text).rateLimited, text).toBe(false);
+    }
+  });
+
+  it.each([CLAUDE_BACKEND, CODEX_BACKEND, GEMINI_BACKEND, OPENCODE_BACKEND])('$id still sees a real 429', backend => {
+    for (const text of ['Error: 429 Too Many Requests', 'API Error: 429', 'HTTP 429', 'status code 429']) {
+      expect(detectAgentSignals(backend, text).rateLimited, text).toBe(true);
+    }
+  });
+});

@@ -9,7 +9,7 @@
  * override, sessions run on the user's configured opencode default model.
  */
 
-import { AgentBackendSpec } from './types';
+import { AgentBackendSpec, HTTP_429_PATTERN } from './types';
 
 export const OPENCODE_BACKEND: AgentBackendSpec = {
   id: 'opencode',
@@ -29,7 +29,7 @@ export const OPENCODE_BACKEND: AgentBackendSpec = {
   classifiers: {
     rateLimit: [
       'rate.?limit',
-      '\\b429\\b',
+      HTTP_429_PATTERN,
       'too many requests',
     ],
     creditExhausted: [
@@ -41,7 +41,7 @@ export const OPENCODE_BACKEND: AgentBackendSpec = {
     ],
     apiErrorContext: [
       'rate.?limit',
-      '\\b429\\b',
+      HTTP_429_PATTERN,
       'too many requests',
       'rate_limit_error',
       'insufficient_quota',
