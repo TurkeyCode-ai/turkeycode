@@ -93,7 +93,7 @@ echo "DONE - polish attempt ${attempt} at $(date -Iseconds)" > ${doneFile}
 
 ---
 
-${oneTurnRule('the polish report')}
+${oneTurnRule(verdictPath)}
 
 ---
 

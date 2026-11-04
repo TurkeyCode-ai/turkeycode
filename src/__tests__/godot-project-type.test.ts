@@ -9,9 +9,10 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { buildQaVisualPrompt } from '../prompts/qa-visual';
 import { buildBuildPhasePrompt } from '../prompts/build';
-import { PROJECT_TYPES } from '../detect-project-type';
-import { godotOutputErrors } from '../quick-check';
-import { mkdirSync, writeFileSync, rmSync } from 'fs';
+import { GODOT_DIR_SHELL, PROJECT_TYPES } from '../detect-project-type';
+import { detectProjectType as detectForQuickCheck, godotOutputErrors } from '../quick-check';
+import { execSync } from 'child_process';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -213,5 +214,37 @@ describe('Godot output parsing', () => {
 
   it('passes a clean run', () => {
     expect(godotOutputErrors('Godot Engine v4.7.1\n\nhello\n')).to.deep.equal([]);
+  });
+});
+
+describe('Godot project location', () => {
+  const repo = (files: string[]) => {
+    const d = mkdtempSync(join(tmpdir(), 'tc-godot-'));
+    for (const f of files) {
+      mkdirSync(join(d, f, '..'), { recursive: true });
+      writeFileSync(join(d, f), f.endsWith('package.json') ? '{"dependencies":{"express":"^4"}}' : '');
+    }
+    return d;
+  };
+  const shellDir = (cwd: string) =>
+    execSync(`${GODOT_DIR_SHELL}; printf %s "$GODOT_DIR"`, { cwd, shell: '/bin/bash' }).toString();
+
+  it('prefers the root, the same order detection uses', () => {
+    expect(shellDir(repo(['project.godot', 'app/project.godot']))).to.equal('.');
+  });
+
+  it('finds a subdirectory', () => {
+    expect(shellDir(repo(['game/project.godot']))).to.equal('game');
+  });
+
+  it("does not boot a Godot project's own .csproj as a backend", () => {
+    expect(detectForQuickCheck(repo(['project.godot', 'Game.csproj'])).hasBackend).to.equal(false);
+  });
+
+  it('still finds a real backend past the Godot project', () => {
+    const d = repo(['project.godot', 'Game.csproj', 'server/package.json']);
+    const info = detectForQuickCheck(d);
+    expect(info.hasBackend).to.equal(true);
+    expect(info.backendDir).to.equal(join(d, 'server'));
   });
 });

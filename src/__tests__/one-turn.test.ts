@@ -23,6 +23,12 @@ describe('oneTurnRule', () => {
     expect(rule).to.contain('partial.md');
   });
 
+  it('only promises a retry where one exists', () => {
+    const rule = oneTurnRule('plan.done', { completionGate: true });
+    expect(rule).to.not.contain('orchestrator retries');
+    expect(rule).to.not.contain('commit what works');
+  });
+
   it('allows a polled service, which QA setup requires', () => {
     const rule = oneTurnRule('the verdict file');
     expect(rule).to.contain('long-lived service');

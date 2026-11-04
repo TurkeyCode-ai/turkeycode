@@ -126,10 +126,11 @@ export function phaseModelEnvVar(phase: string): string {
   return 'TURKEYCODE_MODEL_' + phase.toUpperCase().replace(/-/g, '_');
 }
 
-/** Each distinct model this run will use, with the phases that use it. */
-export function preflightModels(): Map<string, string[]> {
+/** Each distinct model this run can still use, with the phases that use it. */
+export function preflightModels(skipPhases: ReadonlySet<string> = new Set()): Map<string, string[]> {
   const byModel = new Map<string, string[]>();
   for (const phase of Object.keys(PHASE_MODELS)) {
+    if (skipPhases.has(phase)) continue;
     const model = getModelForPhase(phase);
     if (model) byModel.set(model, [...(byModel.get(model) ?? []), phase]);
   }

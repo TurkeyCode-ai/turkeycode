@@ -24,7 +24,7 @@ export interface OneTurnOptions {
    * artifact with an honest note beats silence.
    */
   completionGate?: boolean;
-  /** Where a completionGate session records unfinished work instead. */
+  /** Where a completionGate session records unfinished work. Pass it only where a retry follows. */
   partialNotes?: string;
   /** Where the explanation goes when it isn't the artifact itself (e.g. the `notes` field). */
   explainIn?: string;
@@ -39,9 +39,12 @@ export function oneTurnRule(artifact: string, options: OneTurnOptions = {}): str
 
   const deliverRule = completionGate
     ? `- **Write ${artifact} only when the work is actually finished.** It is the
-  gate: writing it says this is complete, and nothing re-checks that claim. If
-  you cannot finish, commit what works${partialNotes ? `, record what is left in ${partialNotes},` : ''}
+  gate: writing it says this is complete, and nothing re-checks that claim.
+  ${partialNotes
+    ? `If you cannot finish, commit what works, record what is left in ${partialNotes},
   and stop WITHOUT writing ${artifact}, so the orchestrator retries.`
+    : `If you cannot finish, stop WITHOUT writing ${artifact} and say why. The run
+  stops there so a human can look. That is better than passing on bad work.`}`
     : `- **Write ${artifact} before you stop — ALWAYS.** Even if something failed,
   hung, or you ran out of room. A missing artifact is not read as "still
   working"; it is read as a failure, and it costs a full rebuild cycle to

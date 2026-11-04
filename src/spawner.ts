@@ -374,6 +374,10 @@ export class Spawner {
         // Reap any dev server / Chrome the session backgrounded and left running —
         // this is what otherwise accumulates across phases until the jail OOMs.
         reapGroup();
+        // A session we killed on the way out is not a finished session. Resolving
+        // would let the caller commit its half-edited tree or fail a gate and
+        // exit with the wrong code, so leave it pending; the reaper exits next.
+        if (shuttingDown) return;
         const durationMs = Date.now() - startTime;
 
         // Exit code: 0 if done file was detected (task succeeded), 124 for timeout, otherwise actual code
@@ -409,6 +413,10 @@ export class Spawner {
         clearInterval(watchdog);
         if (doneFileInterval) clearInterval(doneFileInterval);
         reapGroup();
+        // A session we killed on the way out is not a finished session. Resolving
+        // would let the caller commit its half-edited tree or fail a gate and
+        // exit with the wrong code, so leave it pending; the reaper exits next.
+        if (shuttingDown) return;
         const durationMs = Date.now() - startTime;
 
         this.log(`[${sessionName}] Spawn error: ${err.message}`);

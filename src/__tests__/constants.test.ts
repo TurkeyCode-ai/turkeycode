@@ -119,6 +119,13 @@ describe('preflight model coverage', () => {
     expect([...preflightModels().keys()]).to.deep.equal(['sonnet']);
   });
 
+  it('ignores models only unreachable phases use', () => {
+    delete process.env.TURKEYCODE_MODEL;
+    delete process.env.TURKEYCODE_MODEL_BUILD;
+    expect(preflightModels().has('opus')).to.equal(true);
+    expect(preflightModels(new Set(['scope', 'plan'])).has('opus')).to.equal(false);
+  });
+
   it('only suggests resume when there is something to resume', () => {
     expect(preflightRerunCommand(true)).to.equal('turkeycode resume');
     expect(preflightRerunCommand(false)).to.contain('turkeycode run');

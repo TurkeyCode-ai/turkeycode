@@ -296,7 +296,7 @@ export function findGodotProjectDir(cwd: string): string | null {
  * project exists.
  */
 export const GODOT_DIR_SHELL =
-  `GODOT_DIR=$(dirname "$(ls project.godot ${GODOT_SUBDIRS.map(s => `${s}/project.godot`).join(' ')} 2>/dev/null | head -1)")`;
+  `GODOT_DIR=.; for d in . ${GODOT_SUBDIRS.join(' ')}; do if [ -f "$d/project.godot" ]; then GODOT_DIR="$d"; break; fi; done`;
 
 function isEmbeddedProject(cwd: string): boolean {
   // PlatformIO project
