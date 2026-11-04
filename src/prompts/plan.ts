@@ -136,21 +136,22 @@ Create this file with the following EXACT structure:
 ## SPRINT SIZING GUIDELINES
 
 ### The golden rule: ONE CONCERN PER SPRINT
-Each sprint must be small enough that a QA agent can verify it by reading the git diff and running targeted tests. If you can't describe the sprint's acceptance criteria in 3-5 bullet points, it's too big — split it.
+Size each sprint to the session, not to the feature list. A sprint should be substantial enough to fill most of a 60-90 minute build session, and small enough that QA can verify it. Every extra sprint costs a cold start, a QA pass and a code review, and loses the context the last session built up.
 
 ### Each sprint (phase) should be:
-- **Focused** — one logical concern (one entity, one feature, one migration, one UI page). NOT "backend + frontend + tests" bundled together.
+- **Coherent** — related work that is built and verified together, even when it spans several features or layers.
 - **Independently verifiable** — after QA passes, you can prove THIS sprint's deliverables work without testing the entire app end-to-end.
 - **Buildable in one session** — one Claude session builds everything for this sprint.
 - **Non-breaking** — the app still compiles and starts after this sprint. It doesn't have to be feature-complete yet, but it must not crash.
 
 ### How many sprints?
-Create as many sprints as the work requires. There is NO upper limit. Guidelines:
-- **1 sprint per distinct feature, entity, or integration point** in the spec.
-- A spec with 5 features = at least 5 sprints. A spec with 14 tickets = 14 sprints.
+Create as few sprints as the work allows, and as many as it truly needs. There is NO upper limit. Guidelines:
+- **Group related features into one sprint.** A numbered feature list is not a sprint list: 10 features that make up one small game or app can be 1-3 sprints.
+- Split only when the work won't fit one session, when it can't be verified together, or when it depends on something that has to land first.
+- A spec with 14 independent tickets = 14 sprints (ticket mode above).
 - Backend-only work (models, services, controllers) and frontend-only work (components, routes, stores) for the same feature should be ONE sprint — not split across layers.
 - Cross-cutting changes (ripping out a dependency, adding a new framework) should be their own sprint(s), done BEFORE the features that depend on them.
-- **Never bundle unrelated features into one sprint** to "save time." Small sprints pass QA on the first try; mega-sprints fail repeatedly and waste more time overall.
+- **Never bundle unrelated features into one sprint** to "save time." Keep each sprint verifiable: mega-sprints fail QA repeatedly and waste more time overall.
 
 ## CRITICAL REQUIREMENTS
 
