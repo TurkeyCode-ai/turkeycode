@@ -19,10 +19,12 @@ export interface TicketBuildPromptInput {
   triageSummary?: string;
   /** File the session must touch when the build is done. */
   doneFile: string;
+  /** Deep tier: plan written by a prior plan session. */
+  planPath?: string;
 }
 
 export function buildTicketBuildPrompt(input: TicketBuildPromptInput): string {
-  const { ticket, manifest, branchName, imagePaths, triageSummary, doneFile } = input;
+  const { ticket, manifest, branchName, imagePaths, triageSummary, doneFile, planPath } = input;
 
   const imageBlock = imagePaths.length > 0
     ? `\n## IMAGE ATTACHMENTS\nRead these with the Read tool when they're relevant to what you're building:\n${imagePaths.map((p) => `- ${p}`).join('\n')}\n`
@@ -68,7 +70,7 @@ ${repoLines}
 
 All repos are on branch \`${branchName}\` (cut off their configured base branch). You may \`cd\` between them with the Bash tool as needed. Use aimem (MCP) for cross-repo understanding before making changes.
 ${referenceBlock}
-
+${planPath ? `\n## PLAN\nA plan session already researched this ticket. Read \`${planPath}\` first and follow it; where you find it wrong, do the right thing and say so under Follow-ups in the done file.\n` : ''}
 ## PROCESS
 1. **Understand** the ticket: re-read description and comments. Consult aimem for repo context, conventions, and related prior work.
 2. **Plan** which repos must change and roughly what in each. Keep the plan in your head — don't write a separate plan file.

@@ -34,6 +34,9 @@ import { buildTicketTriagePrompt } from './prompts/ticket-triage';
 import { buildTicketResearchPrompt } from './prompts/ticket-research';
 import { buildTicketBuildPrompt } from './prompts/ticket-build';
 import { buildMergeFixPrompt } from './prompts/merge-fix';
+import { buildTicketPlanPrompt } from './prompts/ticket-plan';
+import { buildTicketReviewPrompt } from './prompts/ticket-review';
+import { buildTicketFixPrompt } from './prompts/ticket-fix';
 import { getModelForPhase, PHASE_BUILD_TIMEOUT_MS, FIX_TIMEOUT_MS } from './constants';
 import { audit } from './audit';
 
@@ -41,6 +44,9 @@ const TICKETS_ROOT = join(homedir(), '.turkeycode', 'tickets');
 
 const TRIAGE_TIMEOUT_MS = 5 * 60 * 1000;
 const TICKET_RESEARCH_TIMEOUT_MS = 20 * 60 * 1000;
+const TICKET_PLAN_TIMEOUT_MS = 30 * 60 * 1000;
+const TICKET_REVIEW_TIMEOUT_MS = 30 * 60 * 1000;
+const DEFAULT_REVIEW_ROUNDS = 2;
 
 export interface TicketRunOptions {
   verbose?: boolean;
@@ -52,6 +58,24 @@ export interface TicketRunOptions {
   allowDirty?: boolean;
   /** Stop after triage. No branches cut, no build session, no Jira comment/worklog. */
   triageOnly?: boolean;
+  /** Model for the build session (default: the 'build' phase model). */
+  buildModel?: string;
+  /**
+   * Deep tier: plan session before the build, then review → fix rounds before
+   * anything is pushed. For bigger tickets where one build session isn't enough.
+   */
+  deep?: boolean;
+  /** Deep tier: max review → fix rounds (default 2). */
+  reviewRounds?: number;
+}
+
+export interface ReviewFinding {
+  severity: string;
+  repo?: string;
+  file?: string;
+  line?: number;
+  summary: string;
+  fix?: string;
 }
 
 export interface TriageVerdict {
@@ -66,7 +90,10 @@ export interface TriageVerdict {
 interface PhaseTimings {
   triage?: number;
   research?: number;
+  plan?: number;
   build?: number;
+  review?: number;
+  fix?: number;
   merge_fix?: number;
   rebase_push?: number;
 }
@@ -80,6 +107,9 @@ export class TicketOrchestrator {
   private mcpConfig: string | undefined;
   private verbose: boolean;
   private triageOnly: boolean;
+  private buildModel: string | undefined;
+  private deep: boolean;
+  private reviewRounds: number;
 
   constructor(options: TicketRunOptions = {}) {
     if (!isJiraConfigured()) {
@@ -87,6 +117,9 @@ export class TicketOrchestrator {
     }
     this.verbose = options.verbose ?? false;
     this.triageOnly = options.triageOnly ?? false;
+    this.buildModel = options.buildModel;
+    this.deep = options.deep ?? false;
+    this.reviewRounds = options.reviewRounds ?? DEFAULT_REVIEW_ROUNDS;
     this.jira = createJiraClient();
     this.spawner = createSpawner({ verbose: this.verbose });
     this.manifest = loadRepoManifest(options.manifestPath ?? DEFAULT_MANIFEST_PATH);
@@ -178,12 +211,20 @@ export class TicketOrchestrator {
       console.log(`[ticket] (triage-only) Skipping Jira worklog. Wall clock: ${formatJiraDuration(totalMs)}`);
       return;
     }
+    // Time tracked elsewhere (e.g. a billing timer that posts its own worklogs): report it, don't log it twice
+    if (process.env.TURKEYCODE_NO_WORKLOG === '1') {
+      console.log(`[ticket] TURKEYCODE_NO_WORKLOG=1: skipping Jira worklog. Wall clock: ${formatJiraDuration(totalMs)} (${totalMs} ms)`);
+      return;
+    }
     const totalStr = formatJiraDuration(totalMs);
     const breakdown: string[] = [`turkeycode automated run — ${totalStr} total`];
     const labels: Array<[keyof PhaseTimings, string]> = [
       ['triage', 'Triage'],
       ['research', 'Research'],
+      ['plan', 'Plan'],
       ['build', 'Build'],
+      ['review', 'Review'],
+      ['fix', 'Review fixes'],
       ['merge_fix', 'Merge fix'],
       ['rebase_push', 'Rebase + push'],
     ];
@@ -386,6 +427,14 @@ export class TicketOrchestrator {
       cutTicketBranch(repo, branchName);
     }
 
+    // 3a. Deep tier: plan session (research only) the build follows
+    let planPath: string | undefined;
+    if (this.deep) {
+      const planStart = Date.now();
+      planPath = await this.runPlan(ticket, imagePaths, ticketDir, verdict, scopedManifest);
+      timings.plan = Date.now() - planStart;
+    }
+
     // 3. Run the build session (one session, sees all scoped repos)
     const buildDoneFile = join(ticketDir, 'build.done');
     if (existsSync(buildDoneFile)) unlinkSafe(buildDoneFile);
@@ -397,9 +446,11 @@ export class TicketOrchestrator {
       imagePaths,
       triageSummary: verdict.summary,
       doneFile: buildDoneFile,
+      planPath,
     });
 
-    console.log(`[ticket] Running build session...`);
+    const buildModel = this.buildModel ?? getModelForPhase('build') ?? 'sonnet';
+    console.log(`[ticket] Running build session (${buildModel})...`);
     const buildCwd = scopedManifest.repos[0].path;
     const buildStart = Date.now();
     const buildResult = await this.spawner.run({
@@ -408,7 +459,7 @@ export class TicketOrchestrator {
       timeoutMs: PHASE_BUILD_TIMEOUT_MS,
       sessionName: `build-${ticket.key}`,
       doneFile: buildDoneFile,
-      model: getModelForPhase('build') ?? 'sonnet',
+      model: buildModel,
       mcpConfig: this.mcpConfig,
     });
     timings.build = Date.now() - buildStart;
@@ -435,6 +486,18 @@ export class TicketOrchestrator {
       return;
     }
     console.log(`[ticket] Touched repos: ${touched.map((r) => r.path).join(', ')}`);
+
+    // 4b. Deep tier: review → fix rounds before anything leaves the machine
+    let openFindings: ReviewFinding[] = [];
+    if (this.deep) {
+      openFindings = await this.runReviewRounds(ticket, ticketDir, scopedManifest, touched, baseShas, branchName, planPath, timings);
+      // A fix session may have committed in a scoped repo the build left alone
+      for (const repo of scopedManifest.repos) {
+        if (!touched.includes(repo) && repoHasCommits(repo, branchName, baseShas.get(repo.path)!)) {
+          touched.push(repo);
+        }
+      }
+    }
 
     // 5. Rebase + push each touched repo, invoking merge-fix on conflict
     const pushed: { repo: RepoEntry; remoteUrl?: string }[] = [];
@@ -487,11 +550,22 @@ export class TicketOrchestrator {
     timings.rebase_push = Math.max(0, rebasePushMs - mergeFixMs);
 
     // 6. Post outcome to Jira
-    const commentLines: string[] = [`turkeycode built ${ticket.key} on branch \`${branchName}\`.`, ''];
+    const tier = this.deep ? `deep tier: plan → build (${buildModel}) → review/fix` : `build (${buildModel})`;
+    const commentLines: string[] = [`turkeycode built ${ticket.key} on branch \`${branchName}\` (${tier}).`, ''];
     if (pushed.length > 0) {
       commentLines.push('Pushed branches:');
       for (const p of pushed) {
         commentLines.push(`- ${p.repo.path}${p.remoteUrl ? ` — ${p.remoteUrl}` : ''}`);
+      }
+    }
+    if (this.deep) {
+      if (openFindings.length === 0) {
+        commentLines.push('', 'Automated review: clean.');
+      } else {
+        commentLines.push('', `Automated review: ${openFindings.length} finding(s) still open after ${this.reviewRounds} round(s):`);
+        for (const f of openFindings) {
+          commentLines.push(`- [${f.severity}] ${f.file ? `${f.file}${f.line ? `:${f.line}` : ''} — ` : ''}${f.summary}`);
+        }
       }
     }
     if (failed.length > 0) {
@@ -511,6 +585,115 @@ export class TicketOrchestrator {
     // 7. Transition the ticket to the manifest-configured target status.
     //    transitionTicket logs and moves on if the status name doesn't match the project's workflow.
     await this.jira.transitionTicket(ticket.key, manifest.transitionAfterPush);
+  }
+
+  private async runPlan(
+    ticket: TicketDetail,
+    imagePaths: string[],
+    ticketDir: string,
+    verdict: TriageVerdict,
+    manifest: RepoManifest,
+  ): Promise<string> {
+    const planPath = join(ticketDir, 'plan.md');
+    const doneFile = join(ticketDir, 'plan.done');
+    if (existsSync(doneFile)) unlinkSafe(doneFile);
+    console.log(`[ticket] Running plan session...`);
+    const result = await this.spawner.run({
+      cwd: manifest.repos[0].path,
+      prompt: buildTicketPlanPrompt({
+        ticket,
+        manifest,
+        imagePaths,
+        triageSummary: verdict.summary,
+        planPath,
+        doneFile,
+      }),
+      timeoutMs: TICKET_PLAN_TIMEOUT_MS,
+      sessionName: `plan-${ticket.key}`,
+      doneFile,
+      model: getModelForPhase('plan') ?? 'opus',
+      mcpConfig: this.mcpConfig,
+    });
+    if (result.exitCode !== 0 || !existsSync(planPath)) {
+      throw new Error(`Plan session failed for ${ticket.key} (exit ${result.exitCode})`);
+    }
+    return planPath;
+  }
+
+  /**
+   * Review the ticket branches and fix what the reviewer finds, up to
+   * reviewRounds times. Returns the findings still open after the last round.
+   */
+  private async runReviewRounds(
+    ticket: TicketDetail,
+    ticketDir: string,
+    manifest: RepoManifest,
+    touched: RepoEntry[],
+    baseShas: Map<string, string>,
+    branchName: string,
+    planPath: string | undefined,
+    timings: PhaseTimings,
+  ): Promise<ReviewFinding[]> {
+    let findings: ReviewFinding[] = [];
+    let priorFindingsPath: string | undefined;
+    timings.review = 0;
+    timings.fix = 0;
+
+    for (let round = 1; round <= this.reviewRounds; round++) {
+      const findingsPath = join(ticketDir, `review-${round}.json`);
+      const reviewDone = join(ticketDir, `review-${round}.done`);
+      if (existsSync(reviewDone)) unlinkSafe(reviewDone);
+
+      console.log(`[ticket] Review round ${round}/${this.reviewRounds}...`);
+      const reviewStart = Date.now();
+      const review = await this.spawner.run({
+        cwd: touched[0].path,
+        prompt: buildTicketReviewPrompt({
+          ticket,
+          manifest,
+          repos: touched.map((r) => ({ path: r.path, baseSha: baseShas.get(r.path)! })),
+          branchName,
+          planPath,
+          priorFindingsPath,
+          findingsPath,
+          doneFile: reviewDone,
+        }),
+        timeoutMs: TICKET_REVIEW_TIMEOUT_MS,
+        sessionName: `review-${round}-${ticket.key}`,
+        doneFile: reviewDone,
+        model: getModelForPhase('ticket-review') ?? 'opus',
+        mcpConfig: this.mcpConfig,
+      });
+      timings.review += Date.now() - reviewStart;
+      if (review.exitCode !== 0 || !existsSync(findingsPath)) {
+        throw new Error(`Review session failed for ${ticket.key} (round ${round}, exit ${review.exitCode})`);
+      }
+
+      findings = parseReviewFindings(readFileSync(findingsPath, 'utf-8'));
+      console.log(`[ticket] Review round ${round}: ${findings.length} finding(s)`);
+      if (findings.length === 0) return [];
+      if (round === this.reviewRounds) break;
+
+      const fixDone = join(ticketDir, `fix-${round}.done`);
+      if (existsSync(fixDone)) unlinkSafe(fixDone);
+      console.log(`[ticket] Fixing round ${round} findings...`);
+      const fixStart = Date.now();
+      const fix = await this.spawner.run({
+        cwd: touched[0].path,
+        prompt: buildTicketFixPrompt({ ticket, manifest, branchName, findingsPath, planPath, doneFile: fixDone }),
+        timeoutMs: FIX_TIMEOUT_MS,
+        sessionName: `fix-${round}-${ticket.key}`,
+        doneFile: fixDone,
+        model: getModelForPhase('qa-fix') ?? 'opus',
+        mcpConfig: this.mcpConfig,
+      });
+      timings.fix += Date.now() - fixStart;
+      if (fix.exitCode !== 0) {
+        throw new Error(`Fix session failed for ${ticket.key} (round ${round}, exit ${fix.exitCode})`);
+      }
+      priorFindingsPath = findingsPath;
+    }
+    return findings;
   }
 
   private async runMergeFix(
@@ -598,6 +781,24 @@ export function scopeManifestToTriage(
   const wanted = new Set(triageRepos);
   const scoped = manifest.repos.filter((r) => wanted.has(r.path));
   return { ...manifest, repos: scoped };
+}
+
+/** Parse a review session's findings file. Throws on anything but `{ findings: [...] }`. */
+export function parseReviewFindings(raw: string): ReviewFinding[] {
+  const parsed = JSON.parse(raw) as { findings?: unknown };
+  if (!Array.isArray(parsed.findings)) {
+    throw new Error('Review findings file has no findings array');
+  }
+  return parsed.findings
+    .filter((f): f is Record<string, unknown> => typeof f === 'object' && f !== null)
+    .map((f) => ({
+      severity: typeof f.severity === 'string' ? f.severity : 'should-fix',
+      repo: typeof f.repo === 'string' ? f.repo : undefined,
+      file: typeof f.file === 'string' ? f.file : undefined,
+      line: typeof f.line === 'number' ? f.line : undefined,
+      summary: typeof f.summary === 'string' ? f.summary : JSON.stringify(f),
+      fix: typeof f.fix === 'string' ? f.fix : undefined,
+    }));
 }
 
 function sanitizeFilename(name: string): string {

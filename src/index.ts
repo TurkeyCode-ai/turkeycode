@@ -905,7 +905,15 @@ program
   .option('--manifest <path>', 'Override the repos.yaml manifest path')
   .option('--mcp-config <path>', 'Override the MCP config path (else uses TURKEYCODE_MCP_CONFIG)')
   .option('--triage-only', 'Stop after triage. No branches cut, no build session, no Jira comment/worklog.')
+  .option('--build-model <model>', 'Model for the build session (e.g. opus)')
+  .option('--deep', 'Deep tier: plan session before the build, then review → fix rounds before pushing')
+  .option('--review-rounds <n>', 'Deep tier: max review → fix rounds (default 2)')
   .action(async (key: string, options) => {
+    const reviewRounds = options.reviewRounds != null ? Number(options.reviewRounds) : undefined;
+    if (reviewRounds != null && (!Number.isInteger(reviewRounds) || reviewRounds < 1)) {
+      console.error(`❌ --review-rounds must be a positive integer (got "${options.reviewRounds}").`);
+      process.exit(1);
+    }
     const { createTicketOrchestrator } = await import('./ticket-orchestrator');
     try {
       const orch = createTicketOrchestrator({
@@ -913,6 +921,9 @@ program
         manifestPath: options.manifest,
         mcpConfig: options.mcpConfig,
         triageOnly: options.triageOnly,
+        buildModel: options.buildModel,
+        deep: options.deep,
+        reviewRounds,
       });
       await orch.runTicket(key);
       console.log('');

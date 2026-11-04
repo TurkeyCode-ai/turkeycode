@@ -19,3 +19,6 @@ export { buildTicketTriagePrompt } from './ticket-triage';
 export { buildTicketResearchPrompt } from './ticket-research';
 export { buildTicketBuildPrompt } from './ticket-build';
 export { buildMergeFixPrompt } from './merge-fix';
+export { buildTicketPlanPrompt } from './ticket-plan';
+export { buildTicketReviewPrompt } from './ticket-review';
+export { buildTicketFixPrompt } from './ticket-fix';
