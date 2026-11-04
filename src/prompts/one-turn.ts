@@ -15,11 +15,44 @@
  * lives here and every such prompt includes it.
  */
 
+export interface OneTurnOptions {
+  /**
+   * The artifact IS the completion gate: writing it tells the orchestrator the
+   * work is finished, and the gate only checks that it exists. These sessions
+   * must NOT write it on failure, or a half-finished build passes the gate and
+   * skips its retry. Reports and verdicts leave this off: there a partial
+   * artifact with an honest note beats silence.
+   */
+  completionGate?: boolean;
+  /** Where a completionGate session records unfinished work instead. */
+  partialNotes?: string;
+  /** Where the explanation goes when it isn't the artifact itself (e.g. the `notes` field). */
+  explainIn?: string;
+}
+
 /**
  * @param artifact what this session must write before it stops
  *   (e.g. "the verdict file", ".turkey/phases/phase-4/build.done")
  */
-export function oneTurnRule(artifact: string): string {
+export function oneTurnRule(artifact: string, options: OneTurnOptions = {}): string {
+  const { completionGate = false, partialNotes, explainIn = 'it' } = options;
+
+  const deliverRule = completionGate
+    ? `- **Write ${artifact} only when the work is actually finished.** It is the
+  gate: writing it says this is complete, and nothing re-checks that claim. If
+  you cannot finish, commit what works${partialNotes ? `, record what is left in ${partialNotes},` : ''}
+  and stop WITHOUT writing ${artifact}, so the orchestrator retries.`
+    : `- **Write ${artifact} before you stop — ALWAYS.** Even if something failed,
+  hung, or you ran out of room. A missing artifact is not read as "still
+  working"; it is read as a failure, and it costs a full rebuild cycle to
+  discover. Partial results with an honest note beat silence every time.`;
+
+  const closing = completionGate
+    ? `If you catch yourself about to explain what you are waiting for: stop. Finish
+something smaller, or leave ${artifact} unwritten${partialNotes ? ` and say why in ${partialNotes}` : ' and say why'}.`
+    : `If you catch yourself about to explain what you are waiting for: stop, write
+${artifact} with what you already have, and put the explanation in ${explainIn}.`;
+
   return `
 ## YOU GET ONE TURN — READ THIS BEFORE STARTING ANYTHING
 
@@ -29,22 +62,21 @@ ends every process you started is killed.
 
 So:
 
-- **Never start something in the background and wait for it.** No \`cmd &\`,
-  no \`nohup\`, no "waiting for X to finish; will continue once it completes".
-  That sentence ends the session having produced nothing, and the phase then
-  fails on a gate that cannot tell the difference between "still thinking"
-  and "gave up".
-- **Run long work in the foreground, bounded.** \`timeout 120 <command>\`, or
-  shrink the job until it fits. If a thorough check wants 10,000 iterations,
+- **Never wait on a background job to finish.** No \`nohup\`, no "waiting for X
+  to finish; will continue once it completes". That sentence ends the session
+  having produced nothing, and the phase then fails on a gate that cannot tell
+  the difference between "still thinking" and "gave up".
+- **The one exception is a long-lived service this task needs** (a dev server,
+  a database). Start it with \`&\` as your instructions say, then poll it inside
+  this same turn (\`sleep\`, \`curl\`). Never run a server under \`timeout\` in the
+  foreground: that blocks, then kills it.
+- **Run every other long job in the foreground, bounded.** \`timeout 120 <command>\`,
+  or shrink the job until it fits. If a thorough check wants 10,000 iterations,
   run 200 and say so.
 - **Never defer work to "after" something finishes.** If it cannot complete
   inside this turn, make it smaller.
-- **Write ${artifact} before you stop — ALWAYS.** Even if something failed,
-  hung, or you ran out of room. A missing artifact is not read as "still
-  working"; it is read as a failure, and it costs a full rebuild cycle to
-  discover. Partial results with an honest note beat silence every time.
+${deliverRule}
 
-If you catch yourself about to explain what you are waiting for: stop, write
-${artifact} with what you already have, and put the explanation in it.
+${closing}
 `.trim();
 }

@@ -18,6 +18,7 @@
  * Keep skills/turkeycode-scope/SKILL.md in sync with SCOPE_METHOD / EMIT_CONTRACT below.
  */
 
+import { oneTurnRule } from './one-turn';
 import {
   SPECS_FILE,
   SCOPE_WORKING_FILE,
@@ -316,6 +317,8 @@ ${WORKING_MODEL_TEMPLATE}
 
 ## EMITTING THE SPEC
 ${EMIT_CONTRACT}
+
+${oneTurnRule(SCOPE_WORKING_FILE)}
 
 ## THIS TURN, CONCRETELY
 1. ALWAYS overwrite ${SCOPE_WORKING_FILE} with the updated working model (shape above).

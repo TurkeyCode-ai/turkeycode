@@ -5,6 +5,7 @@
  *  - 'rebase' (default): invoked after `git rebase origin/<base>` fails (ticket flow).
  *  - 'merge': invoked after a local `git merge <branch>` fails (phase-build flow).
  */
+import { oneTurnRule } from './one-turn';
 
 export interface MergeFixPromptInput {
   /** Absolute path of the repo where the integration is in progress. */
@@ -112,6 +113,8 @@ Resolved: <comma-separated list of file paths>
 \`\`\`
 
 On abort, create ${doneFile} with \`ABORTED: <reason>\`.
+
+${oneTurnRule(doneFile, { explainIn: 'an \`ABORTED: <reason>\` line' })}
 
 Then STOP.
 `.trim();

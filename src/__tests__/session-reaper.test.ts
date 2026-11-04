@@ -17,7 +17,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { spawn, ChildProcess } from 'child_process';
 
-import { _reaperInternals } from '../spawner';
+import { _reaperInternals, trackProcessGroup, untrackProcessGroup } from '../spawner';
 
 const { liveGroups, reapAllGroups } = _reaperInternals;
 
@@ -114,5 +114,23 @@ describe('session reaper', () => {
   it('does nothing when nothing is registered', () => {
     expect(liveGroups.size).to.equal(0);
     expect(() => reapAllGroups('SIGKILL')).to.not.throw();
+  });
+});
+
+describe('signal exit codes', () => {
+  it('reports which signal stopped the run', () => {
+    const { exitCodeForSignal } = _reaperInternals;
+    expect(exitCodeForSignal('SIGHUP')).toBe(129);
+    expect(exitCodeForSignal('SIGINT')).toBe(130);
+    expect(exitCodeForSignal('SIGTERM')).toBe(143);
+  });
+});
+
+describe('trackProcessGroup', () => {
+  it('registers a group for the reaper and releases it', () => {
+    trackProcessGroup(424242);
+    expect(liveGroups.has(424242)).toBe(true);
+    untrackProcessGroup(424242);
+    expect(liveGroups.has(424242)).toBe(false);
   });
 });

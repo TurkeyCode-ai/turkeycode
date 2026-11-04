@@ -24,7 +24,8 @@ export type ProjectType =
 /** Project types that have a visual UI component */
 // A game is judged on how it LOOKS more than anything else here, so it gets
 // the blind visual pass — a fresh agent reading captured frames who never saw
-// the code. Godot renders headlessly, so those frames are gettable in CI.
+// the code. Frames need a real renderer (--headless crashes on --write-movie),
+// so capture runs windowed, under xvfb where there is no display.
 export const VISUAL_PROJECT_TYPES: ProjectType[] = ['web-fullstack', 'web-frontend', 'desktop', 'mobile', 'game-godot'];
 
 /** Project types that should skip visual QA entirely */

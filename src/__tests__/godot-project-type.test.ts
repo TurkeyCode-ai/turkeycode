@@ -7,6 +7,10 @@
  * producing confident nonsense. Detection order is the whole fix.
  */
 import { describe, it, expect, afterEach } from 'vitest';
+import { buildQaVisualPrompt } from '../prompts/qa-visual';
+import { buildBuildPhasePrompt } from '../prompts/build';
+import { PROJECT_TYPES } from '../detect-project-type';
+import { godotOutputErrors } from '../quick-check';
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -81,15 +85,15 @@ describe('Godot QA instructions', () => {
     expect(p, 'functional').to.contain('judged on whether it can be PLAYED');
   });
 
-  it('captures frames WINDOWED — headless cannot render', () => {
-    // Measured on macOS + Godot 4.7: `--headless --write-movie` crashes and
-    // leaves a 332-byte stub that reads as success; windowed writes 592KB.
-    // Telling the agent to capture headlessly means visual QA passes on an
-    // empty file forever, which is worse than not looking.
-    const p = render('game-godot');
-    expect(p).to.not.contain('--headless --write-movie');
-    expect(p).to.contain('--write-movie');
-    expect(p).to.contain('WINDOWED');
+  it('leaves frame capture to the visual session', () => {
+    expect(render('game-godot')).to.not.contain('--write-movie');
+  });
+
+  it('passes --path to every Godot command', () => {
+    // From the repo root without --path, Godot prints an error and exits 0.
+    const lines = render('game-godot').split('\n').filter(l => l.includes('godot --'));
+    expect(lines.length).to.be.greaterThan(3);
+    for (const line of lines) expect(line, line).to.contain('--path');
   });
 
   it('still runs script and import checks headless', () => {
@@ -132,5 +136,82 @@ describe('Godot gets the visual pass', () => {
     expect(shouldSkipVisualQA('cli')).to.equal(true);
     expect(shouldSkipVisualQA('library')).to.equal(true);
     expect(shouldSkipVisualQA('embedded')).to.equal(true);
+  });
+});
+
+describe('Godot visual QA', () => {
+  const render = (type: string) => buildQaVisualPrompt(
+    {
+      projectType: type,
+      buildPhases: [{ number: 1, name: 'Combat', deliverables: ['a'], acceptanceCriteria: ['b'] }],
+    } as any,
+    1, 1
+  ) as string;
+
+  it('captures windowed PNG frames the reviewer can read', () => {
+    const p = render('game-godot');
+    expect(p).to.contain('--write-movie "$FRAMES/frame.png"');
+    expect(p).to.not.contain('--headless --write-movie');
+    expect(p).to.contain('xvfb-run');
+  });
+
+  it('never points a browser at a game', () => {
+    const p = render('game-godot');
+    expect(p).to.not.contain('localhost:5123');
+    expect(p).to.not.contain('capture-screenshots.ts');
+    expect(p).to.not.contain('Capture FULL PAGE');
+  });
+
+  it('leaves the web flow alone', () => {
+    const p = render('web-fullstack');
+    expect(p).to.contain('capture-screenshots.ts');
+    expect(p).to.contain('Capture FULL PAGE');
+    expect(p).to.not.contain('--write-movie');
+  });
+});
+
+describe('Godot build rules', () => {
+  it('gets Godot rules, not the web fallback', () => {
+    const p = buildBuildPhasePrompt(
+      { projectType: 'game-godot', tech: {}, entities: [], endpoints: [], uiPages: [], knownIssues: [], buildPhases: [], completedPhases: [] } as any,
+      { number: 1, name: 'Core', scope: 's', deliverables: ['a'], acceptanceCriteria: ['b'], prerequisites: [] } as any
+    );
+    expect(p).to.contain('GODOT RULES');
+    expect(p).to.not.contain('Logo & favicon');
+  });
+});
+
+describe('Godot description inference', () => {
+  it('leaves work that is only about Godot to the other types', () => {
+    expect(inferProjectTypeFromDescription('CLI for exporting Godot scenes')).to.equal('cli');
+    expect(inferProjectTypeFromDescription('a Godot docs site')).to.equal(null);
+  });
+
+  it('keeps real games, including ones that mention tooling', () => {
+    expect(inferProjectTypeFromDescription('a Godot platformer')).to.equal('game-godot');
+    expect(inferProjectTypeFromDescription('a Godot game with a CLI level exporter')).to.equal('game-godot');
+  });
+});
+
+describe('--type accepts every project type', () => {
+  it('includes game-godot', () => {
+    expect(PROJECT_TYPES).to.include('game-godot');
+  });
+});
+
+describe('Godot output parsing', () => {
+  it('finds the errors Godot exits 0 on', () => {
+    // Captured from Godot 4.7.1 on a script with a syntax error.
+    const output = [
+      'Godot Engine v4.7.1.stable.official',
+      'SCRIPT ERROR: Parse Error: Expected parameter name.',
+      '          at: GDScript::reload (res://main.gd:2)',
+      'ERROR: Failed to load script "res://main.gd" with error "Parse error".',
+    ].join('\n');
+    expect(godotOutputErrors(output)).to.have.length(2);
+  });
+
+  it('passes a clean run', () => {
+    expect(godotOutputErrors('Godot Engine v4.7.1\n\nhello\n')).to.deep.equal([]);
   });
 });

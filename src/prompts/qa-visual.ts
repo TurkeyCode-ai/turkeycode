@@ -4,9 +4,67 @@
  * The fresh agent has NEVER seen the code - catches what familiar eyes miss
  */
 
+import { GODOT_DIR_SHELL } from '../detect-project-type';
+import { oneTurnRule } from './one-turn';
 import { ProjectState } from '../types';
 import { QA_DIR, SCREENSHOTS_DIR, REFERENCE_DIR } from '../constants';
 import { existsSync, readdirSync, readFileSync } from 'fs';
+
+/**
+ * A game has no URL, so the web capture flow would point Playwright at a port
+ * nothing listens on and review an error page. Frames come from the engine.
+ * Measured on Godot 4.7: `--write-movie <name>.png` writes a PNG per frame when
+ * windowed, and crashes under --headless.
+ */
+function godotCapture(screenshotsDir: string): string {
+  return `## YOUR SINGLE JOB
+1. Render real frames from the game
+2. Then spawn a FRESH AGENT to review them blind (no code access)
+
+---
+
+## PHASE 1: CAPTURE FRAMES
+
+Do NOT use Playwright or open a URL. Nothing is listening on a port. This must
+run WINDOWED: --headless has no renderer and crashes on --write-movie.
+
+\`\`\`bash
+${GODOT_DIR_SHELL}
+FRAMES="$PWD/${screenshotsDir}"
+mkdir -p "$FRAMES"
+
+# Linux CI has no display, so give Godot one. Desktops need nothing.
+GODOT_RUN=""
+if [ "$(uname)" = "Linux" ] && [ -z "$DISPLAY" ]; then GODOT_RUN="xvfb-run -a"; fi
+
+timeout 180 $GODOT_RUN godot --path "$GODOT_DIR" --write-movie "$FRAMES/frame.png" --fixed-fps 10 --quit-after 300 2>&1 | tail -20 || true
+
+# 30 seconds at 10fps is 300 frames. Keep one every 3 seconds for the reviewer.
+rm -f "$FRAMES/frame.wav"
+ls "$FRAMES"/frame*.png | awk 'NR % 30 != 1' | xargs rm -f
+ls -la "$FRAMES"
+\`\`\`
+
+That records the main scene. If a deliverable lives on another scene, record it
+too by passing the scene and a different name, for example
+\`godot --path "$GODOT_DIR" res://levels/boss.tscn --write-movie "$FRAMES/boss.png" ...\`,
+then thin those frames the same way.
+
+If no PNG frames exist, that is a BLOCKER: report that the game produced no
+frames, and include the command output.
+
+`;
+}
+
+const GODOT_REVIEW_CATEGORIES = `These are frames from a running game, a few seconds apart. Review EVERY frame for:
+- **BLOCKERS**: Blank, black or solid-color frames where gameplay should be, missing sprites or magenta placeholder textures, unreadable HUD or text, UI cut off by the window, frames that never change when the deliverable involves motion, anything that makes a deliverable look absent or broken.
+- **WARNINGS**: Inconsistent art style, weak contrast between the player and the background, cramped or misaligned HUD, subjective polish problems.
+
+`;
+
+const GODOT_CAPTURE_RULES = `1. **Real frames only** - Windowed capture, never --headless
+2. **Cover every deliverable** - Record each scene a deliverable lives on
+`;
 
 export function buildQaVisualPrompt(
   state: ProjectState,
@@ -25,6 +83,8 @@ export function buildQaVisualPrompt(
     referenceImages = readdirSync(REFERENCE_DIR)
       .filter(f => f.endsWith('.png') || f.endsWith('.jpg') || f.endsWith('.jpeg'));
   }
+
+  const isGame = state.projectType === 'game-godot';
 
   // QA output paths
   const qaDir = `${QA_DIR}/phase-${phaseNumber}`;
@@ -74,7 +134,7 @@ Do NOT flag missing features that aren't in the deliverables list.
 
 ---
 
-## YOUR SINGLE JOB
+${isGame ? godotCapture(screenshotsDir) : `## YOUR SINGLE JOB
 1. Capture full-page screenshots at desktop AND mobile sizes
 2. Then spawn a FRESH AGENT to review them blind (no code access)
 
@@ -163,7 +223,7 @@ curl -s http://localhost:5123/api/health | jq > ${screenshotsDir}/health.json
 curl -s http://localhost:5123/api/users | jq > ${screenshotsDir}/users.json
 \`\`\`
 
----
+`}---
 
 ## PHASE 2: FRESH-CONTEXT REVIEW
 
@@ -209,12 +269,12 @@ If you see placeholder content or missing features NOT in the deliverables list,
 those are planned for future phases — do NOT report them as issues.
 ${previousVisualContext}
 Review EVERY screenshot for these categories of issues:
-- **BLOCKERS**: Dead/broken elements, missing required UI, broken layouts, text overflow, unreadable content, broken images, elements that prevent usability, **low contrast text** (light text on light backgrounds, gray text on white, any text that is hard to read)
+${isGame ? GODOT_REVIEW_CATEGORIES : `- **BLOCKERS**: Dead/broken elements, missing required UI, broken layouts, text overflow, unreadable content, broken images, elements that prevent usability, **low contrast text** (light text on light backgrounds, gray text on white, any text that is hard to read)
 - **AI-generated / template look (BLOCKER)**: the app must look hand-crafted, not AI-generated. Flag any of these CONCRETE tells as blockers (they are required design rules, not subjective preferences): visible gradients (backgrounds, buttons, or text); the default purple/indigo/violet "AI" palette; emojis used as icons, bullets, or in headings; a centered-everything layout (centered hero plus a centered three-card feature grid); or a generic untouched default-Tailwind starter look with no intentional design system.
 - **No point of view (BLOCKER)**: the app should look like a real product, not a bare list. Worst cases are blockers: NO real logo/wordmark in the header (just the app name in a default font); a totally generic, voiceless layout with no visual identity. (Motion can't be judged from a still screenshot - leave that to functional QA.) Do NOT block on subjective taste; that's a warning.
 - **WARNINGS**: Wrong colors vs spec, wrong fonts vs spec, significant alignment issues, significant responsive breakage, subjective design/polish preferences
 
-Do NOT flag as issues:
+`}Do NOT flag as issues:
 - Subjective design preferences ("I would have made the button bigger")
 - Minor spacing differences between desktop and mobile
 - Subtle color variations not specified in the spec
@@ -306,14 +366,16 @@ echo "DONE - Visual test completed at $(date -Iseconds)" > ${visualDone}
 
 ## RULES
 
-1. **Capture FULL PAGE** - Use fullPage: true, can't QA what you can't see
+${isGame ? GODOT_CAPTURE_RULES : `1. **Capture FULL PAGE** - Use fullPage: true, can't QA what you can't see
 2. **Both viewports** - Desktop (1280x800) AND mobile (375x667)
-3. **FRESH AGENT for review** - You cannot review your own work objectively
+`}3. **FRESH AGENT for review** - You cannot review your own work objectively
 4. **Be thorough but fair** - Flag real problems, not subjective preferences
 5. **Spec violations are blockers** - If it contradicts the spec, it's wrong
 6. **Do NOT fix** - Just report
 7. **BLOCKER = broken/unusable** - Dead elements, missing required UI, broken layouts
 8. **WARNING = cosmetic polish** - Wrong colors, minor alignment, subtle responsive issues
+
+${oneTurnRule('the visual report and its JSON')}
 
 Then STOP.
 `.trim();

@@ -31,6 +31,40 @@ const DEFAULT_MAX_CONCURRENT = 3;
  */
 const liveGroups = new Set<number>();
 let reaperInstalled = false;
+let shuttingDown = false;
+
+/** How long sessions get to exit on SIGTERM before the 'exit' handler SIGKILLs them. */
+const REAP_GRACE_MS = 3000;
+
+/** Conventional 128+n, so callers can tell which signal stopped the run. */
+const SIGNAL_EXIT_CODES: Partial<Record<NodeJS.Signals, number>> = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 };
+
+function exitCodeForSignal(signal: NodeJS.Signals): number {
+  return SIGNAL_EXIT_CODES[signal] ?? 1;
+}
+
+function anyGroupAlive(): boolean {
+  for (const pid of liveGroups) {
+    try {
+      process.kill(-pid, 0);
+      return true;
+    } catch { /* group gone */ }
+  }
+  return false;
+}
+
+/**
+ * Track a detached process group this process started, so it dies with us.
+ * For anything spawned outside the session path (quick-check's dev servers).
+ */
+export function trackProcessGroup(pid: number): void {
+  liveGroups.add(pid);
+  installReaper();
+}
+
+export function untrackProcessGroup(pid: number): void {
+  liveGroups.delete(pid);
+}
 
 function reapAllGroups(signal: NodeJS.Signals): void {
   for (const pid of liveGroups) {
@@ -47,9 +81,20 @@ function installReaper(): void {
 
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP'] as NodeJS.Signals[]) {
     process.on(sig, () => {
+      const code = exitCodeForSignal(sig);
+      // A second signal means stop waiting.
+      if (shuttingDown) process.exit(code);
+      shuttingDown = true;
       reapAllGroups('SIGTERM');
-      // Anything that ignores SIGTERM is caught by the 'exit' handler above.
-      process.exit(130);
+      // Give sessions the grace period instead of exiting in this tick, which
+      // would SIGKILL them immediately. Anything that ignores SIGTERM is caught
+      // by the 'exit' handler above.
+      const deadline = Date.now() + REAP_GRACE_MS;
+      const poll = setInterval(() => {
+        if (anyGroupAlive() && Date.now() < deadline) return;
+        clearInterval(poll);
+        process.exit(code);
+      }, 100);
     });
   }
 }
@@ -127,6 +172,11 @@ export class Spawner {
     /** Path to an MCP config JSON (e.g. for aimem). Defaults to TURKEYCODE_MCP_CONFIG env var. */
     mcpConfig?: string;
   }): Promise<SpawnResult> {
+    // Shutting down: the reaper exits this process within the grace period, and
+    // anything started now would be killed mid-flight. Never resolving stops the
+    // main loop here instead of letting it run the next session.
+    if (shuttingDown) return new Promise<SpawnResult>(() => {});
+
     const {
       cwd,
       prompt,
@@ -480,4 +530,4 @@ export function createSpawner(options?: { verbose?: boolean }): Spawner {
  * "killing turkeycode kills its sessions", which needs real process groups —
  * asserting on it any other way asserts on nothing.
  */
-export const _reaperInternals = { liveGroups, reapAllGroups, installReaper };
+export const _reaperInternals = { liveGroups, reapAllGroups, installReaper, exitCodeForSignal };

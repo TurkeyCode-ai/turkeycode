@@ -49,7 +49,7 @@ const EFFORT_CAPABLE: Record<ModelTier, boolean> = { haiku: false, sonnet: true,
 const RATES: Record<ModelTier, { input: number; output: number }> = {
   fable: { input: 10, output: 50 },
   opus: { input: 5, output: 25 },
-  sonnet: { input: 3, output: 15 },
+  sonnet: { input: 2, output: 10 },
   haiku: { input: 1, output: 5 },
 };
 
@@ -124,7 +124,7 @@ export interface CallOptions {
   context: CachedContext;
   /** The per-call question — goes in the user turn, after the cache breakpoint. */
   prompt: string;
-  /** Max output tokens. Default 4096 (16000 on Fable — thinking counts against the cap). */
+  /** Max output tokens. Default 4096 (16000 when the call will think — thinking counts against the cap). */
   maxTokens?: number;
   /**
    * Adaptive thinking or off. Default 'disabled' (structured classification doesn't
@@ -141,13 +141,22 @@ export interface CallOptions {
   schema?: Record<string, unknown>;
 }
 
+/**
+ * max_tokens caps thinking + response together, so any call that will think needs
+ * headroom: Fable always does, an explicit 'adaptive' does, and Opus at xhigh/max
+ * can't turn it off. Haiku has no thinking either way.
+ */
+function willThink(tier: ModelTier, opts: Pick<CallOptions, 'thinking' | 'effort'>): boolean {
+  if (tier === 'haiku') return false;
+  if (tier === 'fable' || opts.thinking === 'adaptive') return true;
+  return tier === 'opus' && (opts.effort === 'xhigh' || opts.effort === 'max');
+}
+
 function buildParams(opts: CallOptions): { tier: ModelTier; params: Anthropic.MessageCreateParamsNonStreaming } {
   const tier = opts.model ?? 'sonnet';
   const params: Anthropic.MessageCreateParamsNonStreaming = {
     model: MODEL_IDS[tier],
-    // Fable always thinks and max_tokens caps thinking + response together, so it
-    // needs headroom the other tiers don't.
-    max_tokens: opts.maxTokens ?? (tier === 'fable' ? 16000 : 4096),
+    max_tokens: opts.maxTokens ?? (willThink(tier, opts) ? 16000 : 4096),
     system: buildSystemBlocks(opts.context, opts.cacheTtl ?? '1h'),
     messages: [{ role: 'user', content: opts.prompt }],
   };
@@ -269,8 +278,9 @@ export interface ClassifyResult<T> {
  * verdict (CLEAN/NEEDS_FIX + issues) and ticket triage.
  */
 export async function classify<T>(opts: CallOptions & { schema: Record<string, unknown> }): Promise<ClassifyResult<T>> {
-  // Fable needs thinking headroom even for short JSON answers; other tiers stay tight.
-  const { tier, params } = buildParams({ maxTokens: opts.model === 'fable' ? 8192 : 2048, ...opts });
+  // Thinking needs headroom even for short JSON answers; otherwise stay tight.
+  const thinks = willThink(opts.model ?? 'sonnet', opts);
+  const { tier, params } = buildParams({ maxTokens: thinks ? 8192 : 2048, ...opts });
   const raw = await createMessage(tier, params);
   const text = extractText(raw);
   let value: T;

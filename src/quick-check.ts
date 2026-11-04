@@ -12,6 +12,8 @@
 import { execSync, spawn, ChildProcess } from 'child_process';
 import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync, Dirent } from 'fs';
 import { join, extname, relative } from 'path';
+import { findGodotProjectDir } from './detect-project-type';
+import { trackProcessGroup, untrackProcessGroup } from './spawner';
 
 // ═══════════════════════════════════════════
 // Public API types
@@ -51,6 +53,8 @@ interface ProjectInfo {
   pm: PackageManager;
   /** True when backendDir is inside a monorepo (workDir !== backendDir and workDir has workspace config) */
   isMonorepo: boolean;
+  /** Directory holding project.godot, when this is a Godot game. */
+  godotDir: string | null;
 }
 
 interface ProcessHandle {
@@ -462,12 +466,16 @@ function startProcess(cmd: string, cwd: string, readyCheck: (output: string) => 
       env: env ? { ...process.env, ...env } : process.env
     });
 
+    // Detached servers outlive turkeycode unless they are tracked for the reaper.
+    if (proc.pid) trackProcessGroup(proc.pid);
+
     proc.stdout?.on('data', captureOutput);
     proc.stderr?.on('data', captureOutput);
 
     const handle: ProcessHandle = {
       process: proc,
       kill: () => {
+        if (proc.pid) untrackProcessGroup(proc.pid);
         try {
           if (proc.pid) {
             try { process.kill(-proc.pid, 'SIGTERM'); } catch {}
@@ -492,6 +500,7 @@ function startProcess(cmd: string, cwd: string, readyCheck: (output: string) => 
       if (settled) return;
       settled = true;
       clearInterval(checkInterval);
+      if (value.handle === null && proc.pid) untrackProcessGroup(proc.pid);
       resolve(value);
     };
 
@@ -789,7 +798,8 @@ function detectProjectType(workDir: string): ProjectInfo {
       .some(f => existsSync(join(workDir, f))),
     databases: [],
     pm,
-    isMonorepo: false
+    isMonorepo: false,
+    godotDir: findGodotProjectDir(workDir)
   };
 
   // Search for backend in common locations
@@ -827,6 +837,14 @@ function detectProjectType(workDir: string): ProjectInfo {
       result.backendDir = dir;
       break;
     }
+  }
+
+  // A Godot project's own .csproj or tooling package.json isn't a server: it builds
+  // a class library, so a boot-and-port check can only fail. A real backend
+  // elsewhere in the repo (server/, api/) is unaffected.
+  if (result.hasBackend && result.backendDir === result.godotDir) {
+    result.hasBackend = false;
+    result.backendType = 'unknown';
   }
 
   // Detect monorepo: backend is in a subdirectory and root has workspace config
@@ -1989,6 +2007,62 @@ function checkDeadAffordances(workDir: string): CheckResult {
   };
 }
 
+/** The lines of Godot output that mean the project is broken. */
+export function godotOutputErrors(output: string): string[] {
+  return output
+    .split('\n')
+    .filter(line => /SCRIPT ERROR|Parse Error|Failed to load|Failed loading resource|no main scene defined/.test(line))
+    .map(line => line.trim());
+}
+
+function runTool(command: string, cwd: string, timeout: number): { ok: boolean; output: string } {
+  try {
+    const output = execSync(`${command} 2>&1`, {
+      cwd, timeout, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], maxBuffer: 32 * 1024 * 1024
+    });
+    return { ok: true, output };
+  } catch (err: any) {
+    return { ok: false, output: `${err.stdout ?? ''}${err.stderr ?? ''}` || String(err) };
+  }
+}
+
+/**
+ * Import the project, then load it. Godot exits 0 on parse errors and missing
+ * resources, so the output is the verdict, not the exit code. Without this a
+ * GDScript project has no build step at all, and polish's re-verify proves nothing.
+ */
+function checkGodotProject(godotDir: string): CheckResult {
+  const start = Date.now();
+  const fail = (message: string): CheckResult =>
+    ({ name: 'Godot Project', passed: false, message, duration: Date.now() - start });
+
+  if (!hasCommand('godot')) {
+    return {
+      name: 'Godot Project',
+      passed: true,
+      message: 'Skipped: godot is not on PATH, so nothing could be verified',
+      duration: 0
+    };
+  }
+
+  const dir = JSON.stringify(godotDir);
+  for (const [args, timeout] of [[`--import --path ${dir}`, 300000], [`--quit-after 60 --path ${dir}`, 120000]] as const) {
+    const { ok, output } = runTool(`godot --headless ${args}`, godotDir, timeout);
+    const errors = godotOutputErrors(output);
+    if (errors.length > 0) return fail(errors.slice(0, 10).join('\n'));
+    if (!ok) return fail(`godot --headless ${args} failed:\n${output.slice(-800)}`);
+  }
+
+  // Godot does not compile C# on import.
+  const hasCsProject = readdirSync(godotDir).some(f => f.endsWith('.csproj'));
+  if (hasCsProject && hasCommand('dotnet')) {
+    const { ok, output } = runTool('dotnet build', godotDir, 300000);
+    if (!ok) return fail(`dotnet build failed:\n${output.slice(-800)}`);
+  }
+
+  return { name: 'Godot Project', passed: true, message: 'Imports and loads with no script errors', duration: Date.now() - start };
+}
+
 export async function runQuickChecks(workDir: string): Promise<QuickCheckResult> {
   const startTime = Date.now();
   const checks: CheckResult[] = [];
@@ -2031,6 +2105,15 @@ export async function runQuickChecks(workDir: string): Promise<QuickCheckResult>
         console.log(`[quick-check] ${db} check failed — stopping early`);
         return { passed: false, checks, duration: Date.now() - startTime };
       }
+    }
+  }
+
+  // 2.5 Godot project loads
+  if (project.godotDir) {
+    console.log('[quick-check] Checking Godot project...');
+    checks.push(checkGodotProject(project.godotDir));
+    if (!checks[checks.length - 1].passed) {
+      return { passed: false, checks, duration: Date.now() - startTime };
     }
   }
 

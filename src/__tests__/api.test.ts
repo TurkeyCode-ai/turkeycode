@@ -110,6 +110,23 @@ describe('api module', () => {
     expect(on.captured.params.thinking).toEqual({ type: 'adaptive' });
   });
 
+  it('gives every call that will think room in max_tokens', async () => {
+    const cases: Array<[Parameters<typeof message>[0], number]> = [
+      [{ model: 'fable', context: ctx, prompt: 'q' }, 16000],
+      [{ model: 'sonnet', context: ctx, prompt: 'q', thinking: 'adaptive' }, 16000],
+      [{ model: 'opus', context: ctx, prompt: 'q', effort: 'xhigh' }, 16000],
+      [{ model: 'opus', context: ctx, prompt: 'q', effort: 'high' }, 4096],
+      [{ model: 'haiku', context: ctx, prompt: 'q', thinking: 'adaptive' }, 4096],
+    ];
+    for (const [opts, expected] of cases) {
+      const fake = makeFakeClient('ok');
+      setClient(fake.client);
+      await message(opts);
+      const params = fake.captured.betaParams ?? fake.captured.params;
+      expect(params.max_tokens).toBe(expected);
+    }
+  });
+
   it('never sends a thinking config on Fable (always-on) or Haiku (unsupported)', async () => {
     const fable = makeFakeClient('ok');
     setClient(fable.client);
@@ -183,9 +200,9 @@ describe('api module', () => {
   });
 
   it('estimateCostUsd prices cache reads at 0.1x input and output at the model rate', () => {
-    // Sonnet: input $3/MTok, output $15/MTok. 1M cache-read input = $0.30; 1M output = $15.
+    // Sonnet: input $2/MTok, output $10/MTok. 1M cache-read input = $0.20; 1M output = $10.
     const cost = estimateCostUsd('sonnet', { input: 0, output: 1_000_000, cacheWrite: 0, cacheRead: 1_000_000 });
-    expect(cost).toBeCloseTo(0.3 + 15, 5);
+    expect(cost).toBeCloseTo(0.2 + 10, 5);
   });
 
   it('estimateCostUsd charges 2x for a 1h cache write vs 1.25x for 5m', () => {

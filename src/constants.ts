@@ -121,6 +121,26 @@ export const PHASE_MODELS: Record<string, string> = {
   'polish': 'sonnet',
 };
 
+/** qa-fix -> TURKEYCODE_MODEL_QA_FIX */
+export function phaseModelEnvVar(phase: string): string {
+  return 'TURKEYCODE_MODEL_' + phase.toUpperCase().replace(/-/g, '_');
+}
+
+/** Each distinct model this run will use, with the phases that use it. */
+export function preflightModels(): Map<string, string[]> {
+  const byModel = new Map<string, string[]>();
+  for (const phase of Object.keys(PHASE_MODELS)) {
+    const model = getModelForPhase(phase);
+    if (model) byModel.set(model, [...(byModel.get(model) ?? []), phase]);
+  }
+  return byModel;
+}
+
+/** A first run that fails preflight has no state to resume. */
+export function preflightRerunCommand(hasState: boolean): string {
+  return hasState ? 'turkeycode resume' : 'turkeycode run "<your description>"';
+}
+
 /**
  * Get the model for a given phase.
  * Returns undefined if no specific model is configured (uses Claude default).
@@ -137,8 +157,7 @@ export function getModelForPhase(phase: string): string | undefined {
   //
   // Phase names contain dashes; the env form uppercases and underscores them
   // (qa-fix -> TURKEYCODE_MODEL_QA_FIX).
-  const key = 'TURKEYCODE_MODEL_' + phase.toUpperCase().replace(/-/g, '_');
-  const perPhase = process.env[key];
+  const perPhase = process.env[phaseModelEnvVar(phase)];
   if (perPhase) return perPhase;
 
   const global = process.env.TURKEYCODE_MODEL;

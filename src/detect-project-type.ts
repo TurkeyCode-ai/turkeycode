@@ -46,8 +46,15 @@ export function inferProjectTypeFromDescription(description: string): ProjectTyp
   // was a turn-based RPG that was correctly a web frontend, and stealing
   // every "game" into an engine project would have been wrong. A greenfield
   // directory has no project.godot to detect yet, so the description is the
-  // only signal there is, and it has to be an unambiguous one.
-  if (/\bgodot\b/.test(d)) return 'game-godot';
+  // only signal there is, and it has to be an unambiguous one. Naming the
+  // engine isn't enough on its own: a docs site or an exporter CLI is ABOUT
+  // Godot without being a Godot project.
+  if (/\bgodot\b/.test(d)) {
+    const isSite = /\b(docs?|documentation|web ?site|site|blog|wiki|forum|landing page)\b/.test(d);
+    const isTool = /\b(cli|command[- ]?line|library|sdk|npm package|api)\b/.test(d);
+    const isGame = /\b(game|platformer|rpg|roguelike|shooter|puzzle|vertical slice)\b/.test(d);
+    if (!isSite && (isGame || !isTool)) return 'game-godot';
+  }
   if (/\b(cli|command[- ]?line|terminal(-based)?(\s+(app|tool|program|ui))?|tui|shell script)\b/.test(d)) return 'cli';
   if (/\b(desktop app|electron|tauri|menu ?bar app|system tray)\b/.test(d)) return 'desktop';
   if (/\b(mobile app|ios app|android app|react native|flutter|expo)\b/.test(d)) return 'mobile';
@@ -83,11 +90,13 @@ function checkExplicitType(cwd: string): ProjectType | null {
   return null;
 }
 
+export const PROJECT_TYPES: readonly ProjectType[] = [
+  'web-fullstack', 'web-frontend', 'web-api', 'cli',
+  'library', 'desktop', 'mobile', 'game-godot', 'embedded', 'legacy', 'monorepo', 'unknown'
+];
+
 function isValidProjectType(type: string): type is ProjectType {
-  return [
-    'web-fullstack', 'web-frontend', 'web-api', 'cli',
-    'library', 'desktop', 'mobile', 'game-godot', 'embedded', 'legacy', 'monorepo', 'unknown'
-  ].includes(type);
+  return (PROJECT_TYPES as readonly string[]).includes(type);
 }
 
 // ==================== Heuristic Detection ====================
@@ -266,13 +275,28 @@ function extLower(filename: string): string {
  * a .tscn is readable and diffable, unlike a Unity scene or prefab.
  */
 function isGodotProject(cwd: string): boolean {
-  if (existsSync(join(cwd, 'project.godot'))) return true;
-  // A monorepo may keep the game in a subdirectory.
-  for (const sub of ['game', 'client', 'app', 'src']) {
-    if (existsSync(join(cwd, sub, 'project.godot'))) return true;
-  }
-  return false;
+  return findGodotProjectDir(cwd) !== null;
 }
+
+/** A monorepo may keep the game in a subdirectory. */
+const GODOT_SUBDIRS = ['game', 'client', 'app', 'src'];
+
+/** The directory holding project.godot, or null. Godot needs it as --path. */
+export function findGodotProjectDir(cwd: string): string | null {
+  for (const dir of [cwd, ...GODOT_SUBDIRS.map(sub => join(cwd, sub))]) {
+    if (existsSync(join(dir, 'project.godot'))) return dir;
+  }
+  return null;
+}
+
+/**
+ * Shell line that sets $GODOT_DIR. Run from the repo root without --path, Godot
+ * finds no project, prints an error, and exits 0, so every QA command needs it.
+ * Shell rather than a resolved value: greenfield prompts render before the
+ * project exists.
+ */
+export const GODOT_DIR_SHELL =
+  `GODOT_DIR=$(dirname "$(ls project.godot ${GODOT_SUBDIRS.map(s => `${s}/project.godot`).join(' ')} 2>/dev/null | head -1)")`;
 
 function isEmbeddedProject(cwd: string): boolean {
   // PlatformIO project

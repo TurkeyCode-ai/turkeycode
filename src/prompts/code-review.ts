@@ -3,6 +3,7 @@
  * Job: Review git diff, write review.md, STOP
  */
 
+import { oneTurnRule } from './one-turn';
 import { ProjectState } from '../types';
 import { REVIEWS_DIR } from '../constants';
 
@@ -156,6 +157,8 @@ Create this file with your review:
 4. Don't nitpick style (if there's a linter)
 5. Focus on correctness and security
 6. Do NOT make changes - just review
+
+${oneTurnRule('the review report')}
 
 Then STOP.
 `.trim();

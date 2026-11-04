@@ -12,6 +12,9 @@ import {
   PHASE_MODELS,
   getModelForPhase,
   ALL_DIRS,
+  phaseModelEnvVar,
+  preflightModels,
+  preflightRerunCommand,
 } from '../constants';
 
 describe('constants', () => {
@@ -97,5 +100,31 @@ describe('model overrides from the environment', () => {
     process.env.TURKEYCODE_MODEL_BUILD = 'opus';
     expect(getModelForPhase('build')).toBe('opus');
     expect(getModelForPhase('plan')).toBe('haiku');
+  });
+});
+
+describe('preflight model coverage', () => {
+  const saved = { ...process.env };
+  afterEach(() => { process.env = { ...saved }; });
+
+  it('checks a model that only a non-build phase uses', () => {
+    delete process.env.TURKEYCODE_MODEL;
+    process.env.TURKEYCODE_MODEL_BUILD = 'opus';
+    expect(preflightModels().get(PHASE_MODELS['qa-fix'])).to.include('qa-fix');
+  });
+
+  it('collapses to one probe under a global override', () => {
+    process.env.TURKEYCODE_MODEL = 'sonnet';
+    delete process.env.TURKEYCODE_MODEL_BUILD;
+    expect([...preflightModels().keys()]).to.deep.equal(['sonnet']);
+  });
+
+  it('only suggests resume when there is something to resume', () => {
+    expect(preflightRerunCommand(true)).to.equal('turkeycode resume');
+    expect(preflightRerunCommand(false)).to.contain('turkeycode run');
+  });
+
+  it('names per-phase overrides the way getModelForPhase reads them', () => {
+    expect(phaseModelEnvVar('qa-fix')).to.equal('TURKEYCODE_MODEL_QA_FIX');
   });
 });

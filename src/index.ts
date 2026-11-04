@@ -5,6 +5,7 @@
  * Phase-based orchestrator for Claude Code build workflows
  */
 
+import { PROJECT_TYPES } from './detect-project-type';
 import { config } from 'dotenv';
 import { resolve } from 'path';
 
@@ -75,7 +76,7 @@ program
   .option('--no-pr', 'Skip gh pr create (implied by --no-push)')
   .option('--aar', 'Generate a per-phase After-Action Report (extra LLM session per phase; off by default)')
   .option('--strict-phases', 'Gate every phase on ZERO warnings (old behavior). Disables the end-of-build polish pass.')
-  .option('--type <type>', 'Force project type (skips auto-detection): web-fullstack, web-frontend, web-api, cli, library, desktop, mobile, embedded, legacy, monorepo')
+  .option('--type <type>', `Force project type (skips auto-detection): ${PROJECT_TYPES.filter(t => t !== 'unknown').join(', ')}`)
   .option('--base <branch>', 'Base branch override (e.g. develop). Defaults to detected main/master.')
   .option('--feature <branch>', 'Feature branch — phase branches branch off this and merge back into it; the base branch stays untouched. Required for established gitflow repos.')
   .action(async (description: string, options) => {
@@ -105,10 +106,7 @@ program
     console.log('');
 
     // Validate --type if provided (forces project type for greenfield builds).
-    const VALID_TYPES = [
-      'web-fullstack', 'web-frontend', 'web-api', 'cli', 'library',
-      'desktop', 'mobile', 'embedded', 'legacy', 'monorepo', 'unknown'
-    ];
+    const VALID_TYPES: readonly string[] = PROJECT_TYPES;
     let projectType: any = undefined;
     if (options.type) {
       if (!VALID_TYPES.includes(options.type)) {

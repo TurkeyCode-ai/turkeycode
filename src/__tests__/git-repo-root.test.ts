@@ -16,7 +16,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execSync } from 'child_process';
-import { mkdirSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { realpathSync } from 'fs';
 
@@ -94,4 +94,36 @@ describe('isGitRepo: repo ROOT, not merely inside a repo', () => {
     }
   });
 
+});
+
+describe('enclosingRepoRoot: warn before nesting a repo', () => {
+  const parent = join('/tmp', `.tc-enclosing-${Date.now()}`);
+  const sub = join(parent, 'services', 'api');
+
+  afterEach(() => rmSync(parent, { recursive: true, force: true }));
+
+  it('names the parent repo from a subdirectory', () => {
+    makeRepo(parent);
+    mkdirSync(sub, { recursive: true });
+    expect(clientFor(sub).enclosingRepoRoot()).toBe(realpathSync(parent));
+  });
+
+  it('is null at the root itself', () => {
+    makeRepo(parent);
+    expect(clientFor(parent).enclosingRepoRoot()).toBe(null);
+  });
+
+  it('still treats a symlinked root as the root', () => {
+    makeRepo(parent);
+    const link = `${parent}-link`;
+    symlinkSync(parent, link);
+    const c = new GitHubClient();
+    c.workDir = link;
+    try {
+      expect(c.isGitRepo()).toBe(true);
+      expect(c.enclosingRepoRoot()).toBe(null);
+    } finally {
+      rmSync(link, { force: true });
+    }
+  });
 });

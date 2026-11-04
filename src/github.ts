@@ -4,7 +4,7 @@
  */
 
 import { execSync, execFileSync, ExecSyncOptions } from 'child_process';
-import fs, { writeFileSync, unlinkSync } from 'fs';
+import fs, { writeFileSync, unlinkSync, realpathSync } from 'fs';
 import path, { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -825,6 +825,21 @@ export class GitHubClient {
    * the inner .git wins for everything under it.
    */
   isGitRepo(): boolean {
+    const toplevel = this.gitToplevel();
+    return toplevel !== null && toplevel === this.realWorkDir();
+  }
+
+  /**
+   * The repo workDir sits inside but is not the root of, or null. Running from a
+   * subdirectory of a project and building next to an unrelated parent repo look
+   * identical from here, so initRepo warns rather than guessing which one this is.
+   */
+  enclosingRepoRoot(): string | null {
+    const toplevel = this.gitToplevel();
+    return toplevel !== null && toplevel !== this.realWorkDir() ? toplevel : null;
+  }
+
+  private gitToplevel(): string | null {
     try {
       const toplevel = execSync('git rev-parse --show-toplevel', {
         cwd: this.workDir,
@@ -832,11 +847,15 @@ export class GitHubClient {
       })
         .toString()
         .trim();
-      if (!toplevel) return false;
-      return path.resolve(toplevel) === path.resolve(this.workDir);
+      return toplevel ? realpathSync(toplevel) : null;
     } catch {
-      return false;
+      return null;
     }
+  }
+
+  /** git reports the resolved path, so a symlinked workDir must be resolved to compare. */
+  private realWorkDir(): string {
+    return realpathSync(path.resolve(this.workDir));
   }
 
   /**
@@ -845,6 +864,15 @@ export class GitHubClient {
   initRepo(): boolean {
     if (this.isGitRepo()) {
       return true;
+    }
+    const enclosing = this.enclosingRepoRoot();
+    if (enclosing) {
+      console.warn('');
+      console.warn(`⚠ ${this.workDir} is inside the git repo ${enclosing}, but is not its root.`);
+      console.warn(`  turkeycode builds at a repo root, so it is creating a NEW nested repo here.`);
+      console.warn(`  Nothing from this run will land in ${enclosing}.`);
+      console.warn(`  To build in that repo instead: stop, cd ${enclosing}, and re-run.`);
+      console.warn('');
     }
     try {
       execSync('git init -b main', { stdio: 'inherit', cwd: this.workDir });

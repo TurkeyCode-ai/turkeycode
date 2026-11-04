@@ -4,6 +4,7 @@
  * content and available repo context. Output a single JSON verdict file and STOP.
  */
 
+import { oneTurnRule } from './one-turn';
 import { TicketDetail } from '../jira';
 import { RepoManifest } from '../repos';
 
@@ -88,6 +89,8 @@ Then create ${doneFile} with any content to signal completion.
 - Do NOT run any build/test commands.
 - Do NOT read repo contents in detail — aimem is sufficient if you need context.
 - Only output the verdict JSON and the done signal.
+
+${oneTurnRule(doneFile)}
 
 STOP after writing the done file.
 `.trim();
