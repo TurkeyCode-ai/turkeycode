@@ -1,4 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import { agentPinConflicts } from '../orchestrator';
 import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -378,5 +379,19 @@ describe('rate-limit detection on numbers', () => {
     for (const text of ['Error: 429 Too Many Requests', 'API Error: 429', 'HTTP 429', 'status code 429']) {
       expect(detectAgentSignals(backend, text).rateLimited, text).toBe(true);
     }
+
+describe('agent pin', () => {
+  it('rejects a different backend on a run in progress', () => {
+    expect(agentPinConflicts({ agent: 'codex', currentPhase: 'build' }, 'claude')).toBe(true);
+  });
+
+  it('allows any backend once the run is finished or not started', () => {
+    expect(agentPinConflicts({ agent: 'codex', currentPhase: 'done' }, 'claude')).toBe(false);
+    expect(agentPinConflicts({ agent: 'codex', currentPhase: 'init' }, 'claude')).toBe(false);
+  });
+
+  it('allows the pinned backend and a run with no pin', () => {
+    expect(agentPinConflicts({ agent: 'claude', currentPhase: 'build' }, 'claude')).toBe(false);
+    expect(agentPinConflicts({ currentPhase: 'build' }, 'claude')).toBe(false);
   });
 });
