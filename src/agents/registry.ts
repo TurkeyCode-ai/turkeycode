@@ -79,6 +79,7 @@ function parseAgentEntry(raw: unknown, idx: number): AgentBackendSpec {
     stdinSentinelArg: typeof e.stdinSentinelArg === 'string' ? e.stdinSentinelArg : undefined,
     modelFlag: typeof e.modelFlag === 'string' ? e.modelFlag : undefined,
     mcpConfigFlag: typeof e.mcpConfigFlag === 'string' ? e.mcpConfigFlag : undefined,
+    blindFlags: Array.isArray(e.blindFlags) ? e.blindFlags.map(String) : undefined,
     env: {
       apiKeyVar: typeof env.apiKeyVar === 'string' ? env.apiKeyVar : undefined,
       stripApiKeyByDefault: env.stripApiKeyByDefault === true,

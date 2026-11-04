@@ -24,6 +24,24 @@ import { Spawner } from '../spawner';
 // ---------------------------------------------------------------------------
 
 describe('buildAgentArgs', () => {
+  it('a blind claude session gets no MCP servers, not even an explicit config', () => {
+    const args = buildAgentArgs(CLAUDE_BACKEND, { blind: true, mcpConfig: '/tmp/aimem.json' });
+    expect(args).toContain('--strict-mcp-config');
+    expect(args).not.toContain('--mcp-config');
+    expect(args).not.toContain('/tmp/aimem.json');
+  });
+
+  it('a normal session is unchanged', () => {
+    const args = buildAgentArgs(CLAUDE_BACKEND, { mcpConfig: '/tmp/aimem.json' });
+    expect(args).not.toContain('--strict-mcp-config');
+    expect(args).toContain('/tmp/aimem.json');
+  });
+
+  it('a backend with no blind flag adds nothing', () => {
+    const spec = { ...CLAUDE_BACKEND, blindFlags: undefined };
+    expect(buildAgentArgs(spec, { blind: true })).not.toContain('--strict-mcp-config');
+  });
+
   it('claude arg vector is exactly what the spawner always passed (regression lock)', () => {
     expect(buildAgentArgs(CLAUDE_BACKEND, { model: 'sonnet' })).toEqual([
       '--print',
@@ -153,7 +171,7 @@ describe('resolveModelForPhase', () => {
       'build': 'claude-fable-5',
       'qa-smoke': 'haiku', 'qa-functional': 'sonnet', 'qa-visual': 'sonnet', 'qa-verdict': 'sonnet',
       'qa-fix': 'claude-fable-5', 'quick-fix': 'sonnet',
-      'code-review': 'sonnet', 'aar': 'sonnet', 'polish': 'sonnet',
+      'code-review': 'sonnet', 'ticket-review': 'opus', 'aar': 'sonnet', 'polish': 'sonnet',
     };
     for (const phase of Object.keys(PHASE_TIERS)) {
       expect(resolveModelForPhase(CLAUDE_BACKEND, phase), phase).toBe(expected[phase]);

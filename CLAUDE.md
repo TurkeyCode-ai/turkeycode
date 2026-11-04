@@ -173,7 +173,7 @@ src/
 
 2. **Single planning session**: One session produces the full phase plan (not analyze + detail loops)
 
-3. **Fresh-context QA**: QA spawns new agents that haven't seen the build code
+3. **Fresh-context QA**: QA spawns new agents that haven't seen the build code. Blindness is enforced, not just requested: the visual reviewer runs as `blind: true`, so on backends with `blindFlags` it can't reach user-level MCP servers. A memory server like aimem holds the conversation that built the code.
 
 4. **Stack-agnostic QA**: Discovers project type and uses appropriate tools
 

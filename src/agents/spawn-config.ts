@@ -23,7 +23,7 @@ export const NEVER_PASS_VARS = [
  */
 export function buildAgentArgs(
   spec: AgentBackendSpec,
-  options: { model?: string; mcpConfig?: string; prompt?: string }
+  options: { model?: string; mcpConfig?: string; prompt?: string; blind?: boolean }
 ): string[] {
   const args = [...spec.baseArgs];
 
@@ -31,7 +31,9 @@ export function buildAgentArgs(
     args.push(spec.modelFlag, options.model);
   }
 
-  if (options.mcpConfig && spec.mcpConfigFlag) {
+  if (options.blind) {
+    args.push(...(spec.blindFlags ?? []));
+  } else if (options.mcpConfig && spec.mcpConfigFlag) {
     args.push(spec.mcpConfigFlag, options.mcpConfig);
   }
 

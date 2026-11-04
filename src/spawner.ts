@@ -159,6 +159,7 @@ export class Spawner {
       doneFile,
       model,
       mcpConfig = process.env.TURKEYCODE_MCP_CONFIG,
+      blind = false,
     } = options;
     const backend = this.backend;
 
@@ -207,8 +208,12 @@ export class Spawner {
 
       // Validate the MCP config before it reaches the argv: the file must
       // exist and the backend must take one on the command line.
+      if (blind && !backend.blindFlags?.length) {
+        this.log(`[${sessionName}] WARNING: backend '${backend.id}' cannot block MCP servers — this blind session may reach any it has configured`);
+      }
+
       let usableMcpConfig: string | undefined;
-      if (mcpConfig) {
+      if (mcpConfig && !blind) {
         if (!backend.mcpConfigFlag) {
           this.log(`[${sessionName}] WARNING: backend '${backend.id}' has no MCP config flag — skipping ${mcpConfig}`);
         } else if (!existsSync(mcpConfig)) {
@@ -219,7 +224,7 @@ export class Spawner {
         }
       }
 
-      const args = buildAgentArgs(backend, { model, mcpConfig: usableMcpConfig, prompt });
+      const args = buildAgentArgs(backend, { model, mcpConfig: usableMcpConfig, prompt, blind });
 
       const proc: ChildProcess = spawn(backend.binary, args, {
         cwd,

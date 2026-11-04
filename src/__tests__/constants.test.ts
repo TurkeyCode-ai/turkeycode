@@ -16,6 +16,7 @@ import {
   preflightModels,
   preflightRerunCommand,
 } from '../constants';
+import { getActiveBackend, setActiveBackend } from '../agents';
 
 describe('constants', () => {
   it('state paths are under .turkey', () => {
@@ -123,7 +124,18 @@ describe('preflight model coverage', () => {
     delete process.env.TURKEYCODE_MODEL;
     delete process.env.TURKEYCODE_MODEL_BUILD;
     expect(preflightModels().has('opus')).to.equal(true);
-    expect(preflightModels(new Set(['scope', 'plan'])).has('opus')).to.equal(false);
+    expect(preflightModels(new Set(['scope', 'plan', 'ticket-review'])).has('opus')).to.equal(false);
+  });
+
+  it('probes the backend default when a phase has no model', () => {
+    delete process.env.TURKEYCODE_MODEL;
+    const original = getActiveBackend();
+    setActiveBackend({ ...original, models: { tiers: {} } } as any);
+    try {
+      expect(preflightModels().has(undefined)).to.equal(true);
+    } finally {
+      setActiveBackend(original);
+    }
   });
 
   it('only suggests resume when there is something to resume', () => {

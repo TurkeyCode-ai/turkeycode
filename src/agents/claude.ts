@@ -18,6 +18,7 @@ export const CLAUDE_BACKEND: AgentBackendSpec = {
   promptDelivery: 'stdin',
   modelFlag: '--model',
   mcpConfigFlag: '--mcp-config',
+  blindFlags: ['--strict-mcp-config'],
   env: {
     apiKeyVar: 'ANTHROPIC_API_KEY',
     // Default to the Max/Pro login session in ~/.claude; TURKEYCODE_USE_API_KEY=1

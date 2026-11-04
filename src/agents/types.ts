@@ -86,6 +86,12 @@ export interface AgentBackendSpec {
   modelFlag?: string;
   /** MCP config-file flag; omit = backend has no such flag. */
   mcpConfigFlag?: string;
+  /**
+   * Flags that cut a session off from the user's MCP servers. A memory server
+   * registered at user level (aimem) holds the conversation that built the code,
+   * so a reviewer that can reach it isn't blind. Omit = no such flag exists.
+   */
+  blindFlags?: string[];
   env: AgentEnvPolicy;
   /** Args for the preflight version check (['--version']). */
   versionArgs: string[];
@@ -117,6 +123,7 @@ export const PHASE_TIERS: Record<string, keyof AgentModels['tiers']> = {
   'qa-fix': 'high',
   'quick-fix': 'medium',
   'code-review': 'medium',
+  'ticket-review': 'high',
   'aar': 'medium',
   'polish': 'medium',
 };
@@ -140,4 +147,6 @@ export interface SpawnSessionOptions {
   model?: string;
   /** Path to an MCP config JSON. Defaults to TURKEYCODE_MCP_CONFIG env var. */
   mcpConfig?: string;
+  /** Reviewer session: no MCP servers at all, so it can't recall how the work was built. */
+  blind?: boolean;
 }

@@ -449,8 +449,8 @@ export class TicketOrchestrator {
       planPath,
     });
 
-    const buildModel = this.buildModel ?? getModelForPhase('build') ?? 'sonnet';
-    console.log(`[ticket] Running build session (${buildModel})...`);
+    const buildModel = this.buildModel ?? getModelForPhase('build');
+    console.log(`[ticket] Running build session (${buildModel ?? 'default model'})...`);
     const buildCwd = scopedManifest.repos[0].path;
     const buildStart = Date.now();
     const buildResult = await this.spawner.run({
@@ -550,7 +550,7 @@ export class TicketOrchestrator {
     timings.rebase_push = Math.max(0, rebasePushMs - mergeFixMs);
 
     // 6. Post outcome to Jira
-    const tier = this.deep ? `deep tier: plan → build (${buildModel}) → review/fix` : `build (${buildModel})`;
+    const tier = this.deep ? `deep tier: plan → build (${buildModel ?? 'default model'}) → review/fix` : `build (${buildModel ?? 'default model'})`;
     const commentLines: string[] = [`turkeycode built ${ticket.key} on branch \`${branchName}\` (${tier}).`, ''];
     if (pushed.length > 0) {
       commentLines.push('Pushed branches:');
@@ -611,7 +611,7 @@ export class TicketOrchestrator {
       timeoutMs: TICKET_PLAN_TIMEOUT_MS,
       sessionName: `plan-${ticket.key}`,
       doneFile,
-      model: getModelForPhase('plan') ?? 'opus',
+      model: getModelForPhase('plan'),
       mcpConfig: this.mcpConfig,
     });
     if (result.exitCode !== 0 || !existsSync(planPath)) {
@@ -661,7 +661,7 @@ export class TicketOrchestrator {
         timeoutMs: TICKET_REVIEW_TIMEOUT_MS,
         sessionName: `review-${round}-${ticket.key}`,
         doneFile: reviewDone,
-        model: getModelForPhase('ticket-review') ?? 'opus',
+        model: getModelForPhase('ticket-review'),
         mcpConfig: this.mcpConfig,
       });
       timings.review += Date.now() - reviewStart;
@@ -684,7 +684,7 @@ export class TicketOrchestrator {
         timeoutMs: FIX_TIMEOUT_MS,
         sessionName: `fix-${round}-${ticket.key}`,
         doneFile: fixDone,
-        model: getModelForPhase('qa-fix') ?? 'opus',
+        model: getModelForPhase('qa-fix'),
         mcpConfig: this.mcpConfig,
       });
       timings.fix += Date.now() - fixStart;

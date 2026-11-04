@@ -12,6 +12,7 @@ import { buildBuildPhasePrompt } from '../prompts/build';
 import { GODOT_DIR_SHELL, PROJECT_TYPES } from '../detect-project-type';
 import { detectProjectType as detectForQuickCheck, godotOutputErrors } from '../quick-check';
 import { execSync } from 'child_process';
+import { CLAUDE_BACKEND } from '../agents';
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -160,6 +161,17 @@ describe('Godot visual QA', () => {
     const p = render('game-godot');
     expect(p).to.not.contain('localhost:5123');
     expect(p).to.not.contain('capture-screenshots.ts');
+    expect(p).to.not.contain('Capture FULL PAGE');
+  });
+
+  it('hands off to a separate review session when it cannot spawn one', () => {
+    const p = buildQaVisualPrompt(
+      { projectType: 'game-godot', buildPhases: [{ number: 1, name: 'x', deliverables: ['a'], acceptanceCriteria: ['b'] }] } as any,
+      1, 1, { ...CLAUDE_BACKEND.capabilities, subagents: false }
+    );
+    expect(p).to.contain('--write-movie');
+    expect(p).to.contain('capture manifest');
+    expect(p).to.not.contain('Task tool');
     expect(p).to.not.contain('Capture FULL PAGE');
   });
 
