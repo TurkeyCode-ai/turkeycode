@@ -81,7 +81,7 @@ describe('ignored-file cleanup in an existing repo', () => {
 
 describe('build prompt', () => {
   it('tells the agent to commit and never push', () => {
-    const state = { tech: {}, entities: [], endpoints: [], uiPages: [], knownIssues: [], buildPhases: [], projectType: 'web-backend' } as unknown as ProjectState;
+    const state = { tech: {}, entities: [], endpoints: [], uiPages: [], knownIssues: [], buildPhases: [], completedPhases: [], projectType: 'web-backend' } as unknown as ProjectState;
     const phase = { number: 1, name: 'Foundation', scope: 's', prerequisites: [], deliverables: ['d'], acceptanceCriteria: ['a'] } as unknown as BuildPhase;
     const prompt = buildBuildPhasePrompt(state, phase);
     expect(prompt).toMatch(/never push/i);
