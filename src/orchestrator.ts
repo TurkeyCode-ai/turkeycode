@@ -5,7 +5,7 @@
 
 import { readFileSync, existsSync, mkdirSync, writeFileSync, readdirSync, unlinkSync, rmSync, statSync } from 'fs';
 import { execSync } from 'child_process';
-import { join } from 'path';
+import { join, dirname, isAbsolute } from 'path';
 import { homedir } from 'os';
 import {
   ProjectState,
@@ -524,6 +524,17 @@ export class Orchestrator {
     // commit, so the first phase's `git checkout main` would otherwise fail and
     // branch reconciliation breaks. (With GITHUB_OWNER, setupProject already
     // inited + committed; initRepo/ensureInitialCommit are no-ops then.)
+    // An existing repo's tracked files are the owner's choice: remember where the
+    // repo stood before this run so the ignore cleanup never untracks them, and so
+    // turkeycode's own ignore rules go to .git/info/exclude instead of a commit.
+    if (!this.state.baselineSha) {
+      const head = this.getGitHead();
+      if (head) {
+        this.state.baselineSha = head;
+        saveState(this.state);
+      }
+    }
+    if (this.state.baselineSha) this.github.preserveTrackedRef = this.state.baselineSha;
     this.github.initRepo();
     this.ensureGitignore();
     try {
@@ -654,11 +665,12 @@ export class Orchestrator {
       await this.runPolishPhase();
     }
 
-    // Return the working tree to the default branch — phase merges and the polish pass switch
+    // Return the working tree to the branch the work landed on (the feature branch when
+    // --feature is set, else the base/default) — phase merges and the polish pass switch
     // branches internally, and some paths (e.g. a clean polish pass with nothing to merge) can
     // otherwise leave the user checked out on a phase/polish branch after the run completes.
     try {
-      const finalBranch = this.github.getDefaultBranch();
+      const finalBranch = this.getMergeTarget();
       if (this.github.getCurrentBranch() !== finalBranch) {
         this.github.checkoutBranch(finalBranch);
         this.log(`Returned working tree to ${finalBranch}`);
@@ -2100,8 +2112,23 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       mkdirSync(POLISH_DIR, { recursive: true });
     }
 
-    const defaultBranch = this.github.getDefaultBranch();
+    // Polish the branch the phases merged into. With --feature that is the feature
+    // branch; the default branch does not have the work and must not be modified.
+    const defaultBranch = this.getMergeTarget();
     const polishBranch = 'polish/warnings';
+    // A polish branch left by an earlier run that does not contain the target is stale
+    // (createBranch would check it out as-is and polish the wrong code). Set it aside.
+    try {
+      if (this.github.branchExists(polishBranch)) {
+        try {
+          execSync(`git merge-base --is-ancestor ${defaultBranch} ${polishBranch}`, { cwd: this.workDir, stdio: 'pipe' });
+        } catch {
+          const sha = execSync(`git rev-parse --short ${polishBranch}`, { cwd: this.workDir, stdio: 'pipe' }).toString().trim();
+          execSync(`git branch -M ${polishBranch} ${polishBranch}-stale-${sha}`, { cwd: this.workDir, stdio: 'pipe' });
+          this.log(`Set aside stale ${polishBranch} as ${polishBranch}-stale-${sha}`);
+        }
+      }
+    } catch { /* best effort */ }
     this.github.createBranch(polishBranch, defaultBranch);
 
     // Snapshot the pre-polish commit so we can revert if a fix breaks the build.
@@ -2408,8 +2435,13 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
         return !new RegExp('^\\s*' + base + '/?\\s*$', 'm').test(content);
       });
       if (missing.length > 0) {
-        writeFileSync(gitignorePath, content.replace(/\s*$/, '') + '\n\n# turkeycode: never commit (build artifacts + state)\n' + missing.join('\n') + '\n');
-        this.log(`Ensured critical .gitignore entries: ${missing.join(', ')}`);
+        if (this.state.baselineSha) {
+          // Existing repo: do not edit (and commit) the owner's .gitignore.
+          this.addLocalExcludes(missing);
+        } else {
+          writeFileSync(gitignorePath, content.replace(/\s*$/, '') + '\n\n# turkeycode: never commit (build artifacts + state)\n' + missing.join('\n') + '\n');
+          this.log(`Ensured critical .gitignore entries: ${missing.join(', ')}`);
+        }
       }
       this.untrackIgnoredArtifacts();
       return;
@@ -2486,6 +2518,21 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     this.untrackIgnoredArtifacts();
   }
 
+  /** Add ignore patterns to the repo-local .git/info/exclude (never committed). */
+  private addLocalExcludes(patterns: string[]): void {
+    try {
+      const rel = execSync('git rev-parse --git-path info/exclude', { cwd: this.workDir, encoding: 'utf-8', stdio: 'pipe' }).trim();
+      const excludePath = isAbsolute(rel) ? rel : join(this.workDir, rel);
+      const current = existsSync(excludePath) ? readFileSync(excludePath, 'utf-8') : '';
+      const have = new Set(current.split('\n').map((l) => l.trim().replace(/\/$/, '')));
+      const add = patterns.filter((p) => !have.has(p.replace(/\/$/, '')));
+      if (add.length === 0) return;
+      mkdirSync(dirname(excludePath), { recursive: true });
+      writeFileSync(excludePath, current.replace(/\s*$/, '') + '\n\n# turkeycode: local-only ignores (build artifacts + state)\n' + add.join('\n') + '\n');
+      this.log(`Ignored locally via .git/info/exclude: ${add.join(', ')}`);
+    } catch { /* not a git repo yet — the .gitignore path handles it */ }
+  }
+
   /**
    * Untrack .turkey/ if a prior run (or a build agent's `git add -A`) committed it.
    * turkeycode's state mutates every phase; if it's tracked, `git checkout <target>`
@@ -2498,9 +2545,14 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     // tracked, mutating artifact makes the phase-merge git checkout abort.
     const paths = ['.turkey', '.next', '.nuxt', '.output', '.vercel', 'dist', 'build', 'out', 'coverage'];
     try {
-      const tracked = execSync(`git ls-files ${paths.join(' ')}`, { cwd: this.workDir, encoding: 'utf-8', stdio: 'pipe' }).trim();
-      if (tracked) {
-        execSync(`git rm -r --cached --quiet --ignore-unmatch ${paths.join(' ')}`, { cwd: this.workDir, stdio: 'pipe' });
+      const tracked = this.github.filterUntrackable(
+        execSync(`git ls-files -z ${paths.join(' ')}`, { cwd: this.workDir, encoding: 'utf-8', stdio: 'pipe', maxBuffer: 256 * 1024 * 1024 })
+          .split('\0').filter(Boolean)
+      );
+      if (tracked.length > 0) {
+        execSync('git rm --cached --quiet --ignore-unmatch --pathspec-from-file=- --pathspec-file-nul', {
+          cwd: this.workDir, input: tracked.join('\0'), stdio: 'pipe'
+        });
         this.log('Untracked build artifacts + turkeycode state from git (must never be committed)');
       }
     } catch { /* not a git repo yet, or nothing tracked — fine */ }

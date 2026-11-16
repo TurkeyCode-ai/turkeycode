@@ -50,6 +50,13 @@ export class GitHubClient {
    * Use this for develop-based gitflow repos.
    */
   baseBranch?: string;
+  /**
+   * Commit the repo was at before this run touched it (existing repos only).
+   * Files tracked there are the owner's deliberate choice, even when a
+   * .gitignore rule matches them (a tracked lock file, Dockerfile, .env.*),
+   * so the ignored-file cleanup must never untrack them.
+   */
+  preserveTrackedRef?: string;
 
   constructor() {
     this.workDir = process.cwd();
@@ -375,15 +382,41 @@ export class GitHubClient {
   }
 
   /**
-   * Remove tracked files that are now in .gitignore (e.g. node_modules committed before .gitignore existed)
+   * Of the given repo-relative paths, return those safe to untrack: everything
+   * except files that were already tracked at preserveTrackedRef. turkeycode's
+   * own .turkey/ state is always safe to untrack.
+   */
+  filterUntrackable(paths: string[]): string[] {
+    if (!this.preserveTrackedRef || paths.length === 0) return paths;
+    let baseline: Set<string>;
+    try {
+      baseline = new Set(
+        execSync(`git ls-tree -r --name-only -z ${this.preserveTrackedRef}`, {
+          cwd: this.workDir, encoding: 'utf-8', stdio: 'pipe', maxBuffer: 256 * 1024 * 1024
+        }).split('\0').filter(Boolean)
+      );
+    } catch {
+      // Cannot read the baseline — untrack nothing rather than risk deleting the owner's files.
+      return paths.filter((p) => p.startsWith('.turkey/'));
+    }
+    return paths.filter((p) => p.startsWith('.turkey/') || !baseline.has(p));
+  }
+
+  /**
+   * Remove tracked files that are now in .gitignore (e.g. node_modules committed before
+   * .gitignore existed). Files the repo already tracked before the run are left alone.
    */
   cleanTrackedIgnoredFiles(): void {
     try {
-      const ignored = execSync('git ls-files -ci --exclude-standard', { encoding: 'utf-8' }).trim();
-      if (ignored) {
-        const count = ignored.split('\n').length;
-        console.log(`Removing ${count} tracked files now in .gitignore...`);
-        execSync('git ls-files -ci --exclude-standard -z | xargs -0 git rm --cached', { stdio: 'inherit' });
+      const ignored = execSync('git ls-files -ci --exclude-standard -z', {
+        cwd: this.workDir, encoding: 'utf-8', stdio: 'pipe', maxBuffer: 256 * 1024 * 1024
+      }).split('\0').filter(Boolean);
+      const removable = this.filterUntrackable(ignored);
+      if (removable.length > 0) {
+        console.log(`Removing ${removable.length} tracked files now in .gitignore...`);
+        execSync('git rm --cached --quiet --ignore-unmatch --pathspec-from-file=- --pathspec-file-nul', {
+          cwd: this.workDir, input: removable.join('\0'), stdio: ['pipe', 'inherit', 'inherit']
+        });
       }
     } catch {
       // No ignored tracked files or git error — safe to skip
