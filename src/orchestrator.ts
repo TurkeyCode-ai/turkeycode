@@ -1065,7 +1065,11 @@ export class Orchestrator {
     // Commit any uncommitted changes
     if (this.github.hasUncommittedChanges()) {
       this.log(`Committing uncommitted changes before merge...`);
-      this.github.commit(`chore: commit remaining changes for phase ${phaseNumber}`);
+      // In an existing repo (baselineSha set before this run's first commit),
+      // sweep only tracked files: stray untracked files are QA scratch, not work.
+      this.github.commit(`chore: commit remaining changes for phase ${phaseNumber}`, {
+        trackedOnly: Boolean(this.state.baselineSha),
+      });
       if (phase.prNumber) {
         this.github.push(phaseBranch);
       }

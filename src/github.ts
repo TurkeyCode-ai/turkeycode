@@ -423,10 +423,26 @@ export class GitHubClient {
     }
   }
 
+  /** Untracked, non-ignored files in the work directory. */
+  untrackedFiles(): string[] {
+    try {
+      return execSync('git ls-files --others --exclude-standard', { encoding: 'utf-8', cwd: this.workDir })
+        .split('\n').filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
   /**
-   * Stage all changes and commit
+   * Stage all changes and commit.
+   *
+   * With `trackedOnly`, only changes to files git already tracks are staged.
+   * Used for the end-of-phase sweep in an existing repo: files a session left
+   * lying around untracked (capture scripts, scratch pages) were never
+   * committed by the session that wrote them, so the sweep must not adopt
+   * them into the owner's history. They stay on disk and are reported.
    */
-  commit(message: string): boolean {
+  commit(message: string, opts: { trackedOnly?: boolean } = {}): boolean {
     this.removeStaleIndexLock();
     try {
       this.cleanTrackedIgnoredFiles();
@@ -445,7 +461,17 @@ export class GitHubClient {
           }
         }
       } catch { /* no unmerged files */ }
-      execSync('git add -A', { stdio: 'inherit', cwd: this.workDir });
+      if (opts.trackedOnly) {
+        execSync('git add -u', { stdio: 'inherit', cwd: this.workDir });
+        const left = this.untrackedFiles();
+        if (left.length) {
+          console.log(`Left ${left.length} untracked file(s) out of the commit:`);
+          for (const file of left.slice(0, 20)) console.log(`  ${file}`);
+          if (left.length > 20) console.log(`  ...and ${left.length - 20} more`);
+        }
+      } else {
+        execSync('git add -A', { stdio: 'inherit', cwd: this.workDir });
+      }
       // Skip quietly if nothing is staged. A common false-error is when a fix
       // session (or another nested agent) already committed its work — the
       // outer commit call would otherwise noisily fail "nothing to commit."

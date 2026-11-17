@@ -79,6 +79,41 @@ describe('ignored-file cleanup in an existing repo', () => {
   });
 });
 
+describe('end-of-phase sweep in an existing repo', () => {
+  let dir: string;
+  let client: GitHubClient;
+
+  beforeEach(() => {
+    dir = realpathSync(mkdtempSync(join(tmpdir(), 'tc-sweep-')));
+    git('init -b main', dir);
+    git('config user.email test@example.com', dir);
+    git('config user.name Test', dir);
+    writeFileSync(join(dir, 'app.js'), 'one\n');
+    git('add app.js', dir);
+    git('commit -m initial', dir);
+    client = new GitHubClient();
+    client.workDir = dir;
+    client.preserveTrackedRef = git('rev-parse HEAD', dir);
+  });
+
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('trackedOnly commits edits to tracked files and leaves stray new files alone', () => {
+    writeFileSync(join(dir, 'app.js'), 'two\n');
+    mkdirSync(join(dir, 'qa'));
+    writeFileSync(join(dir, 'qa', 'capture.mjs'), '// scratch\n');
+    expect(client.commit('chore: sweep', { trackedOnly: true })).toBe(true);
+    expect(git('show --name-only --format= HEAD', dir)).toBe('app.js');
+    expect(client.untrackedFiles()).toEqual(['qa/capture.mjs']);
+  });
+
+  it('the default still commits new files', () => {
+    writeFileSync(join(dir, 'new.js'), 'x\n');
+    expect(client.commit('feat: new file')).toBe(true);
+    expect(git('show --name-only --format= HEAD', dir)).toBe('new.js');
+  });
+});
+
 describe('build prompt', () => {
   it('tells the agent to commit and never push', () => {
     const state = { tech: {}, entities: [], endpoints: [], uiPages: [], knownIssues: [], buildPhases: [], completedPhases: [], projectType: 'web-backend' } as unknown as ProjectState;
