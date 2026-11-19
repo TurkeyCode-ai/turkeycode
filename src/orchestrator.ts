@@ -757,25 +757,6 @@ export class Orchestrator {
   /**
    * Run plan phase - single session produces phase-plan.json
    */
-  /**
-   * Detect whether the spec contains a numbered ticket list (e.g. `#14`, `#35`, ...).
-   * Heuristic: 5+ lines beginning with a `#NN` or `NN.` pattern within the spec.
-   * When true, the planner is told to emit one sprint per ticket.
-   */
-  private detectTicketList(): boolean {
-    if (!existsSync(SPECS_FILE)) return false;
-    try {
-      const text = readFileSync(SPECS_FILE, 'utf-8');
-      // Match lines like "  #14   Impact aspect" or "- #14 Impact" or "14. Foo"
-      const ticketLines = text.split('\n').filter(line =>
-        /^\s*[-*]?\s*#\d+\b/.test(line) || /^\s*\d{1,4}\.\s+\S/.test(line)
-      );
-      return ticketLines.length >= 5;
-    } catch {
-      return false;
-    }
-  }
-
   private async runPlan(isIterate: boolean = false): Promise<void> {
     this.log('\n=== PHASE: PLAN ===\n');
     auditPhase('plan', 'started');
@@ -792,11 +773,7 @@ export class Orchestrator {
     }
 
     // Single planning session
-    const hasTicketList = this.detectTicketList();
-    if (hasTicketList) {
-      this.log('Spec contains a numbered ticket list — planning in TICKET-LIST mode (one sprint per ticket)');
-    }
-    const prompt = buildPlanPrompt(this.state, isIterate, hasTicketList);
+    const prompt = buildPlanPrompt(this.state, isIterate);
     const result = await this.spawner.run({
       cwd: this.workDir,
       prompt,
