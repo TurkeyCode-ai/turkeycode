@@ -194,6 +194,8 @@ export interface ProjectState {
   // "main" even on repos that explicitly opted into --feature/--base.
   baseBranch?: string;
   featureBranch?: string;
+  /** HEAD of an existing repo before this run touched it; files tracked there are never untracked. */
+  baselineSha?: string;
 
   // Timestamps
   startedAt: string;

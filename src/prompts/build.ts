@@ -287,7 +287,7 @@ ${oneTurnRule(buildDone, { completionGate: true, partialNotes: buildPartial })}
 4. **Commit incrementally** - Multiple commits, not one giant commit
 5. **Do NOT build ahead** - Only implement what's in this phase's scope
 6. **Do NOT skip deliverables** - Every deliverable must be implemented
-7. **Push when done** - Ensure code is pushed to the phase branch
+7. **Commit, never push** - Commit everything to the current phase branch. Do NOT run git push, do NOT switch branches, and do NOT look for or configure git credentials — the orchestrator handles pushing and merging
 ${getTypeSpecificRules(state.projectType || 'web-fullstack', caps)}
 
 ---
@@ -298,7 +298,7 @@ Before writing build.done, verify:
 1. All deliverables are implemented
 2. All acceptance criteria pass
 3. Code compiles/builds without errors
-4. All changes are committed and pushed
+4. All changes are committed on the current branch (not pushed — the orchestrator pushes)
 5. build.done file exists at ${buildDone}
 
 Then STOP.

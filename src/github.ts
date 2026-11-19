@@ -50,6 +50,13 @@ export class GitHubClient {
    * Use this for develop-based gitflow repos.
    */
   baseBranch?: string;
+  /**
+   * Commit the repo was at before this run touched it (existing repos only).
+   * Files tracked there are the owner's deliberate choice, even when a
+   * .gitignore rule matches them (a tracked lock file, Dockerfile, .env.*),
+   * so the ignored-file cleanup must never untrack them.
+   */
+  preserveTrackedRef?: string;
 
   constructor() {
     this.workDir = process.cwd();
@@ -375,25 +382,67 @@ export class GitHubClient {
   }
 
   /**
-   * Remove tracked files that are now in .gitignore (e.g. node_modules committed before .gitignore existed)
+   * Of the given repo-relative paths, return those safe to untrack: everything
+   * except files that were already tracked at preserveTrackedRef. turkeycode's
+   * own .turkey/ state is always safe to untrack.
+   */
+  filterUntrackable(paths: string[]): string[] {
+    if (!this.preserveTrackedRef || paths.length === 0) return paths;
+    let baseline: Set<string>;
+    try {
+      baseline = new Set(
+        execSync(`git ls-tree -r --name-only -z ${this.preserveTrackedRef}`, {
+          cwd: this.workDir, encoding: 'utf-8', stdio: 'pipe', maxBuffer: 256 * 1024 * 1024
+        }).split('\0').filter(Boolean)
+      );
+    } catch {
+      // Cannot read the baseline — untrack nothing rather than risk deleting the owner's files.
+      return paths.filter((p) => p.startsWith('.turkey/'));
+    }
+    return paths.filter((p) => p.startsWith('.turkey/') || !baseline.has(p));
+  }
+
+  /**
+   * Remove tracked files that are now in .gitignore (e.g. node_modules committed before
+   * .gitignore existed). Files the repo already tracked before the run are left alone.
    */
   cleanTrackedIgnoredFiles(): void {
     try {
-      const ignored = execSync('git ls-files -ci --exclude-standard', { encoding: 'utf-8' }).trim();
-      if (ignored) {
-        const count = ignored.split('\n').length;
-        console.log(`Removing ${count} tracked files now in .gitignore...`);
-        execSync('git ls-files -ci --exclude-standard -z | xargs -0 git rm --cached', { stdio: 'inherit' });
+      const ignored = execSync('git ls-files -ci --exclude-standard -z', {
+        cwd: this.workDir, encoding: 'utf-8', stdio: 'pipe', maxBuffer: 256 * 1024 * 1024
+      }).split('\0').filter(Boolean);
+      const removable = this.filterUntrackable(ignored);
+      if (removable.length > 0) {
+        console.log(`Removing ${removable.length} tracked files now in .gitignore...`);
+        execSync('git rm --cached --quiet --ignore-unmatch --pathspec-from-file=- --pathspec-file-nul', {
+          cwd: this.workDir, input: removable.join('\0'), stdio: ['pipe', 'inherit', 'inherit']
+        });
       }
     } catch {
       // No ignored tracked files or git error — safe to skip
     }
   }
 
+  /** Untracked, non-ignored files in the work directory. */
+  untrackedFiles(): string[] {
+    try {
+      return execSync('git ls-files --others --exclude-standard', { encoding: 'utf-8', cwd: this.workDir })
+        .split('\n').filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
   /**
-   * Stage all changes and commit
+   * Stage all changes and commit.
+   *
+   * With `trackedOnly`, only changes to files git already tracks are staged.
+   * Used for the end-of-phase sweep in an existing repo: files a session left
+   * lying around untracked (capture scripts, scratch pages) were never
+   * committed by the session that wrote them, so the sweep must not adopt
+   * them into the owner's history. They stay on disk and are reported.
    */
-  commit(message: string): boolean {
+  commit(message: string, opts: { trackedOnly?: boolean } = {}): boolean {
     this.removeStaleIndexLock();
     try {
       this.cleanTrackedIgnoredFiles();
@@ -412,7 +461,17 @@ export class GitHubClient {
           }
         }
       } catch { /* no unmerged files */ }
-      execSync('git add -A', { stdio: 'inherit', cwd: this.workDir });
+      if (opts.trackedOnly) {
+        execSync('git add -u', { stdio: 'inherit', cwd: this.workDir });
+        const left = this.untrackedFiles();
+        if (left.length) {
+          console.log(`Left ${left.length} untracked file(s) out of the commit:`);
+          for (const file of left.slice(0, 20)) console.log(`  ${file}`);
+          if (left.length > 20) console.log(`  ...and ${left.length - 20} more`);
+        }
+      } else {
+        execSync('git add -A', { stdio: 'inherit', cwd: this.workDir });
+      }
       // Skip quietly if nothing is staged. A common false-error is when a fix
       // session (or another nested agent) already committed its work — the
       // outer commit call would otherwise noisily fail "nothing to commit."
