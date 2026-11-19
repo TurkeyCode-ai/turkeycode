@@ -368,7 +368,8 @@ export class Spawner {
           stdout,
           stderr,
           durationMs,
-          rateLimited,
+          // A done file means the work finished. Retrying would only discard it.
+          rateLimited: rateLimited && !doneFileDetected,
           creditExhausted
         });
       });

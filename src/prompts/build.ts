@@ -102,6 +102,7 @@ function getTypeSpecificRules(projectType: ProjectType, caps: AgentCapabilities)
 - project.godot must set run/main_scene. QA and the visual review start the game from that scene, so every deliverable must be reachable from it.
 - Verify with \`godot --headless --import --path <project dir>\`, then \`godot --headless --quit-after 120 --path <project dir>\`. Godot exits 0 on script errors, so read the output: any SCRIPT ERROR, Parse Error or Failed to load means it is broken.
 - Put script-level tests in res://test/run_tests.gd so QA can run them headless.
+- turkeycode records the visual review frames itself: 30 seconds of the real main scene. Never add capture, demo or autoplay code to the game. If a deliverable needs input to appear on screen, list that input in capture-timeline.json next to project.godot: \`{"time_scale": 1, "events": [{"at": 0.5, "action": "ui_accept"}, {"at": 2, "action": "ui_left", "hold": 1}, {"at": 4, "mouse": [640, 200]}]}\`. \`at\` and \`hold\` are seconds of capture and \`action\` is an InputMap action. Raise time_scale if a state takes longer than 30 seconds to reach.
 - No web scaffolding: no server, routes, auth, favicon or database unless the spec asks for one.`;
 
   switch (projectType) {

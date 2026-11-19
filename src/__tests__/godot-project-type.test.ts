@@ -7,7 +7,8 @@
  * producing confident nonsense. Detection order is the whole fix.
  */
 import { describe, it, expect, afterEach } from 'vitest';
-import { buildQaVisualPrompt } from '../prompts/qa-visual';
+import { buildQaVisualPrompt, buildQaVisualReviewPrompt } from '../prompts/qa-visual';
+import { buildQaFixPrompt } from '../prompts/qa-fix';
 import { buildBuildPhasePrompt } from '../prompts/build';
 import { GODOT_DIR_SHELL, PROJECT_TYPES } from '../detect-project-type';
 import { detectProjectType as detectForQuickCheck, godotOutputErrors } from '../quick-check';
@@ -142,44 +143,37 @@ describe('Godot gets the visual pass', () => {
 });
 
 describe('Godot visual QA', () => {
-  const render = (type: string) => buildQaVisualPrompt(
-    {
-      projectType: type,
-      buildPhases: [{ number: 1, name: 'Combat', deliverables: ['a'], acceptanceCriteria: ['b'] }],
-    } as any,
-    1, 1
-  ) as string;
+  const state = {
+    projectType: 'game-godot',
+    projectDescription: 'A game',
+    buildPhases: [{ number: 1, name: 'Combat', deliverables: ['a'], acceptanceCriteria: ['b'] }],
+  } as any;
 
-  it('captures windowed PNG frames the reviewer can read', () => {
-    const p = render('game-godot');
-    expect(p).to.contain('--write-movie "$FRAMES/frame.png"');
-    expect(p).to.not.contain('--headless --write-movie');
-    expect(p).to.contain('xvfb-run');
-  });
-
-  it('never points a browser at a game', () => {
-    const p = render('game-godot');
+  it('never points the reviewer at a browser', () => {
+    const p = buildQaVisualReviewPrompt(state, 1, 1, { ...CLAUDE_BACKEND.capabilities, subagents: false });
     expect(p).to.not.contain('localhost:5123');
-    expect(p).to.not.contain('capture-screenshots.ts');
     expect(p).to.not.contain('Capture FULL PAGE');
+    expect(p).to.contain('frames from a running game');
   });
 
-  it('hands off to a separate review session when it cannot spawn one', () => {
-    const p = buildQaVisualPrompt(
-      { projectType: 'game-godot', buildPhases: [{ number: 1, name: 'x', deliverables: ['a'], acceptanceCriteria: ['b'] }] } as any,
-      1, 1, { ...CLAUDE_BACKEND.capabilities, subagents: false }
-    );
-    expect(p).to.contain('--write-movie');
-    expect(p).to.contain('capture manifest');
-    expect(p).to.not.contain('Task tool');
-    expect(p).to.not.contain('Capture FULL PAGE');
+  it('makes the reviewer open every file and say what it opened', () => {
+    const p = buildQaVisualReviewPrompt(state, 1, 1, { ...CLAUDE_BACKEND.capabilities, subagents: false });
+    expect(p).to.contain('OPEN EVERY FILE');
+    expect(p).to.contain('framesReviewed');
+    expect(p).to.contain('not-shown');
   });
 
   it('leaves the web flow alone', () => {
-    const p = render('web-fullstack');
+    const p = buildQaVisualPrompt({ ...state, projectType: 'web-fullstack' }, 1, 1) as string;
     expect(p).to.contain('capture-screenshots.ts');
     expect(p).to.contain('Capture FULL PAGE');
     expect(p).to.not.contain('--write-movie');
+  });
+
+  it('tells a fix session to change the timeline, not the game', () => {
+    const fix = buildQaFixPrompt(state, 1, 1);
+    expect(fix).to.contain('capture-timeline.json');
+    expect(buildQaFixPrompt({ ...state, projectType: 'web-fullstack' }, 1, 1)).to.not.contain('capture-timeline.json');
   });
 });
 
@@ -190,6 +184,8 @@ describe('Godot build rules', () => {
       { number: 1, name: 'Core', scope: 's', deliverables: ['a'], acceptanceCriteria: ['b'], prerequisites: [] } as any
     );
     expect(p).to.contain('GODOT RULES');
+    expect(p).to.contain('capture-timeline.json');
+    expect(p).to.contain('Never add capture, demo or autoplay code');
     expect(p).to.not.contain('Logo & favicon');
   });
 });

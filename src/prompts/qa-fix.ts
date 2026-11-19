@@ -140,7 +140,9 @@ ${deliverablesText}
 **CRITICAL: Only fix issues related to this phase's deliverables listed above.**
 Ignore findings about features from future phases — those have NOT been built yet and are expected to be missing.
 If a finding is about a feature NOT in the deliverables list, skip it.
-
+${state.projectType === 'game-godot' ? `
+**Never add capture, demo or autoplay code to the game.** If the frames did not reach a state, change capture-timeline.json next to project.godot instead. It is data: \`{"time_scale": 1, "events": [{"at": 0.5, "action": "ui_accept"}]}\`. turkeycode replays it against the real main scene for 30 seconds.
+` : ''}
 ---
 
 ## YOUR SINGLE JOB

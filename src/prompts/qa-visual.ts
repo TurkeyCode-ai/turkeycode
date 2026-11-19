@@ -3,7 +3,10 @@
  * Job: Capture screenshots, then a fresh-context agent reviews them blind.
  * The fresh agent has NEVER seen the code - catches what familiar eyes miss.
  *
- * Two shapes, decided by the active backend's capabilities:
+ * Games skip this file's capture: the orchestrator records frames itself
+ * (src/godot-capture.ts) and only the blind review below runs as a session.
+ *
+ * Two shapes for everything else, decided by the active backend's capabilities:
  * - subagents (Claude Code): ONE session captures and spawns the blind
  *   reviewer via the Task tool (the historical flow).
  * - no subagents (codex/gemini/opencode/custom): the capture session stops
@@ -17,54 +20,6 @@ import { QA_DIR, SCREENSHOTS_DIR, REFERENCE_DIR } from '../constants';
 import { AgentCapabilities, CLAUDE_BACKEND } from '../agents';
 import { existsSync, readdirSync, readFileSync } from 'fs';
 import { oneTurnRule } from './one-turn';
-import { GODOT_DIR_SHELL } from '../detect-project-type';
-
-/** Everything both prompt shapes need, derived once. */
-/**
- * A game has no URL, so the web capture flow would point Playwright at a port
- * nothing listens on and review an error page. Frames come from the engine.
- * Measured on Godot 4.7: `--write-movie <name>.png` writes a PNG per frame when
- * windowed, and crashes under --headless.
- */
-function godotCapture(screenshotsDir: string, stepTwo: string): string {
-  return `## YOUR SINGLE JOB
-1. Render real frames from the game
-${stepTwo}
-
----
-
-## PHASE 1: CAPTURE FRAMES
-
-Do NOT use Playwright or open a URL. Nothing is listening on a port. This must
-run WINDOWED: --headless has no renderer and crashes on --write-movie.
-
-\`\`\`bash
-${GODOT_DIR_SHELL}
-FRAMES="$PWD/${screenshotsDir}"
-mkdir -p "$FRAMES"
-
-# Linux CI has no display, so give Godot one. Desktops need nothing.
-GODOT_RUN=""
-if [ "$(uname)" = "Linux" ] && [ -z "$DISPLAY" ]; then GODOT_RUN="xvfb-run -a"; fi
-
-timeout 180 $GODOT_RUN godot --path "$GODOT_DIR" --write-movie "$FRAMES/frame.png" --fixed-fps 10 --quit-after 300 2>&1 | tail -20 || true
-
-# 30 seconds at 10fps is 300 frames. Keep one every 3 seconds for the reviewer.
-rm -f "$FRAMES/frame.wav"
-ls "$FRAMES"/frame*.png | awk 'NR % 30 != 1' | xargs rm -f
-ls -la "$FRAMES"
-\`\`\`
-
-That records the main scene. If a deliverable lives on another scene, record it
-too by passing the scene and a different name, for example
-\`godot --path "$GODOT_DIR" res://levels/boss.tscn --write-movie "$FRAMES/boss.png" ...\`,
-then thin those frames the same way.
-
-If no PNG frames exist, that is a BLOCKER: report that the game produced no
-frames, and include the command output.
-
-`;
-}
 
 const GODOT_REVIEW_CATEGORIES = `These are frames from a running game, a few seconds apart. Review EVERY frame for:
 - **BLOCKERS**: Blank, black or solid-color frames where gameplay should be, missing sprites or magenta placeholder textures, unreadable HUD or text, UI cut off by the window, frames that never change when the deliverable involves motion, anything that makes a deliverable look absent or broken.
@@ -72,10 +27,7 @@ const GODOT_REVIEW_CATEGORIES = `These are frames from a running game, a few sec
 
 `;
 
-const GODOT_CAPTURE_RULES = `1. **Real frames only** - Windowed capture, never --headless
-2. **Cover every deliverable** - Record each scene a deliverable lives on
-`;
-
+/** Everything both prompt shapes need, derived once. */
 function visualContext(state: ProjectState, phaseNumber: number, attempt: number) {
   const phase = state.buildPhases.find(p => p.number === phaseNumber);
   const phaseName = phase?.name || `Phase ${phaseNumber}`;
@@ -91,6 +43,11 @@ function visualContext(state: ProjectState, phaseNumber: number, attempt: number
 
   const qaDir = `${QA_DIR}/phase-${phaseNumber}`;
   const screenshotsDir = `${SCREENSHOTS_DIR}/phase-${phaseNumber}`;
+
+  // Named one by one when capture already ran, so "review them all" is checkable.
+  const capturedFiles = existsSync(screenshotsDir)
+    ? readdirSync(screenshotsDir).filter(f => /\.(png|jpe?g|txt|json)$/i.test(f)).sort()
+    : [];
 
   const deliverablesText = deliverables.length > 0
     ? deliverables.map((d, i) => `${i + 1}. ${d}`).join('\n')
@@ -118,7 +75,7 @@ YOUR PRIORITY ORDER:
   }
 
   return {
-    phaseName, specContext, referenceImages, qaDir, screenshotsDir,
+    phaseName, specContext, referenceImages, qaDir, screenshotsDir, capturedFiles,
     deliverablesText, previousVisualContext,
     isGame: state.projectType === 'game-godot',
     visualReport: `${qaDir}/visual-${attempt}.md`,
@@ -136,7 +93,7 @@ function blindReviewBody(
   phaseNumber: number,
   appDescription: string
 ): string {
-  const { screenshotsDir, referenceImages, specContext, deliverablesText, previousVisualContext } = ctx;
+  const { screenshotsDir, capturedFiles, referenceImages, specContext, deliverablesText, previousVisualContext } = ctx;
   return `
 You are a visual QA reviewer doing a BLIND review. You have NEVER seen the code.
 
@@ -144,7 +101,10 @@ APP DESCRIPTION:
 ${appDescription}
 
 SCREENSHOTS TO REVIEW:
-${screenshotsDir}/*.png
+${capturedFiles.length > 0 ? capturedFiles.map(f => `${screenshotsDir}/${f}`).join('\n') : `${screenshotsDir}/*.png`}
+
+OPEN EVERY FILE LISTED, not a sample. You cannot say something is missing from a
+file you did not open. List every file you opened in framesReviewed in the JSON.
 
 ${referenceImages.length > 0 ? `
 REFERENCE IMAGES FOR COMPARISON:
@@ -174,6 +134,9 @@ ${ctx.isGame ? GODOT_REVIEW_CATEGORIES : `- **BLOCKERS**: Dead/broken elements, 
 - Minor spacing differences between desktop and mobile
 - Subtle color variations not specified in the spec
 - Things that "could be better" but aren't broken
+
+If something a deliverable needs never appears in any file, mark it kind "not-shown"
+in the JSON. That records that these captures did not show it, not that it is broken.
 
 Be thorough but fair. Flag real problems, not nitpicks. For each issue include:
 - Which screenshot
@@ -243,8 +206,9 @@ blocker — so be precise and do not invent nitpicks.
 
 \`\`\`json
 {
+  "framesReviewed": ["every file you opened"],
   "blockers": [
-    { "type": "visual", "description": "[screenshot] what's broken", "location": "route/viewport", "severity": "critical" }
+    { "type": "visual", "kind": "seen", "description": "[screenshot] what's broken", "location": "route/viewport", "severity": "critical" }
   ],
   "warnings": [
     { "type": "visual", "description": "[screenshot] cosmetic issue", "location": "route/viewport" }
@@ -252,7 +216,8 @@ blocker — so be precise and do not invent nitpicks.
 }
 \`\`\`
 
-If there are zero blockers and zero warnings, write \`{ "blockers": [], "warnings": [] }\`.
+Use kind "seen" for a problem visible in a file and "not-shown" for something absent from all of them.
+If there are zero blockers and zero warnings, still list framesReviewed, with empty blockers and warnings.
 The \`description\` and \`location\` MUST mirror what you wrote in the markdown report.
 
 ---
@@ -274,7 +239,7 @@ export function buildQaVisualPrompt(
   caps: AgentCapabilities = CLAUDE_BACKEND.capabilities
 ): string {
   const ctx = visualContext(state, phaseNumber, attempt);
-  const { phaseName, qaDir, screenshotsDir, deliverablesText, isGame } = ctx;
+  const { phaseName, qaDir, screenshotsDir, deliverablesText } = ctx;
   const captureDone = `${qaDir}/capture-${attempt}.done`;
   const stepTwo = caps.subagents
     ? '2. Then spawn a FRESH AGENT to review them blind (no code access)'
@@ -340,9 +305,9 @@ Your only remaining job is the capture manifest and the done signal:
     ? `
 ## RULES
 
-${isGame ? GODOT_CAPTURE_RULES : `1. **Capture FULL PAGE** - Use fullPage: true, can't QA what you can't see
+1. **Capture FULL PAGE** - Use fullPage: true, can't QA what you can't see
 2. **Both viewports** - Desktop (1280x800) AND mobile (375x667)
-`}3. **FRESH AGENT for review** - You cannot review your own work objectively
+3. **FRESH AGENT for review** - You cannot review your own work objectively
 4. **Be thorough but fair** - Flag real problems, not subjective preferences
 5. **Spec violations are blockers** - If it contradicts the spec, it's wrong
 6. **Do NOT fix** - Just report
@@ -356,9 +321,9 @@ Then STOP.
     : `
 ## RULES
 
-${isGame ? GODOT_CAPTURE_RULES : `1. **Capture FULL PAGE** - Use fullPage: true, can't QA what you can't see
+1. **Capture FULL PAGE** - Use fullPage: true, can't QA what you can't see
 2. **Both viewports** - Desktop (1280x800) AND mobile (375x667)
-`}3. **Do NOT review** - A separate fresh session judges the screenshots
+3. **Do NOT review** - A separate fresh session judges the screenshots
 4. **Do NOT fix** - Just capture
 
 ${oneTurnRule(captureDone)}
@@ -381,7 +346,7 @@ Do NOT flag missing features that aren't in the deliverables list.
 
 ---
 
-${isGame ? godotCapture(screenshotsDir, stepTwo) : `## YOUR SINGLE JOB
+## YOUR SINGLE JOB
 1. Capture full-page screenshots at desktop AND mobile sizes
 ${stepTwo}
 
@@ -470,7 +435,7 @@ curl -s http://localhost:5123/api/health | jq > ${screenshotsDir}/health.json
 curl -s http://localhost:5123/api/users | jq > ${screenshotsDir}/users.json
 \`\`\`
 
-`}---
+---
 
 ${reviewSection}
 
