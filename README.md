@@ -252,7 +252,55 @@ turkeycode my-tickets
 
 # Just classify, change nothing
 turkeycode run-ticket PROJ-123 --triage-only
+
+# Deep tier: plan → build → cited review/fix rounds (round 1: ticket + reference
+# fidelity; round 2: integration, re-entry, concurrency, bypass paths)
+turkeycode run-ticket PROJ-123 --deep --review-rounds 2
+
+# Build on top of an unpushed local stack, keep the result local
+turkeycode run-ticket PROJ-123 --deep --base-local stack/week-46 --no-push
 ```
+
+| Flag | Effect |
+|------|--------|
+| `--base-local <ref>` | Cut the ticket branch from a **local** ref and rebase onto it (no fetch) instead of `origin/<base>`. A bare `<ref>` applies to every scoped repo where it exists; the others keep `origin/<base>`. Pin per repo with `<repoPath>=<ref>` (comma-separated; the ref must exist there). |
+| `--no-push` | Stop after review/fix + rebase: the branch stays local, branch + SHA per repo are printed and written to `~/.turkeycode/tickets/<KEY>/local-branches.json`. No push, no Jira transition; the Jira comment and worklog still happen. |
+
+Coding tickets need a manifest at `~/.turkeycode/repos.yaml` (override with `--manifest`):
+
+```yaml
+defaultBase: develop
+branchPattern: ticket/{key}-{slug}
+transitionAfterPush: In Review
+repos:                      # repos turkeycode branches, commits and pushes in
+  - path: ~/work/api
+    role: backend
+  - path: ~/work/web
+    role: frontend
+references:                 # read-only research material (e.g. legacy code being ported)
+  - path: ~/legacy/src
+    role: legacy system
+related:                    # read-only LIVE code the change must stay compatible with
+  - path: ~/work/bridge
+    role: bridge producer/consumer between legacy and new
+review:
+  checklist:                # extends the built-in failure-mode checklist
+    - Status codes are single letters; blank means active.
+  # replaceDefaultChecklist: true   # use only the items above
+```
+
+`related` repos are shown to the plan, build, review and fix sessions as the other
+side of a contract (bridge, API, queue, shared table); the reviewer is told to open
+them and check the contract both ways. They're never branched or written to, and a
+path can't be in both `repos` and `related`.
+
+Deep-tier reviews must cite `file:line` evidence for every finding and every
+"verified OK" claim; uncited entries are dropped. A review with nothing cited counts
+as *not reviewed* (re-run once, then the run fails before anything is pushed).
+Review rounds use different lenses, so a clean round 1 still gets a round 2. Each later round verifies the previous fixes and challenges them (a fix can introduce its own problem). If the last scheduled round still finds something, one extra fix → verify round runs; anything left after that is reported as open. `--review-rounds 1` means exactly one review.
+The built-in checklist covers sentinel literals in legacy fields, both directions of
+every integration, field ownership, bypass paths, re-entry, concurrency, tests that
+encode the premise, and constructor/signature churn.
 
 Requires Jira env (`JIRA_HOST`, `JIRA_EMAIL`, `JIRA_TOKEN`, and `JIRA_PROJECT` for
 `story`). See [Jira Integration](#jira-integration-optional).

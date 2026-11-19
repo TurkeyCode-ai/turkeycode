@@ -8,6 +8,7 @@
 import { oneTurnRule } from './one-turn';
 import { TicketDetail } from '../jira';
 import { RepoManifest } from '../repos';
+import { renderRelatedBlock, renderLocalBaseBlock } from './ticket-common';
 
 export interface TicketBuildPromptInput {
   ticket: TicketDetail;
@@ -22,6 +23,8 @@ export interface TicketBuildPromptInput {
   doneFile: string;
   /** Deep tier: plan written by a prior plan session. */
   planPath?: string;
+  /** --base-local runs: repo path -> local ref the branch is built on. */
+  localBases?: Record<string, string>;
 }
 
 export function buildTicketBuildPrompt(input: TicketBuildPromptInput): string {
@@ -70,7 +73,7 @@ ${imageBlock}
 ${repoLines}
 
 All repos are on branch \`${branchName}\` (cut off their configured base branch). You may \`cd\` between them with the Bash tool as needed. Use aimem (MCP) for cross-repo understanding before making changes.
-${referenceBlock}
+${referenceBlock}${renderRelatedBlock(manifest)}
 ${planPath ? `\n## PLAN\nA plan session already researched this ticket. Read \`${planPath}\` first and follow it; where you find it wrong, do the right thing and say so under Follow-ups in the done file.\n` : ''}
 ## PROCESS
 1. **Understand** the ticket: re-read description and comments. Consult aimem for repo context, conventions, and related prior work.
@@ -79,10 +82,10 @@ ${planPath ? `\n## PLAN\nA plan session already researched this ticket. Read \`$
 4. **Commit per repo**: in each repo you modify, stage the changes and make one or more coherent commits. Commit messages should reference ${ticket.key} in the first line (e.g. \`${ticket.key}: add foo handler\`). Do NOT push — turkeycode handles pushing.
 5. **Tests**: if the repo has tests covering the change area, run them and make sure they pass. Add new tests when they're a natural fit. Do not fabricate passing tests.
 6. **Don't touch unrelated repos.** If aimem suggests a repo isn't affected, skip it entirely.
-
+${renderLocalBaseBlock(input.localBases)}
 ## RULES
-- Do NOT switch branches. Do NOT delete branches. Do NOT push.
-- Do NOT modify repos that aren't in the "REPOS IN SCOPE" list above.${manifest.references.length > 0 ? '\n- Do NOT modify or commit anything inside the "READ-ONLY REFERENCE FILES" paths.' : ''}
+- Do NOT switch branches. Do NOT delete branches. Do NOT push. Do NOT reset or rebase the branch onto another base.
+- Do NOT modify repos that aren't in the "REPOS IN SCOPE" list above.${manifest.references.length > 0 ? '\n- Do NOT modify or commit anything inside the "READ-ONLY REFERENCE FILES" paths.' : ''}${(manifest.related ?? []).length > 0 ? '\n- Do NOT modify or commit anything inside the "RELATED REPOS" paths; if the change needs the other side to change, say so under Follow-ups.' : ''}
 - Do NOT create new branches.
 - All commits must land on \`${branchName}\` in their respective repos.
 - If the ticket turns out to be unbuildable as specified (missing info, blocked by external dependency), STOP, write a short explanation to ${doneFile}, and exit. Do not push broken code just to satisfy the done signal.

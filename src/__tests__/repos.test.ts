@@ -11,6 +11,14 @@ import {
   DEFAULT_BASE,
   DEFAULT_BRANCH_PATTERN,
   DEFAULT_TRANSITION_AFTER_PUSH,
+  DEFAULT_REVIEW_CHECKLIST,
+  effectiveReviewChecklist,
+  parseBaseLocalSpec,
+  resolveLocalBases,
+  refResolves,
+  rebaseOntoBase,
+  cutTicketBranch,
+  RepoManifest,
 } from '../repos';
 
 let TEST_ROOT: string;
@@ -250,5 +258,208 @@ describe('preflightRepos', () => {
     );
     expect(result.ok).toBe(false);
     expect(result.issues[0].kind).toBe('base-missing');
+  });
+});
+
+describe('repos manifest: related + review checklist', () => {
+  beforeEach(() => {
+    TEST_ROOT = freshRoot();
+  });
+  afterEach(() => {
+    if (existsSync(TEST_ROOT)) rmSync(TEST_ROOT, { recursive: true, force: true });
+  });
+
+  it('defaults related to [] and review to the default checklist', () => {
+    const path = writeYaml(join(TEST_ROOT, 'repos.yaml'), 'repos:\n  - path: /tmp/api\n');
+    const m = loadRepoManifest(path)!;
+    expect(m.related).toEqual([]);
+    expect(m.review).toEqual({ checklist: [], replaceDefaultChecklist: false });
+    expect(effectiveReviewChecklist(m)).toEqual([...DEFAULT_REVIEW_CHECKLIST]);
+  });
+
+  it('parses related repos with role and ~ expansion', () => {
+    const path = writeYaml(join(TEST_ROOT, 'repos.yaml'), `
+repos:
+  - path: /tmp/api
+related:
+  - path: ~/work/bridge
+    role: bridge producer/consumer
+  - path: /abs/other-api
+`);
+    const m = loadRepoManifest(path)!;
+    expect(m.related).toHaveLength(2);
+    expect(m.related![0].path).toMatch(/\/work\/bridge$/);
+    expect(m.related![0].path.startsWith('~')).toBe(false);
+    expect(m.related![0].role).toBe('bridge producer/consumer');
+    expect(m.related![1]).toEqual({ path: '/abs/other-api', role: undefined });
+  });
+
+  it('rejects a related entry without a path', () => {
+    const path = writeYaml(join(TEST_ROOT, 'repos.yaml'), 'repos:\n  - path: /tmp/api\nrelated:\n  - role: x\n');
+    expect(() => loadRepoManifest(path)).toThrow(/related\[0\] is missing required 'path'/);
+  });
+
+  it('rejects related that is not a list', () => {
+    const path = writeYaml(join(TEST_ROOT, 'repos.yaml'), 'repos:\n  - path: /tmp/api\nrelated: /tmp/x\n');
+    expect(() => loadRepoManifest(path)).toThrow(/'related' must be a list/);
+  });
+
+  it('rejects a path listed in both repos and related', () => {
+    const path = writeYaml(join(TEST_ROOT, 'repos.yaml'), 'repos:\n  - path: /tmp/api\nrelated:\n  - path: /tmp/api\n');
+    expect(() => loadRepoManifest(path)).toThrow(/both 'repos' and 'related'/);
+  });
+
+  it('extends the default checklist with manifest items', () => {
+    const path = writeYaml(join(TEST_ROOT, 'repos.yaml'), `
+repos:
+  - path: /tmp/api
+review:
+  checklist:
+    - Status codes are single letters; blank means active.
+`);
+    const list = effectiveReviewChecklist(loadRepoManifest(path)!);
+    expect(list).toHaveLength(DEFAULT_REVIEW_CHECKLIST.length + 1);
+    expect(list[list.length - 1]).toBe('Status codes are single letters; blank means active.');
+  });
+
+  it('replaces the default checklist when replaceDefaultChecklist is true', () => {
+    const path = writeYaml(join(TEST_ROOT, 'repos.yaml'), `
+repos:
+  - path: /tmp/api
+review:
+  replaceDefaultChecklist: true
+  checklist: [only this]
+`);
+    expect(effectiveReviewChecklist(loadRepoManifest(path)!)).toEqual(['only this']);
+  });
+
+  it('treats a manifest object without review as using the default list', () => {
+    const m: RepoManifest = { defaultBase: 'd', branchPattern: 'b', repos: [], references: [], transitionAfterPush: 't' };
+    expect(effectiveReviewChecklist(m)).toEqual([...DEFAULT_REVIEW_CHECKLIST]);
+  });
+
+  it('rejects malformed checklist values', () => {
+    const notList = writeYaml(join(TEST_ROOT, 'a.yaml'), 'repos:\n  - path: /tmp/api\nreview:\n  checklist: nope\n');
+    expect(() => loadRepoManifest(notList)).toThrow(/review.checklist must be a list/);
+    const blank = writeYaml(join(TEST_ROOT, 'b.yaml'), 'repos:\n  - path: /tmp/api\nreview:\n  checklist: ["  "]\n');
+    expect(() => loadRepoManifest(blank)).toThrow(/review.checklist\[0\]/);
+    const badFlag = writeYaml(join(TEST_ROOT, 'c.yaml'), 'repos:\n  - path: /tmp/api\nreview:\n  replaceDefaultChecklist: yes please\n');
+    expect(() => loadRepoManifest(badFlag)).toThrow(/replaceDefaultChecklist/);
+  });
+
+  it('default checklist covers the eleven standing failure modes', () => {
+    expect(DEFAULT_REVIEW_CHECKLIST).toHaveLength(11);
+    const joined = DEFAULT_REVIEW_CHECKLIST.join('\n');
+    for (const word of ['Sentinel', 'Both directions', 'Field ownership', 'Bypass', 'Re-entry', 'Concurrency', 'premise', 'Constructor', 'Consistency with the rest', 'Stale read-modify-write', 'Who else must act']) {
+      expect(joined).toContain(word);
+    }
+  });
+});
+
+describe('--base-local spec', () => {
+  it('parses a bare ref as the default', () => {
+    const s = parseBaseLocalSpec('stack/week-1');
+    expect(s.defaultRef).toBe('stack/week-1');
+    expect(s.perRepo.size).toBe(0);
+  });
+
+  it('parses repoPath=ref pairs alongside a bare ref', () => {
+    const s = parseBaseLocalSpec('/r/api=stack/api, /r/ui=stack/ui,main');
+    expect(s.defaultRef).toBe('main');
+    expect(s.perRepo.get('/r/api')).toBe('stack/api');
+    expect(s.perRepo.get('/r/ui')).toBe('stack/ui');
+  });
+
+  it('rejects empty, malformed, unsafe and duplicate bare refs', () => {
+    expect(() => parseBaseLocalSpec(' , ')).toThrow(/needs a ref/);
+    expect(() => parseBaseLocalSpec('/r/api=')).toThrow(/malformed/);
+    expect(() => parseBaseLocalSpec('main; rm -rf /')).toThrow(/unsupported ref/);
+    expect(() => parseBaseLocalSpec('a..b')).toThrow(/unsupported ref/);
+    expect(() => parseBaseLocalSpec('a,b')).toThrow(/more than one bare ref/);
+  });
+
+  const repos = [
+    { path: '/r/api', base: 'develop' },
+    { path: '/r/ui', base: 'develop' },
+  ];
+
+  it('applies a bare ref only where it exists; the rest fall back to origin/<base>', () => {
+    const exists = (p: string, ref: string) => p === '/r/api' && ref === 'stack';
+    const out = resolveLocalBases(repos, parseBaseLocalSpec('stack'), exists);
+    expect([...out.localBases]).toEqual([['/r/api', 'stack']]);
+    expect(out.fallback).toEqual(['/r/ui']);
+  });
+
+  it('explicit pairs win over the bare ref and must exist', () => {
+    const exists = () => true;
+    const out = resolveLocalBases(repos, parseBaseLocalSpec('/r/ui=ui-stack,stack'), exists);
+    expect(out.localBases.get('/r/ui')).toBe('ui-stack');
+    expect(out.localBases.get('/r/api')).toBe('stack');
+    expect(() => resolveLocalBases(repos, parseBaseLocalSpec('/r/ui=gone'), () => false)).toThrow(/does not exist in \/r\/ui/);
+  });
+
+  it('rejects a pair naming a repo outside the ticket scope', () => {
+    expect(() => resolveLocalBases(repos, parseBaseLocalSpec('/r/other=x'), () => true)).toThrow(/not one of this ticket's repos/);
+  });
+
+  it('throws when the bare ref exists nowhere', () => {
+    expect(() => resolveLocalBases(repos, parseBaseLocalSpec('stack'), () => false)).toThrow(/any of this ticket's repos/);
+  });
+});
+
+describe('--base-local git flow (real repo, no origin needed)', () => {
+  beforeEach(() => {
+    TEST_ROOT = freshRoot();
+  });
+  afterEach(() => {
+    if (existsSync(TEST_ROOT)) rmSync(TEST_ROOT, { recursive: true, force: true });
+  });
+
+  it('cuts from the local ref and rebases onto it after the ref moves', () => {
+    const dir = join(TEST_ROOT, 'repo');
+    initRepo(dir);
+    const git = (cmd: string) => execSync(`git ${cmd}`, { cwd: dir, encoding: 'utf-8' }).trim();
+    git('checkout -q -b stack');
+    writeFileSync(join(dir, 'stack.txt'), 'stack 1\n');
+    git('add stack.txt');
+    git('commit -q -m stack1');
+    expect(refResolves(dir, 'stack')).toBe(true);
+    expect(refResolves(dir, 'no-such-ref')).toBe(false);
+
+    const repo = { path: dir, base: 'develop' };
+    cutTicketBranch(repo, 'ticket/T-1', 'stack');
+    writeFileSync(join(dir, 'ticket.txt'), 'ticket\n');
+    git('add ticket.txt');
+    git('commit -q -m ticket');
+
+    // The local stack moves on while the ticket was being built
+    git('checkout -q stack');
+    writeFileSync(join(dir, 'stack2.txt'), 'stack 2\n');
+    git('add stack2.txt');
+    git('commit -q -m stack2');
+    const stackTip = git('rev-parse stack');
+    git('checkout -q ticket/T-1');
+
+    expect(rebaseOntoBase(repo, 'stack')).toEqual({ status: 'clean' });
+    expect(git('rev-parse HEAD~1')).toBe(stackTip);
+  });
+});
+
+import { continueRebase, rebaseInProgress } from '../repos';
+import { execSync as _exec } from 'child_process';
+import { mkdtempSync as _mk, rmSync as _rm } from 'fs';
+import { tmpdir as _tmp } from 'os';
+import { join as _join } from 'path';
+
+describe('continueRebase after merge-fix already finished the rebase', () => {
+  it('treats "no rebase in progress" as clean', () => {
+    const d = _mk(_join(_tmp(), 'tk-rebase-'));
+    try {
+      _exec('git init -q && git -c user.email=a@b -c user.name=t commit -q --allow-empty -m init', { cwd: d });
+      expect(rebaseInProgress(d)).toBe(false);
+      expect(continueRebase(d)).toEqual({ status: 'clean' });
+    } finally {
+      _rm(d, { recursive: true, force: true });
+    }
   });
 });

@@ -6,7 +6,7 @@
 import { oneTurnRule } from './one-turn';
 import { TicketDetail } from '../jira';
 import { RepoManifest } from '../repos';
-import { renderReferenceBlock } from './ticket-common';
+import { renderReferenceBlock, renderRelatedBlock } from './ticket-common';
 
 export interface TicketFixPromptInput {
   ticket: TicketDetail;
@@ -15,11 +15,15 @@ export interface TicketFixPromptInput {
   findingsPath: string;
   planPath?: string;
   doneFile: string;
+  /** --base-local runs: repo path -> the local ref the branch is intentionally built on. */
+  localBases?: Record<string, string>;
 }
 
 export function buildTicketFixPrompt(input: TicketFixPromptInput): string {
-  const { ticket, manifest, branchName, findingsPath, planPath, doneFile } = input;
-  const repos = manifest.repos.map((r) => `- ${r.path}`).join('\n');
+  const { ticket, manifest, branchName, findingsPath, planPath, doneFile, localBases } = input;
+  const repos = manifest.repos
+    .map((r) => `- ${r.path}${localBases?.[r.path] ? ` (built on the local ref \`${localBases[r.path]}\` on purpose)` : ''}`)
+    .join('\n');
 
   return `
 # TICKET REVIEW FIXES
@@ -29,18 +33,19 @@ A reviewer found problems with the work for **${ticket.key}** (${ticket.summary}
 
 ## REPOS
 ${repos}
-${planPath ? `\nThe original plan is at \`${planPath}\`.\n` : ''}${renderReferenceBlock(manifest)}
+${planPath ? `\nThe original plan is at \`${planPath}\`.\n` : ''}${renderReferenceBlock(manifest)}${renderRelatedBlock(manifest)}
 Each repo's CLAUDE.md / CLAUDE.local.md house rules apply.
 
 ## PROCESS
-1. Read each finding and check it against the code (and the references, when it is a fidelity finding). If a finding is wrong, don't change code for it; say why in the done file.
+1. Read each finding and open its \`evidence\` citations; check it against the code (and the references, when it is a fidelity finding). If a finding is wrong, don't change code for it; say why in the done file.
 2. Fix the real ones. Update or add tests so each fix is covered.
 3. Run the tests for every area you touched; they must pass.
 4. Commit per repo with a message starting \`${ticket.key}:\` (stage explicit paths only).
 
 ## RULES
 - Do NOT switch, create or delete branches. Do NOT push. Stay on \`${branchName}\`.
-- Do NOT modify repos outside the list above or anything in the reference paths.
+- Do NOT rebase, reset or move the branch onto another base; the orchestrator rebases at the end. A finding that asks for a different base is not a code fix: reject it in the done file.
+- Do NOT modify repos outside the list above or anything in the reference or related-repo paths.
 
 ${oneTurnRule(doneFile)}
 
