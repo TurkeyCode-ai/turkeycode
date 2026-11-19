@@ -938,6 +938,13 @@ program
   .option('--build-model <model>', 'Model for the build session (e.g. opus)')
   .option('--deep', 'Deep tier: plan session before the build, then review → fix rounds before pushing')
   .option('--review-rounds <n>', 'Deep tier: max review → fix rounds (default 2)')
+  .option(
+    '--base-local <ref>',
+    'Cut the ticket branch from a LOCAL ref and rebase onto it instead of origin/<base> (no fetch). ' +
+      '<ref> applies to every scoped repo where it exists (others keep origin/<base>); ' +
+      'use <repoPath>=<ref>[,<repoPath>=<ref>] to pin per repo',
+  )
+  .option('--no-push', 'Stop after review/fix + rebase: leave the branch local, print branch + SHA per repo, skip push and the Jira transition')
   .action(async (key: string, options) => {
     activateAgent(options.agent);
     const reviewRounds = options.reviewRounds != null ? Number(options.reviewRounds) : undefined;
@@ -955,6 +962,9 @@ program
         buildModel: options.buildModel,
         deep: options.deep,
         reviewRounds,
+        baseLocal: options.baseLocal,
+        // commander maps --no-push to `push: false` (default true)
+        noPush: options.push === false,
       });
       await orch.runTicket(key);
       console.log('');

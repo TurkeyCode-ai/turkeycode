@@ -24,16 +24,18 @@ export interface MergeFixPromptInput {
   contextKey?: string;
   /** Optional one-line context summary. */
   contextSummary?: string;
+  /** Rebase mode: the exact ref being rebased onto, when it isn't origin/<baseBranch> (e.g. a local stack ref). */
+  rebaseOnto?: string;
 }
 
 export function buildMergeFixPrompt(input: MergeFixPromptInput): string {
   const {
     repoPath, branchName, baseBranch, conflictedPaths, doneFile,
-    mode = 'rebase', contextKey, contextSummary,
+    mode = 'rebase', contextKey, contextSummary, rebaseOnto,
   } = input;
 
   const isRebase = mode === 'rebase';
-  const baseRef = isRebase ? `origin/${baseBranch}` : baseBranch;
+  const baseRef = isRebase ? (rebaseOnto ?? `origin/${baseBranch}`) : baseBranch;
   const headMeaning = isRebase
     ? 'the `HEAD` side is what the base branch looks like now; the other side is your branch\'s change'
     : `the \`HEAD\` side is the base branch (\`${baseBranch}\`); the \`${branchName}\` side is the branch being merged in`;

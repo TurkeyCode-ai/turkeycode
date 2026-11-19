@@ -24,6 +24,11 @@ import {
   continueRebase,
   abortRebase,
   pushBranch,
+  parseBaseLocalSpec,
+  resolveLocalBases,
+  resolveLocalBase,
+  headSha,
+  BaseLocalSpec,
   renderBranchName,
   slugify,
   RepoEntry,
@@ -67,6 +72,14 @@ export interface TicketRunOptions {
   deep?: boolean;
   /** Deep tier: max review → fix rounds (default 2). */
   reviewRounds?: number;
+  /**
+   * Cut the ticket branch from a LOCAL ref and rebase onto it instead of
+   * origin/<base>. Comma-separated `<ref>` (every scoped repo where it exists;
+   * others keep origin/<base>) and/or `<repoPath>=<ref>` (that repo; must exist).
+   */
+  baseLocal?: string;
+  /** Stop after review/fix (+ rebase): leave branches local, print branch + SHA, no push / Jira transition. */
+  noPush?: boolean;
 }
 
 export interface ReviewFinding {
@@ -76,6 +89,25 @@ export interface ReviewFinding {
   line?: number;
   summary: string;
   fix?: string;
+  /** `file:line` citations backing the finding. Required; uncited findings are dropped. */
+  evidence?: string[];
+}
+
+/** A "checked and OK" claim the reviewer relied on, with its citations. */
+export interface VerifiedClaim {
+  claim: string;
+  evidence: string[];
+}
+
+export interface ReviewResult {
+  findings: ReviewFinding[];
+  verified: VerifiedClaim[];
+  /** Findings discarded for lacking a `file:line` citation. */
+  droppedFindings: number;
+  /** Verified claims discarded for lacking a `file:line` citation. */
+  droppedVerified: number;
+  /** False when nothing cited survived: the reviewer can't have checked anything, so it isn't "clean". */
+  reviewed: boolean;
 }
 
 export interface TriageVerdict {
@@ -110,6 +142,10 @@ export class TicketOrchestrator {
   private buildModel: string | undefined;
   private deep: boolean;
   private reviewRounds: number;
+  private baseLocal: BaseLocalSpec | undefined;
+  /** Repo path -> local ref for the current run (--base-local), handed to the review and fix prompts. */
+  private currentLocalBases = new Map<string, string>();
+  private noPush: boolean;
 
   constructor(options: TicketRunOptions = {}) {
     if (!isJiraConfigured()) {
@@ -120,6 +156,9 @@ export class TicketOrchestrator {
     this.buildModel = options.buildModel;
     this.deep = options.deep ?? false;
     this.reviewRounds = options.reviewRounds ?? DEFAULT_REVIEW_ROUNDS;
+    // Parse up front so a malformed --base-local fails before any session runs.
+    this.baseLocal = options.baseLocal ? parseBaseLocalSpec(options.baseLocal) : undefined;
+    this.noPush = options.noPush ?? false;
     this.jira = createJiraClient();
     this.spawner = createSpawner({ verbose: this.verbose });
     this.manifest = loadRepoManifest(options.manifestPath ?? DEFAULT_MANIFEST_PATH);
@@ -411,8 +450,20 @@ export class TicketOrchestrator {
     });
     console.log(`[ticket] Coding path — branch name: ${branchName}`);
 
+    // 0. --base-local: which scoped repos build on a local ref instead of origin/<base>
+    let localBases = new Map<string, string>();
+    if (this.baseLocal) {
+      const resolved = resolveLocalBases(scopedManifest.repos, this.baseLocal);
+      localBases = resolved.localBases;
+      for (const [path, ref] of localBases) console.log(`[ticket] --base-local: ${path} builds on local ${ref}`);
+      for (const path of resolved.fallback) {
+        console.log(`[ticket] --base-local: ref not in ${path}; it keeps origin/<base>`);
+      }
+    }
+
     // 1. Preflight
-    const preflight = preflightRepos(scopedManifest, { allowDirty: false });
+    this.currentLocalBases = localBases;
+    const preflight = preflightRepos(scopedManifest, { allowDirty: false, localBases });
     if (!preflight.ok) {
       const summary = preflight.issues.map((i) => `  - [${i.kind}] ${i.repo}: ${i.detail}`).join('\n');
       throw new Error(`Preflight failed:\n${summary}`);
@@ -421,6 +472,14 @@ export class TicketOrchestrator {
     // 2. Sync base + cut branch in scoped repos; record base SHAs for touched-repo detection
     const baseShas = new Map<string, string>();
     for (const repo of scopedManifest.repos) {
+      const localRef = localBases.get(repo.path);
+      if (localRef) {
+        const sha = resolveLocalBase(repo, localRef);
+        console.log(`[ticket] Using local base ${localRef} (${sha.slice(0, 10)}) in ${repo.path}`);
+        baseShas.set(repo.path, sha);
+        cutTicketBranch(repo, branchName, localRef);
+        continue;
+      }
       console.log(`[ticket] Syncing ${repo.path} (base=${repo.base})`);
       const sha = syncBase(repo);
       baseShas.set(repo.path, sha);
@@ -447,6 +506,7 @@ export class TicketOrchestrator {
       triageSummary: verdict.summary,
       doneFile: buildDoneFile,
       planPath,
+      localBases: Object.fromEntries(this.currentLocalBases),
     });
 
     const buildModel = this.buildModel ?? getModelForPhase('build');
@@ -500,7 +560,9 @@ export class TicketOrchestrator {
     }
 
     // 5. Rebase + push each touched repo, invoking merge-fix on conflict
+    //    (--no-push: rebase only; --base-local: rebase onto the local ref, no fetch)
     const pushed: { repo: RepoEntry; remoteUrl?: string }[] = [];
+    const local: { repo: RepoEntry; sha: string }[] = [];
     const failed: { repo: RepoEntry; reason: string }[] = [];
 
     let mergeFixMs = 0;
@@ -508,13 +570,16 @@ export class TicketOrchestrator {
 
     for (const repo of touched) {
       const repoStart = Date.now();
-      console.log(`[ticket] Rebasing ${repo.path} onto origin/${repo.base}...`);
-      let rebase = rebaseOntoBase(repo);
+      const step = planFinalizeStep(repo, { localRef: localBases.get(repo.path), noPush: this.noPush });
+      console.log(`[ticket] Rebasing ${repo.path} onto ${step.rebaseOnto}...`);
+      let rebase = rebaseOntoBase(repo, step.localRef);
 
       while (rebase.status === 'conflict') {
         console.log(`[ticket] Conflict(s) in ${repo.path}: ${rebase.conflictedPaths?.join(', ')}`);
         const mergeFixStart = Date.now();
-        const resolved = await this.runMergeFix(ticket, repo, branchName, rebase.conflictedPaths ?? [], ticketDir, verdict);
+        const resolved = await this.runMergeFix(
+          ticket, repo, branchName, rebase.conflictedPaths ?? [], ticketDir, verdict, step.localRef,
+        );
         mergeFixMs += Date.now() - mergeFixStart;
         if (!resolved) {
           abortRebase(repo.path);
@@ -531,6 +596,13 @@ export class TicketOrchestrator {
         if (!failed.find((f) => f.repo.path === repo.path)) {
           failed.push({ repo, reason: rebase.detail ?? 'rebase error' });
         }
+        continue;
+      }
+
+      if (!step.push) {
+        local.push({ repo, sha: headSha(repo.path) });
+        audit('ticket_branch_local', { details: { ticket: ticket.key, repo: repo.path, branch: branchName } });
+        rebasePushMs += Date.now() - repoStart;
         continue;
       }
 
@@ -558,6 +630,12 @@ export class TicketOrchestrator {
         commentLines.push(`- ${p.repo.path}${p.remoteUrl ? ` — ${p.remoteUrl}` : ''}`);
       }
     }
+    if (local.length > 0) {
+      commentLines.push('Local branches (--no-push; not on the remote yet):');
+      for (const l of local) {
+        commentLines.push(`- ${l.repo.path} @ ${l.sha.slice(0, 12)}`);
+      }
+    }
     if (this.deep) {
       if (openFindings.length === 0) {
         commentLines.push('', 'Automated review: clean.');
@@ -576,10 +654,27 @@ export class TicketOrchestrator {
     }
     await this.jira.addComment(ticket.key, commentLines.join('\n'));
 
+    if (local.length > 0) {
+      // Machine-readable hand-off for whoever folds the local branch into their stack.
+      writeFileSync(
+        join(ticketDir, 'local-branches.json'),
+        JSON.stringify({ branch: branchName, repos: local.map((l) => ({ path: l.repo.path, sha: l.sha })) }, null, 2),
+      );
+      console.log('');
+      console.log(`[ticket] --no-push: branch ${branchName} left local:`);
+      for (const l of local) console.log(`[ticket]   ${l.repo.path}  ${branchName}  ${l.sha}`);
+    }
+
     if (failed.length > 0) {
       throw new Error(
-        `Ticket ${ticket.key}: ${pushed.length} repo(s) pushed, ${failed.length} failed. See Jira comment for details.`,
+        `Ticket ${ticket.key}: ${pushed.length} repo(s) pushed, ${local.length} kept local, ${failed.length} failed. See Jira comment for details.`,
       );
+    }
+
+    // --no-push: nothing is on the remote, so a "ready for review" transition would be a lie.
+    if (this.noPush) {
+      console.log(`[ticket] --no-push: skipping Jira transition to "${manifest.transitionAfterPush}".`);
+      return;
     }
 
     // 7. Transition the ticket to the manifest-configured target status.
@@ -607,6 +702,7 @@ export class TicketOrchestrator {
         triageSummary: verdict.summary,
         planPath,
         doneFile,
+        localBases: Object.fromEntries(this.currentLocalBases),
       }),
       timeoutMs: TICKET_PLAN_TIMEOUT_MS,
       sessionName: `plan-${ticket.key}`,
@@ -623,6 +719,11 @@ export class TicketOrchestrator {
   /**
    * Review the ticket branches and fix what the reviewer finds, up to
    * reviewRounds times. Returns the findings still open after the last round.
+   *
+   * Rounds use different lenses (see reviewLens), so a clean round does NOT end
+   * the loop early: the next round looks at the change from another angle. A fix
+   * session only runs after a round that found something, and never after the
+   * last round (its findings are reported as still open).
    */
   private async runReviewRounds(
     ticket: TicketDetail,
@@ -639,40 +740,78 @@ export class TicketOrchestrator {
     timings.review = 0;
     timings.fix = 0;
 
-    for (let round = 1; round <= this.reviewRounds; round++) {
+    // The last scheduled round may still find something (often a problem in the previous round's fix). Rather than
+    // leaving it open, run ONE extra fix → verify round; findings left after that are reported as open.
+    let lastRound = this.reviewRounds;
+    for (let round = 1; round <= lastRound; round++) {
       const findingsPath = join(ticketDir, `review-${round}.json`);
       const reviewDone = join(ticketDir, `review-${round}.done`);
-      if (existsSync(reviewDone)) unlinkSafe(reviewDone);
 
-      console.log(`[ticket] Review round ${round}/${this.reviewRounds}...`);
-      const reviewStart = Date.now();
-      const review = await this.spawner.run({
-        cwd: touched[0].path,
-        prompt: buildTicketReviewPrompt({
-          ticket,
-          manifest,
-          repos: touched.map((r) => ({ path: r.path, baseSha: baseShas.get(r.path)! })),
-          branchName,
-          planPath,
-          priorFindingsPath,
-          findingsPath,
+      // "Not reviewed" handling (nothing cited survived): re-run the round ONCE
+      // with a pointed reminder, then fail the run the same way a crashed review
+      // session does (throw before anything is pushed). This is the least
+      // invasive option: it reuses the existing failure path, never silently
+      // reports "clean", and costs at most one extra session per round.
+      let result: ReviewResult | undefined;
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        if (existsSync(reviewDone)) unlinkSafe(reviewDone);
+        if (existsSync(findingsPath)) unlinkSafe(findingsPath);
+        console.log(`[ticket] Review round ${round}/${lastRound}${attempt > 1 ? ' (retry: nothing cited)' : ''}...`);
+        const reviewStart = Date.now();
+        const review = await this.spawner.run({
+          cwd: touched[0].path,
+          prompt: buildTicketReviewPrompt({
+            ticket,
+            manifest,
+            repos: touched.map((r) => ({ path: r.path, baseSha: baseShas.get(r.path)!, localBase: this.currentLocalBases.get(r.path) })),
+            branchName,
+            planPath,
+            priorFindingsPath,
+            findingsPath,
+            doneFile: reviewDone,
+            round,
+            totalRounds: lastRound,
+            uncitedRetry: attempt > 1,
+          }),
+          timeoutMs: TICKET_REVIEW_TIMEOUT_MS,
+          sessionName: `review-${round}${attempt > 1 ? `-retry` : ''}-${ticket.key}`,
           doneFile: reviewDone,
-        }),
-        timeoutMs: TICKET_REVIEW_TIMEOUT_MS,
-        sessionName: `review-${round}-${ticket.key}`,
-        doneFile: reviewDone,
-        model: getModelForPhase('ticket-review'),
-        mcpConfig: this.mcpConfig,
-      });
-      timings.review += Date.now() - reviewStart;
-      if (review.exitCode !== 0 || !existsSync(findingsPath)) {
-        throw new Error(`Review session failed for ${ticket.key} (round ${round}, exit ${review.exitCode})`);
+          model: getModelForPhase('ticket-review'),
+          mcpConfig: this.mcpConfig,
+        });
+        timings.review += Date.now() - reviewStart;
+        if (review.exitCode !== 0 || !existsSync(findingsPath) || !readFileSync(findingsPath, 'utf-8').trim()) {
+          throw new Error(`Review session failed for ${ticket.key} (round ${round}, exit ${review.exitCode})`);
+        }
+
+        result = parseReviewResult(readFileSync(findingsPath, 'utf-8'));
+        if (result.droppedFindings > 0 || result.droppedVerified > 0) {
+          console.warn(
+            `[ticket] Review round ${round}: dropped ${result.droppedFindings} uncited finding(s) and ` +
+              `${result.droppedVerified} uncited verified claim(s)`,
+          );
+        }
+        if (result.reviewed) break;
+        console.warn(`[ticket] Review round ${round}: no cited findings or verified claims — not reviewed`);
+      }
+      if (!result || !result.reviewed) {
+        throw new Error(
+          `Review round ${round} for ${ticket.key} produced nothing cited twice — treating the branch as not reviewed. ` +
+            `Branches are left local and unpushed; see ${findingsPath}.`,
+        );
       }
 
-      findings = parseReviewFindings(readFileSync(findingsPath, 'utf-8'));
-      console.log(`[ticket] Review round ${round}: ${findings.length} finding(s)`);
-      if (findings.length === 0) return [];
-      if (round === this.reviewRounds) break;
+      findings = result.findings;
+      console.log(
+        `[ticket] Review round ${round}: ${findings.length} finding(s), ${result.verified.length} verified claim(s)`,
+      );
+      if (round === lastRound) {
+        // Only for multi-round runs: --review-rounds 1 means exactly one review.
+        if (findings.length === 0 || lastRound > this.reviewRounds || this.reviewRounds < 2) break;
+        lastRound++;
+        console.log(`[ticket] Last scheduled round found ${findings.length} finding(s): one extra fix → verify round (${lastRound}).`);
+      }
+      if (findings.length === 0) continue; // next round, next lens; nothing to fix
 
       const fixDone = join(ticketDir, `fix-${round}.done`);
       if (existsSync(fixDone)) unlinkSafe(fixDone);
@@ -680,7 +819,7 @@ export class TicketOrchestrator {
       const fixStart = Date.now();
       const fix = await this.spawner.run({
         cwd: touched[0].path,
-        prompt: buildTicketFixPrompt({ ticket, manifest, branchName, findingsPath, planPath, doneFile: fixDone }),
+        prompt: buildTicketFixPrompt({ ticket, manifest, branchName, findingsPath, planPath, doneFile: fixDone, localBases: Object.fromEntries(this.currentLocalBases) }),
         timeoutMs: FIX_TIMEOUT_MS,
         sessionName: `fix-${round}-${ticket.key}`,
         doneFile: fixDone,
@@ -703,6 +842,7 @@ export class TicketOrchestrator {
     conflictedPaths: string[],
     ticketDir: string,
     verdict: TriageVerdict,
+    rebaseOnto?: string,
   ): Promise<boolean> {
     const doneFile = join(ticketDir, `merge-fix-${sanitizeFilename(repo.path)}.done`);
     if (existsSync(doneFile)) unlinkSafe(doneFile);
@@ -711,6 +851,7 @@ export class TicketOrchestrator {
       repoPath: repo.path,
       branchName,
       baseBranch: repo.base,
+      rebaseOnto,
       conflictedPaths,
       mode: 'rebase',
       contextKey: ticket.key,
@@ -798,7 +939,74 @@ export function parseReviewFindings(raw: string): ReviewFinding[] {
       line: typeof f.line === 'number' ? f.line : undefined,
       summary: typeof f.summary === 'string' ? f.summary : JSON.stringify(f),
       fix: typeof f.fix === 'string' ? f.fix : undefined,
+      evidence: Array.isArray(f.evidence) ? citations(f.evidence) : undefined,
     }));
+}
+
+/** `path:line` or `path:start-end` (path non-empty; trailing context after whitespace is tolerated). */
+const CITATION = /^\S.*:\d+(?:\s*[-–]\s*\d+)?(?:\s.*)?$/;
+
+export function isCitation(value: unknown): value is string {
+  return typeof value === 'string' && CITATION.test(value.trim());
+}
+
+function citations(raw: unknown): string[] {
+  return Array.isArray(raw) ? raw.filter(isCitation).map((c) => c.trim()) : [];
+}
+
+/**
+ * Parse a review findings file and enforce the evidence rule: findings and
+ * verified claims without at least one `file:line` citation are dropped (and
+ * counted). `reviewed` is false when nothing cited survived — zero findings
+ * AND zero verified claims means the reviewer showed no work, which must not
+ * be mistaken for a clean branch.
+ */
+export function parseReviewResult(raw: string): ReviewResult {
+  const all = parseReviewFindings(raw);
+  const findings = all.filter((f) => (f.evidence?.length ?? 0) > 0);
+  const parsed = JSON.parse(raw) as { verified?: unknown };
+  const rawVerified = Array.isArray(parsed.verified) ? parsed.verified : [];
+  const verified: VerifiedClaim[] = [];
+  let droppedVerified = 0;
+  for (const v of rawVerified) {
+    const rec = typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : undefined;
+    const evidence = citations(rec?.evidence);
+    if (!rec || typeof rec.claim !== 'string' || !rec.claim.trim() || evidence.length === 0) {
+      droppedVerified++;
+      continue;
+    }
+    verified.push({ claim: rec.claim, evidence });
+  }
+  return {
+    findings,
+    verified,
+    droppedFindings: all.length - findings.length,
+    droppedVerified,
+    reviewed: findings.length > 0 || verified.length > 0,
+  };
+}
+
+export interface FinalizeStep {
+  /** Human-readable rebase target (local ref or origin/<base>). */
+  rebaseOnto: string;
+  /** Set under --base-local: rebase onto this local ref without fetching. */
+  localRef?: string;
+  /** False under --no-push: leave the branch local after the rebase. */
+  push: boolean;
+}
+
+/**
+ * What the post-review step does for one touched repo. --base-local swaps the
+ * rebase target (no fetch); --no-push keeps the rebase (so the branch sits on
+ * top of its base, ready to fold in) but skips the push, the "pushed" audit and
+ * the Jira transition. Billing/worklog is unaffected.
+ */
+export function planFinalizeStep(repo: RepoEntry, opts: { localRef?: string; noPush: boolean }): FinalizeStep {
+  return {
+    rebaseOnto: opts.localRef ?? `origin/${repo.base}`,
+    localRef: opts.localRef,
+    push: !opts.noPush,
+  };
 }
 
 function sanitizeFilename(name: string): string {
