@@ -7,7 +7,7 @@
 import { oneTurnRule } from './one-turn';
 import { TicketDetail } from '../jira';
 import { RepoManifest } from '../repos';
-import { renderReferenceBlock, renderTicketBlock } from './ticket-common';
+import { renderReferenceBlock, renderRelatedBlock, renderTicketBlock, renderLocalBaseBlock } from './ticket-common';
 
 export interface TicketPlanPromptInput {
   ticket: TicketDetail;
@@ -17,6 +17,8 @@ export interface TicketPlanPromptInput {
   /** Where the plan must be written. */
   planPath: string;
   doneFile: string;
+  /** --base-local runs: repo path -> local ref the branch is built on. */
+  localBases?: Record<string, string>;
 }
 
 export function buildTicketPlanPrompt(input: TicketPlanPromptInput): string {
@@ -31,19 +33,22 @@ export function buildTicketPlanPrompt(input: TicketPlanPromptInput): string {
 
 ## YOUR SINGLE JOB
 Research Jira ticket **${ticket.key}** and write an implementation plan to \`${planPath}\`. A separate build session will implement it. Do NOT edit, stage or commit anything in any repo.
+${renderLocalBaseBlock(input.localBases)}
 
 ${triageSummary ? `## TICKET (triage summary)\n${triageSummary}\n` : ''}
 ${renderTicketBlock(ticket)}
 ${images}
 ## REPOS IN SCOPE
 ${repos}
-${renderReferenceBlock(manifest)}
+${renderReferenceBlock(manifest)}${renderRelatedBlock(manifest)}
 Read each repo's CLAUDE.md / CLAUDE.local.md first; their house rules apply to the plan.
 
 ## WHAT THE PLAN MUST COVER
+0. **Premise check — the ticket may be wrong.** Check the ticket's premise against the references. Does the cited program, field or behaviour actually exist as described? Is there a newer program, a different field, or a different meaning? If the ticket is wrong about the legacy system, say so at the top of the plan, cite what you found (file:line), and plan to the correct behaviour — the build must not inherit the error.
 1. **Source of truth.** If reference paths exist, find the code there that this ticket ports or mirrors. Cite file + paragraph/function for every rule you take from it (conditions, rounding, ordering, which records are read, when recalculation happens). If the references are genuinely silent, say "references silent on X" explicitly.
 2. **Current state.** The existing code paths the change touches (file:line), and existing tests around them.
 3. **Changes per repo.** Files to add/modify and what changes in each. Migrations (with the exact version number the repo's local instructions give), DTO/API shape, UI changes.
+   If the change crosses a boundary (bridge, API, queue, shared table) into a related repo, name the code on the other side (file:line) that sends or reads it, and confirm it can carry the change both ways.
 4. **Tests.** The cases to add or update, including the edge cases the source of truth implies.
 5. **Out of scope / follow-ups.** Anything related but not in the ticket.
 6. **Open questions.** Only real gaps the ticket and references can't answer; for each, the default you recommend.
