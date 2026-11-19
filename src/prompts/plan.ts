@@ -11,21 +11,15 @@ import { PHASE_PLAN_FILE, PLAN_DONE, SPECS_FILE } from '../constants';
 
 export function buildPlanPrompt(
   state: ProjectState,
-  isIterate: boolean = false,
-  hasTicketList: boolean = false
+  isIterate: boolean = false
 ): string {
   let modeBanner: string;
-  if (hasTicketList) {
-    modeBanner = `## MODE: TICKET-LIST (existing codebase, multi-ticket spec)
-A working codebase already exists AND the spec contains a list of N independent work items (tickets/issues). Each ticket is small enough that grouping many into one sprint produces an unverifiable mega-phase.
-
-**HARD RULE: Emit ONE SPRINT PER TICKET.** Do not bundle. Do not group "small ones together." If the spec lists 14 tickets, produce 14 sprints (plus any non-ticket prep sprints the spec requires before them). Each sprint's name must include the ticket ID. Each sprint's scope must reference exactly one ticket.
-
-Sprint 1 is NOT "foundation/scaffolding" — the codebase already exists. Sprint 1 is the first ticket in the list (or the first prep step if the spec requires data-model changes before tickets).`;
-  } else if (isIterate) {
+  if (isIterate) {
     modeBanner = `## MODE: ITERATE (existing codebase)
 A working codebase already exists in this directory. You are NOT scaffolding from scratch.
-Before planning, survey the repo (read CLAUDE.md or AGENTS.md if present, scan top-level dirs, package manifests) so each sprint is grounded in the actual code that exists. Sprint 1 is NOT "foundation/scaffolding" — it's the first chunk of NEW work the spec asks for.`;
+Before planning, survey the repo (read CLAUDE.md or AGENTS.md if present, scan top-level dirs, package manifests) so each sprint is grounded in the actual code that exists. Sprint 1 is NOT "foundation/scaffolding" — it's the first chunk of NEW work the spec asks for.
+
+**If the spec is a list of tickets, emit ONE SPRINT PER TICKET.** You decide whether it is, from what the spec says, not from how it is formatted: a ticket list is a set of independent work items that each stand on their own, usually carrying tracker IDs (\`#14\`, \`PROJ-35\`). A numbered list of features, requirements, or steps is NOT a ticket list. For a ticket list, do not bundle and do not group "small ones together": 14 tickets means 14 sprints (plus any prep sprints the spec requires before them, such as data-model changes), each sprint's name includes its ticket ID, and each sprint's scope references exactly one ticket. Grouping many tickets into one sprint produces an unverifiable mega-phase.`;
   } else {
     modeBanner = `## MODE: GREENFIELD (new project)
 There is no existing code. Sprint 1 must establish the foundation (scaffolding, core entities, baseline app that runs end-to-end).`;
