@@ -11,8 +11,8 @@
 
 import { exec, execSync, spawn, ChildProcess } from 'child_process';
 import { promisify } from 'util';
-import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync, Dirent } from 'fs';
-import { join, extname, relative } from 'path';
+import { existsSync, readFileSync, readdirSync, mkdirSync, writeFileSync, realpathSync, Dirent } from 'fs';
+import { join, extname, relative, isAbsolute } from 'path';
 import { findGodotProjectDir } from './detect-project-type';
 import { trackProcessGroup, untrackProcessGroup } from './spawner';
 
@@ -734,18 +734,68 @@ function detectFrontend(dir: string): { type: FrontendType; found: boolean } {
   return { type: 'unknown', found: false };
 }
 
+/** A running container, as far as project ownership is concerned. */
+export interface RunningContainer {
+  name: string;
+  image: string;
+}
+
+const COMPOSE_DIR_LABEL = 'com.docker.compose.project.working_dir';
+
+/**
+ * Which running containers belong to the project in `workDir`?
+ *
+ * A machine runs containers for many projects at once. Only the ones Compose
+ * started from this project's directory (its working-dir label is `workDir` or
+ * below it) are this project's. Everything else on the daemon is someone
+ * else's database: it says nothing about this project's stack, and it must
+ * not be probed or reported as this project's.
+ *
+ * `psOutput` is `docker ps --format "{{.Names}}\t{{.Image}}\t{{.Label "<COMPOSE_DIR_LABEL>"}}"`.
+ */
+export function containersOwnedBy(psOutput: string, workDir: string): RunningContainer[] {
+  const root = canonicalDir(workDir);
+  const owned: RunningContainer[] = [];
+  for (const line of psOutput.split('\n')) {
+    const [name, image, composeDir] = line.split('\t').map(part => part.trim());
+    if (!name || !composeDir) continue;
+    const rel = relative(root, canonicalDir(composeDir));
+    if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) {
+      owned.push({ name, image: image || '' });
+    }
+  }
+  return owned;
+}
+
+function canonicalDir(dir: string): string {
+  try {
+    return realpathSync(dir);
+  } catch {
+    return dir;
+  }
+}
+
+/** Running containers that belong to this project. Empty when Docker is absent. */
+function projectContainers(workDir: string): RunningContainer[] {
+  try {
+    const ps = execSync(`docker ps --format "{{.Names}}\\t{{.Image}}\\t{{.Label \\"${COMPOSE_DIR_LABEL}\\"}}"`, {
+      encoding: 'utf-8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe']
+    });
+    return containersOwnedBy(ps, workDir);
+  } catch {
+    return [];
+  }
+}
+
 function detectDatabases(workDir: string, backendDir: string): DatabaseType[] {
   const found = new Set<DatabaseType>();
 
-  // 1. Check running Docker containers
-  try {
-    const ps = execSync('docker ps --format "{{.Image}}"', { encoding: 'utf-8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] });
-    for (const line of ps.trim().split('\n').filter(Boolean)) {
-      for (const db of DATABASE_INFO) {
-        if (db.imagePattern.test(line)) found.add(db.type);
-      }
+  // 1. Check this project's running containers (never the rest of the machine's)
+  for (const container of projectContainers(workDir)) {
+    for (const db of DATABASE_INFO) {
+      if (db.imagePattern.test(container.image)) found.add(db.type);
     }
-  } catch {}
+  }
 
   // 2. Check compose files
   const composeFiles = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'];
@@ -1091,21 +1141,13 @@ async function checkDockerServices(workDir: string): Promise<CheckResult> {
 // ═══════════════════════════════════════════
 
 /**
- * Find Docker container name for a given DB type from running containers
+ * Find this project's running container for a given DB type
  */
-function findDbContainer(dbType: DatabaseType): string | null {
+function findDbContainer(workDir: string, dbType: DatabaseType): string | null {
   const dbInfo = DATABASE_INFO.find(d => d.type === dbType);
   if (!dbInfo) return null;
-  try {
-    const ps = execSync('docker ps --format "{{.Names}}\\t{{.Image}}"', {
-      encoding: 'utf-8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe']
-    });
-    for (const line of ps.trim().split('\n').filter(Boolean)) {
-      const [name, image] = line.split('\t');
-      if (dbInfo.imagePattern.test(image || '')) return name;
-    }
-  } catch {}
-  return null;
+  const match = projectContainers(workDir).find(c => dbInfo.imagePattern.test(c.image));
+  return match ? match.name : null;
 }
 
 /**
@@ -1136,7 +1178,7 @@ function checkDatabase(workDir: string, dbType: DatabaseType, backendDir: string
 
   // DynamoDB Local: just check if container is running or port responds
   if (dbType === 'dynamodb') {
-    const container = findDbContainer(dbType);
+    const container = findDbContainer(workDir, dbType);
     if (container) {
       // Try HTTP check (DynamoDB Local responds on port 8000)
       const httpCheck = runCommand(`curl -sf http://localhost:8000`, workDir, 5000);
@@ -1183,7 +1225,7 @@ function checkDatabase(workDir: string, dbType: DatabaseType, backendDir: string
   }
 
   // 1. Try docker exec readiness check
-  const containerName = findDbContainer(dbType);
+  const containerName = findDbContainer(workDir, dbType);
   if (containerName) {
     for (const cmd of dbInfo.dockerReadiness) {
       const result = runCommand(`docker exec ${containerName} ${cmd}`, workDir, 10000);
@@ -1527,7 +1569,7 @@ async function checkBackendStarts(project: ProjectInfo): Promise<CheckResult> {
 
   // For DynamoDB projects: ensure DYNAMODB_ENDPOINT is set if a local container is running
   if (project.databases.includes('dynamodb') && !projectEnv['DYNAMODB_ENDPOINT']) {
-    const dynamoContainer = findDbContainer('dynamodb');
+    const dynamoContainer = findDbContainer(workDir, 'dynamodb');
     if (dynamoContainer) {
       // Extract port from docker inspect or use default 8000
       try {
