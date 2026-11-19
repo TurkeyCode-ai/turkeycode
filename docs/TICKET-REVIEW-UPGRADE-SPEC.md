@@ -63,6 +63,20 @@ modes in this codebase — check each one explicitly and say which apply". Ship 
   assumption under review?
 - **Constructor / signature churn:** every caller and test that builds the changed class.
 
+Added after dog-fooding, from misses an independent reviewer still caught:
+- **Consistency with the rest of the module:** a new clock, helper or rule that only this feature uses.
+- **Stale read-modify-write:** an existing slow path (a download, a network call) that saves a whole
+  record it read earlier, and can now overwrite the new state.
+- **Who else must act:** the UI, the permissions list, the other side of an integration, a
+  follow-up ticket.
+- **Data source exists:** every table, column or setting the change reads is actually populated
+  (seeded, migrated, bridged or editable). Half-populated sources, where the switch is filled in and
+  the table it points at is not, are worse than none.
+- **Invariants across records:** "one per customer" rules still hold when the decision spans drafts
+  or separate requests.
+- **Legacy write conventions:** every step of the legacy write path, not just the first assignment.
+  This covers sign flips, +1 encodings, and fields a later add/rewrite routine fills in.
+
 ### 4. "The ticket may be wrong" is an explicit question
 Add to "WHAT TO LOOK FOR": *"Check the ticket's premise against the references. Does the cited
 program, field or behaviour actually exist as described? Is there a newer program, a different field,

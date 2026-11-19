@@ -186,6 +186,9 @@ export const DEFAULT_REVIEW_CHECKLIST: readonly string[] = [
   'Consistency with the rest of the module: does a new helper, clock, time zone, config value or rule apply to just this feature while the rest of the code does the same thing differently? A fix that makes one feature disagree with its neighbours is a defect.',
   'Stale read-modify-write: does any existing path read a record, do slow work (a network call, a download), then save the whole record back? If the new code changes that record\'s state, that path can now overwrite it. Check for locks or re-reads.',
   'Who else must act: does this change need something outside the diff to be usable or safe (a UI that sends the new field, a permissions/provisioning list, the other side of an integration, a follow-up ticket)? Flag each one that is missing.',
+  'Data source exists: does every table, column, setting or config key the change reads actually get populated (seeded, migrated, bridged in, or editable in a UI)? A feature reading data that nothing fills is inert, and a half-filled source (switch populated, table not) can be worse than none.',
+  'Invariants across records: does a rule that legacy enforces across several records (one per customer, one open per unit, unique per store) still hold when the cloud spreads the decision over time or across separate drafts and requests? Check for a lock or a re-check at the moment of commit.',
+  'Legacy write conventions: when the change writes a record the legacy system also writes, does it follow every step of the legacy write path, not just the first assignment (sign flips, +1 encodings, defaults filled in by a later routine, fields set by the add/rewrite routine itself)?',
 ];
 
 /** Checklist the reviewer gets: default + manifest items, or manifest items only when replaceDefaultChecklist. */
