@@ -32,7 +32,8 @@ function getTypeSpecificRules(projectType: ProjectType, caps: AgentCapabilities)
    - CSRF protection on forms
 12. **NEVER paste terminal output into source files** - Migrations must contain pure SQL.
 13. **Logo & favicon** - In the first build phase, design a real logo/wordmark (a designed SVG mark, or an intentional wordmark with a small graphic element - NOT the app name in the default font) and use it in the header; generate a matching simplified SVG favicon. Never ship the framework default or a generic placeholder.
-14. **Admin API** - If user-generated content exists, create \`/api/admin/config\`, \`/api/admin/content\`, etc.`;
+14. **Admin API** - If user-generated content exists, create \`/api/admin/config\`, \`/api/admin/content\`, etc.
+15. **No event handlers in Server Components** - In the Next.js App Router, components are Server Components unless the file starts with \`'use client'\`. Never put \`onClick\`, \`onChange\`, \`onMouseOver\`/\`onMouseOut\` or any other \`on*\` handler on elements in a Server Component (pages, layouts, \`not-found\`, async components): it passes the build and then throws at request time ("Event handlers cannot be passed to Client Component props"). Do hover/focus effects with CSS; put real interactivity in a small \`'use client'\` component and render that from the server page.`;
 
   const cliRules = `
 8. **Implement --help** - Every command and subcommand must have clear usage text via --help flag.
