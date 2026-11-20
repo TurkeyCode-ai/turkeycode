@@ -28,12 +28,14 @@ export interface MergeFixPromptInput {
   rebaseOnto?: string;
   /** Optional plan the branch was built from: what its change is meant to do. */
   planPath?: string;
+  /** Optional directory holding one folder per ticket this machine has built, each with its \`plan.md\`. */
+  ticketsRoot?: string;
 }
 
 export function buildMergeFixPrompt(input: MergeFixPromptInput): string {
   const {
     repoPath, branchName, baseBranch, conflictedPaths, doneFile,
-    mode = 'rebase', contextKey, contextSummary, rebaseOnto, planPath,
+    mode = 'rebase', contextKey, contextSummary, rebaseOnto, planPath, ticketsRoot,
   } = input;
 
   const isRebase = mode === 'rebase';
@@ -89,7 +91,7 @@ ${conflictedPaths.map((p) => `  - ${p}`).join('\n')}
 2. For each conflicted file:
    - Read the file. Find all conflict markers (\`<<<<<<<\`, \`=======\`, \`>>>>>>>\`).
    - Understand both sides: ${headMeaning}.
-   - Find out WHY the base changed the file before choosing anything: ${baseHistoryStep}. The conflict is usually another change that landed while this branch was being built, and its commit messages say what it was for.${planPath ? `\n   - What this branch's change is meant to do is written in \`${planPath}\`.` : ''}
+   - Find out WHY the base changed the file before choosing anything: ${baseHistoryStep}. The conflict is usually another change that landed while this branch was being built, and its commit messages say what it was for.${planPath ? `\n   - What this branch's change is meant to do is written in \`${planPath}\`.` : ''}${ticketsRoot ? `\n   - A base commit that came from another ticket starts with that ticket's key. If this machine built it, its plan is at \`${ticketsRoot}/<KEY>/plan.md\`: read it to learn what the other side was for.` : ''}
    - Resolve semantically — keep the intent of the branch's change **and** whatever the base branch added. Do NOT just pick one side unless you're certain the other is superseded.
    - For mechanical conflicts (imports, lockfiles, import order, formatting): regenerate / re-sort rather than hand-pick.
    - For lockfiles (package-lock.json, yarn.lock, pnpm-lock.yaml, Gemfile.lock, Cargo.lock): prefer running the package manager's install command to regenerate cleanly.
