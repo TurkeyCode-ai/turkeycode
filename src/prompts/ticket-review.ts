@@ -30,6 +30,10 @@ export interface TicketReviewPromptInput {
   planPath?: string;
   /** Prior round's findings (already handed to a fix session), if any. */
   priorFindingsPath?: string;
+  /** The fix session's own report on the prior findings (\`fixed:\` / \`rejected: … — why\` lines), when it wrote one. */
+  priorFixReportPath?: string;
+  /** Set when the fix session for the prior findings did not finish (timed out or crashed). */
+  priorFixIncomplete?: boolean;
   findingsPath: string;
   doneFile: string;
   /** 1-based review round; selects the lens (see reviewLens). Default 1. */
@@ -76,6 +80,32 @@ function lensBlock(lens: ReviewLens): string {
   return `${FIDELITY_LENS}\n\n${INTEGRATION_LENS}`;
 }
 
+/**
+ * What the reviewer is told about the previous round. The fix session's report
+ * is handed over so a finding it declined on purpose is judged on its reason,
+ * not raised again as if nobody had looked.
+ */
+function priorRoundBlock(priorFindingsPath: string, fixReportPath: string | undefined, fixIncomplete: boolean): string {
+  const report = fixReportPath
+    ? ` Its own report is \`${fixReportPath}\`: each finding is listed as \`fixed:\` or \`rejected: <summary> — <why>\`.`
+    : '';
+  const state = fixIncomplete
+    ? `The fix session that followed did NOT finish (it ran out of time or crashed), so some of those findings may be untouched or half done, and anything it had not committed was set aside.${report ? `${report} Treat it as partial.` : ''} Check every prior finding against the code as it is now and report the ones that still hold.`
+    : `A fix session has since worked through it.${report} Verify the fixes (cite the fixed lines), then challenge them: a fix can be incomplete, inconsistent with the rest of the module, or introduce a new problem of its own.`;
+  return `
+## PREVIOUS ROUND
+A previous review round produced \`${priorFindingsPath}\`. ${state}
+
+A finding the fix session **rejected** was declined on purpose. Read its reason and check it against the code before doing anything with it:
+- The reason is wrong: report the finding again as \`bug\` or \`should-fix\`, and say in \`fix\` what the rejection got wrong, with evidence.
+- The reason holds, but the problem is real and a code session cannot settle it (it needs a person's decision, an identifier only a person can assign, access a session does not have): report it once with severity \`needs-human\` and put what the person must decide in \`fix\`. It goes into the final report for a person and is NOT sent to another fix session.
+- The reason holds and nothing is left to do: record that under \`verified\`.
+Do not raise a rejected finding again just because the code still looks the way it did.
+
+Then look for anything new.
+`;
+}
+
 export function buildTicketReviewPrompt(input: TicketReviewPromptInput): string {
   const { ticket, manifest, repos, branchName, planPath, priorFindingsPath, findingsPath, doneFile } = input;
   const round = input.round ?? 1;
@@ -102,7 +132,7 @@ ${renderTicketBlock(ticket)}
 
 ## CHANGES TO REVIEW
 ${repoLines}
-${localBaseNote}${planPath ? `\n## BUILDER'S INTENT — to be challenged\nThe builder worked from \`${planPath}\`. Treat it as a claim, not as context: it can inherit a wrong ticket, misread a reference, or miss the other side of a boundary. Check it against the ticket, the references and the related repos; never cite the plan as evidence.\n` : ''}${priorFindingsPath ? `\nA previous review round produced \`${priorFindingsPath}\` and a fix session has since addressed it. Verify those fixes (cite the fixed lines), then challenge them: a fix can be incomplete, inconsistent with the rest of the module, or introduce a new problem of its own. Then look for anything new.\n` : ''}${renderReferenceBlock(manifest)}${renderRelatedBlock(manifest)}
+${localBaseNote}${planPath ? `\n## BUILDER'S INTENT — to be challenged\nThe builder worked from \`${planPath}\`. Treat it as a claim, not as context: it can inherit a wrong ticket, misread a reference, or miss the other side of a boundary. Check it against the ticket, the references and the related repos; never cite the plan as evidence.\n` : ''}${priorFindingsPath ? priorRoundBlock(priorFindingsPath, input.priorFixReportPath, input.priorFixIncomplete ?? false) : ''}${renderReferenceBlock(manifest)}${renderRelatedBlock(manifest)}
 Each repo's CLAUDE.md / CLAUDE.local.md house rules are part of the bar.
 
 ## WHAT TO LOOK FOR
@@ -112,6 +142,7 @@ ${GENERAL_CHECKS}
 - If the change crosses a boundary (bridge, API, queue, shared table), open the other side and check the contract both ways.
 ${checklistBlock}
 Report only defects you'd block a merge on (\`bug\`) or would ask to change (\`should-fix\`). No style nits, no praise.
+Use \`needs-human\` instead when the defect is real but no code session can settle it: it needs a person's decision, an identifier only a person can assign, or access a session does not have. Say in \`fix\` what the person must decide. Those go to the person in the final report, not to a fix session, so do not use it for anything a fix session could do.
 
 ## EVIDENCE RULE
 Every finding and every verified claim must cite at least one \`file:line\` (or \`file:start-end\`) in the changed code, a reference or a related repo — use absolute paths or paths relative to the repo named in \`repo\`. **Uncited findings and uncited verified claims are discarded.** A review with no cited findings and no cited verified claims counts as "not reviewed", not as clean.
@@ -123,7 +154,7 @@ Write \`${findingsPath}\` as JSON:
 \`\`\`json
 {
   "findings": [
-    { "severity": "bug" | "should-fix", "repo": "<repo path>", "file": "<path in repo>", "line": 0,
+    { "severity": "bug" | "should-fix" | "needs-human", "repo": "<repo path>", "file": "<path in repo>", "line": 0,
       "summary": "<the defect>", "fix": "<what to change>", "evidence": ["<file>:<line>", "..."] }
   ],
   "verified": [

@@ -21,6 +21,7 @@ import {
   cutTicketBranch,
   repoHasCommits,
   rebaseOntoBase,
+  stashUncommitted,
   continueRebase,
   abortRebase,
   pushBranch,
@@ -146,6 +147,8 @@ export class TicketOrchestrator {
   /** Repo path -> local ref for the current run (--base-local), handed to the review and fix prompts. */
   private currentLocalBases = new Map<string, string>();
   private noPush: boolean;
+  /** Things the review/fix loop did that the person reading the ticket needs to know (e.g. a fix session that ran out of time). */
+  private reviewNotes: string[] = [];
 
   constructor(options: TicketRunOptions = {}) {
     if (!isJiraConfigured()) {
@@ -646,6 +649,9 @@ export class TicketOrchestrator {
         }
       }
     }
+    if (this.deep && this.reviewNotes.length > 0) {
+      commentLines.push('', ...this.reviewNotes.map((n) => `Note: ${n}`));
+    }
     if (failed.length > 0) {
       commentLines.push('', 'Failed repos (manual intervention needed):');
       for (const f of failed) {
@@ -736,7 +742,13 @@ export class TicketOrchestrator {
     timings: PhaseTimings,
   ): Promise<ReviewFinding[]> {
     let findings: ReviewFinding[] = [];
+    // Findings a reviewer marked needs-human: real, but not something a fix session can settle.
+    // They never go to a fix session and never extend the loop; they are reported as open at the end.
+    const needsHuman: ReviewFinding[] = [];
     let priorFindingsPath: string | undefined;
+    let priorFixReportPath: string | undefined;
+    let priorFixIncomplete = false;
+    this.reviewNotes = [];
     timings.review = 0;
     timings.fix = 0;
 
@@ -767,6 +779,8 @@ export class TicketOrchestrator {
             branchName,
             planPath,
             priorFindingsPath,
+            priorFixReportPath,
+            priorFixIncomplete,
             findingsPath,
             doneFile: reviewDone,
             round,
@@ -801,9 +815,14 @@ export class TicketOrchestrator {
         );
       }
 
-      findings = result.findings;
+      const forPerson = result.findings.filter(isNeedsHuman);
+      findings = result.findings.filter((f) => !isNeedsHuman(f));
+      for (const f of forPerson) {
+        if (!needsHuman.some((known) => sameFinding(known, f))) needsHuman.push(f);
+      }
       console.log(
-        `[ticket] Review round ${round}: ${findings.length} finding(s), ${result.verified.length} verified claim(s)`,
+        `[ticket] Review round ${round}: ${findings.length} finding(s)` +
+          `${forPerson.length ? `, ${forPerson.length} for a person` : ''}, ${result.verified.length} verified claim(s)`,
       );
       if (round === lastRound) {
         // Only for multi-round runs: --review-rounds 1 means exactly one review.
@@ -827,12 +846,25 @@ export class TicketOrchestrator {
         mcpConfig: this.mcpConfig,
       });
       timings.fix += Date.now() - fixStart;
-      if (fix.exitCode !== 0) {
-        throw new Error(`Fix session failed for ${ticket.key} (round ${round}, exit ${fix.exitCode})`);
+      priorFixIncomplete = fix.exitCode !== 0;
+      if (priorFixIncomplete) {
+        // A fix session that runs out of time (or dies) does not sink the ticket: the build and the earlier
+        // rounds are still good. Whatever it committed stays on the branch, whatever it left uncommitted is
+        // stashed (kept, but out of the way of the rebase), and the next review round, which always follows
+        // a fix, re-checks every finding against the code as it now stands.
+        const why = fix.exitCode === 124 ? 'ran out of time' : `failed (exit ${fix.exitCode})`;
+        const label = `turkeycode ${ticket.key} fix-${round} unfinished`;
+        const stashed = manifest.repos.filter((r) => stashUncommitted(r.path, label)).map((r) => r.path);
+        console.warn(`[ticket] Fix session for round ${round} ${why}; the next review round re-checks its findings.`);
+        this.reviewNotes.push(
+          `The fix session for review round ${round} ${why}. Its commits were kept and re-reviewed` +
+            (stashed.length ? `; uncommitted work was stashed as "${label}" in ${stashed.join(', ')}.` : '.'),
+        );
       }
       priorFindingsPath = findingsPath;
+      priorFixReportPath = existsSync(fixDone) ? fixDone : undefined;
     }
-    return findings;
+    return [...findings, ...needsHuman.filter((h) => !findings.some((f) => sameFinding(f, h)))];
   }
 
   private async runMergeFix(
@@ -961,6 +993,19 @@ function citations(raw: unknown): string[] {
  * AND zero verified claims means the reviewer showed no work, which must not
  * be mistaken for a clean branch.
  */
+/** A finding the reviewer routed to a person instead of a fix session. */
+export function isNeedsHuman(finding: ReviewFinding): boolean {
+  return finding.severity === 'needs-human';
+}
+
+/** Same finding reported in two rounds: same place when both give one, otherwise the same summary. */
+function sameFinding(a: ReviewFinding, b: ReviewFinding): boolean {
+  if (a.file && b.file && a.line !== undefined && b.line !== undefined) {
+    return a.file === b.file && a.line === b.line && (a.repo ?? '') === (b.repo ?? '');
+  }
+  return a.summary === b.summary;
+}
+
 export function parseReviewResult(raw: string): ReviewResult {
   const all = parseReviewFindings(raw);
   const findings = all.filter((f) => (f.evidence?.length ?? 0) > 0);

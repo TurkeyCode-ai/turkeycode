@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { isAbsolute, join, resolve } from 'path';
 import { parse as parseYaml } from 'yaml';
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 
 export interface RepoEntry {
   path: string;
@@ -423,6 +423,22 @@ export function refResolves(repoPath: string, ref: string): boolean {
 /** --base-local counterpart of syncBase: no fetch, no checkout of the base; returns the ref's SHA. */
 export function resolveLocalBase(repo: RepoEntry, ref: string): string {
   return execSync(`git rev-parse --verify ${ref}^{commit}`, { cwd: repo.path, encoding: 'utf-8' }).trim();
+}
+
+/**
+ * Set aside whatever a session left uncommitted (tracked and untracked) so the
+ * tree is clean for the next step. Nothing is discarded: it goes to a named
+ * stash. Returns true when something was stashed, false when the tree was
+ * already clean or the repo could not be read.
+ */
+export function stashUncommitted(repoPath: string, label: string): boolean {
+  try {
+    if (!execSync('git status --porcelain', { cwd: repoPath, encoding: 'utf-8' }).trim()) return false;
+    execFileSync('git', ['stash', 'push', '--include-untracked', '-m', label], { cwd: repoPath, stdio: 'pipe' });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function headSha(repoPath: string): string {
