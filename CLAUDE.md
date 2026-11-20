@@ -74,7 +74,7 @@ Two surfaces, one shared core (`src/prompts/scope.ts` — `SCOPE_METHOD` + `EMIT
   stdin is a TTY; with `--spec`, a prior confirmed scope, a spec-file description, or a
   non-TTY stdin (CI), it skips straight to autonomous research.
 - **In-chat skill**: `skills/turkeycode-scope/SKILL.md` — runs the same loop natively as
-  the conversation (highest fidelity). The SaaS chat shell will reuse the same core.
+  the conversation (highest fidelity).
 
 On explicit confirmation, scope emits `.turkey/reference/specs.md` (the intent spec, same
 shape research writes), `.turkey/reference/scope-decisions.md` (the decision/correction
@@ -195,6 +195,7 @@ TURKEYCODE_MODEL=sonnet           # Global model override (active backend's voca
 TURKEYCODE_MODEL_BUILD=opus       # Per-phase model override (qa-fix -> TURKEYCODE_MODEL_QA_FIX)
 TURKEYCODE_USE_API_KEY=1          # Keep the vendor API key instead of the CLI login session
 GH_TOKEN=ghp_...                  # For private repos
+DIGITALOCEAN_ACCESS_TOKEN=dop_... # `turkeycode deploy`: your own DigitalOcean account (or `turkeycode login --token`)
 GITHUB_OWNER=username-or-org      # For auto-creating repos
 JIRA_HOST=company.atlassian.net   # For Jira integration (REST API)
 JIRA_EMAIL=you@example.com        # Jira account email

@@ -6,11 +6,7 @@
  */
 
 import { PROJECT_TYPES } from './detect-project-type';
-import { config } from 'dotenv';
 import { resolve } from 'path';
-
-// Load .env from deploy/ directory (relative to project root)
-config({ path: resolve(__dirname, '..', 'deploy', '.env') });
 
 import { Command } from 'commander';
 import { appendFileSync, mkdirSync, existsSync, readFileSync } from 'fs';
@@ -517,8 +513,8 @@ program
 // ==================== LOGIN COMMAND ====================
 program
   .command('login')
-  .description('Authenticate with turkeycode.ai')
-  .option('-t, --token <api-key>', 'API token for headless / CI login')
+  .description('Save the DigitalOcean API token that `deploy` uses (your own account)')
+  .option('-t, --token <token>', 'DigitalOcean API token with read and write access')
   .action(async (options) => {
     const { login } = await import('./deploy/auth');
     await login({ token: options.token });
@@ -527,7 +523,7 @@ program
 // ==================== RUN-LOCAL COMMAND ====================
 program
   .command('run-local')
-  .description('Run the current project locally in Docker (mirrors turkeycode.ai hosting)')
+  .description('Run the current project locally in Docker (the same setup `deploy` uses)')
   .option('-p, --port <port>', 'Local port to expose', '3000')
   .action(async (options) => {
     const { detectProject } = await import('./deploy/detect');
@@ -552,7 +548,6 @@ program
 
     console.log(`  App:    ${detection.name}`);
     console.log(`  Stack:  ${detection.stack}`);
-    console.log(`  Tier:   ${detection.tier} — ${detection.tierReason}`);
 
     await runLocal(cwd, detection);
   });
@@ -560,18 +555,18 @@ program
 // ==================== DEPLOY COMMAND ====================
 program
   .command('deploy')
-  .description('Package and deploy the current project to turkeycode.ai')
-  .option('-n, --name <subdomain>', 'Custom subdomain name')
-  .option('-d, --domain <domain>', 'Custom domain (Pro+)')
-  .option('-t, --tier <tier>', 'Explicit tier: free | starter | pro | business')
+  .description('Deploy the current project to a droplet in your own DigitalOcean account')
+  .option('-n, --name <name>', 'App name (also the droplet name)')
+  .option('-d, --domain <domain>', 'Serve over HTTPS on this domain (point its A record at the droplet)')
+  .option('-r, --region <region>', 'DigitalOcean region for a new droplet (default: nyc3)')
+  .option('-s, --size <size>', 'Droplet size for a new droplet (default: picked from what the app needs)')
   .option('-e, --env <file>', 'Env file to inject (e.g. .env.production)')
-  .option('--skip-build', 'Skip the build step')
+  .option('-y, --yes', 'Create the droplet without asking')
   .action(async (options) => {
-    const { requireAuth } = await import('./deploy/auth');
+    const { requireToken } = await import('./deploy/auth');
+    const { DigitalOcean } = await import('./deploy/digitalocean');
     const { detectProject } = await import('./deploy/detect');
-    const { packageApp } = await import('./deploy/package');
-    const { uploadAndDeploy } = await import('./deploy/upload');
-    const { readFileSync, existsSync } = await import('fs');
+    const { deployToDroplet } = await import('./deploy/droplet');
 
     const cwd = process.cwd();
 
@@ -581,200 +576,50 @@ program
     console.log('╚══════════════════════════════════════════════════════════╝');
     console.log('');
 
-    // 1. Check auth
-    const creds = requireAuth();
-    console.log(`Authenticated as ${creds.email}`);
-    console.log('');
-
-    // 2. Detect project
-    console.log('Detecting project...');
-    let detection;
     try {
-      detection = detectProject(cwd);
-    } catch (err) {
-      console.error(`Detection failed: ${(err as Error).message}`);
-      process.exit(1);
-    }
+      // 1. Whose DigitalOcean account
+      const resolved = requireToken();
+      const api = new DigitalOcean(resolved.token);
+      const account = await api.getAccount();
+      console.log(`DigitalOcean account: ${account.email} (token from ${resolved.source})`);
+      console.log('');
 
-    const effectiveTier = options.tier ?? detection.tier;
-    let effectiveName = options.name ?? detection.name;
-    console.log(`  App:    ${effectiveName}`);
-    console.log(`  Stack:  ${detection.stack}`);
-    console.log(`  Tier:   ${effectiveTier} — ${detection.tierReason}`);
-    console.log('');
+      // 2. Detect project
+      console.log('Detecting project...');
+      const detection = detectProject(cwd);
+      console.log(`  App:    ${options.name ?? detection.name}`);
+      console.log(`  Stack:  ${detection.stack}`);
+      console.log('');
 
-    // Check subdomain availability
-    const subCheckRes = await fetch(
-      `https://turkeycode.ai/api/v1/apps/check?name=${encodeURIComponent(effectiveName)}`
-    ).catch(() => null);
-
-    if (subCheckRes?.ok) {
-      const check = await subCheckRes.json() as {
-        available: boolean;
-        userId?: string;
-        suggestions?: string[];
-      };
-
-      if (!check.available) {
-        // Check if it's our own app (redeploy)
-        const ownAppRes = await fetch(`https://turkeycode.ai/api/v1/apps/${effectiveName}`, {
-          headers: { Authorization: `Bearer ${creds.token}` },
-        }).catch(() => null);
-
-        if (ownAppRes?.ok) {
-          // It's ours — redeploy
-          console.log(`  ♻️  Redeploying ${effectiveName}.turkeycode.ai`);
-          console.log('');
-        } else {
-          // Someone else's — suggest alternatives
-          console.log(`  ⚠️  Subdomain "${effectiveName}.turkeycode.ai" is taken.`);
-          if (check.suggestions && check.suggestions.length > 0) {
-            console.log('  Available alternatives:');
-            check.suggestions.forEach((s, i) => console.log(`    ${i + 1}. ${s}.turkeycode.ai`));
-          }
-          console.log('');
-          console.log(`  Use: turkeycode deploy --name <subdomain>`);
-          process.exit(1);
-        }
-      }
-    }
-
-    // If paid tier, handle Stripe checkout
-    if (effectiveTier !== 'free') {
-      const tierPrices: Record<string, number> = { starter: 12, pro: 29, business: 49 };
-      const price = tierPrices[effectiveTier] ?? 0;
-      if (price > 0) {
-        console.log(`  💳 ${effectiveTier.charAt(0).toUpperCase() + effectiveTier.slice(1)} tier: $${price}/mo`);
-        console.log('');
-
-        // Check if already subscribed for this app
-        const checkRes = await fetch(`https://turkeycode.ai/api/v1/apps/${effectiveName}`, {
-          headers: { Authorization: `Bearer ${creds.token}` },
-        }).catch(() => null);
-
-        const existingApp = checkRes?.ok ? await checkRes.json() as { tier?: string; hostingTier?: string } : null;
-        const alreadyPaid = (existingApp?.tier && existingApp.tier !== 'free') || (existingApp?.hostingTier && existingApp.hostingTier !== 'free');
-
-        if (!alreadyPaid) {
-          // Create checkout session
-          const checkoutRes = await fetch('https://turkeycode.ai/api/v1/deploy/checkout', {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${creds.token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ tier: effectiveTier, appName: effectiveName }),
-          });
-
-          if (!checkoutRes.ok) {
-            const err = await checkoutRes.json().catch(() => ({ error: 'Checkout failed' })) as { error?: string };
-            console.error(`Checkout failed: ${err.error || checkoutRes.statusText}`);
-            process.exit(1);
-          }
-
-          const { checkoutUrl } = await checkoutRes.json() as { checkoutUrl: string };
-
-          console.log('  Complete payment to continue:');
-          console.log('');
-          console.log(`  ${checkoutUrl}`);
-          console.log('');
-
-          // Try to open browser
-          const { exec: execCmd } = await import('child_process');
-          const openCmd = process.platform === 'darwin' ? 'open' :
-                          process.platform === 'win32' ? 'start' : 'xdg-open';
-          execCmd(`${openCmd} "${checkoutUrl}"`, () => {});
-
-          // Wait for payment confirmation
-          console.log('  Waiting for payment...');
-          const maxWait = 300; // 5 minutes
-          let paid = false;
-          for (let i = 0; i < maxWait; i++) {
-            await new Promise(r => setTimeout(r, 2000));
-            const statusRes = await fetch(`https://turkeycode.ai/api/v1/apps/${effectiveName}`, {
-              headers: { Authorization: `Bearer ${creds.token}` },
-            }).catch(() => null);
-            if (statusRes?.ok) {
-              const app = await statusRes.json() as { tier?: string; hostingTier?: string };
-              if ((app.tier && app.tier !== 'free') || (app.hostingTier && app.hostingTier !== 'free')) {
-                paid = true;
-                break;
-              }
-            }
-            if (i % 5 === 0 && i > 0) {
-              process.stdout.write('.');
-            }
-          }
-
-          if (!paid) {
-            console.log('');
-            console.error('  Payment not confirmed. Deploy cancelled.');
-            console.error('  If you already paid, try again — your subscription is active.');
-            process.exit(1);
-          }
-
-          console.log('');
-          console.log('  ✅ Payment confirmed!');
-          console.log('');
-        }
-      }
-    }
-
-    // Load env file if specified
-    let envVars: Record<string, string> = {};
-    if (options.env) {
-      if (!existsSync(options.env)) {
-        console.error(`Env file not found: ${options.env}`);
-        process.exit(1);
-      }
-      const lines = readFileSync(options.env, 'utf-8').split('\n');
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed || trimmed.startsWith('#')) continue;
-        const eqIdx = trimmed.indexOf('=');
-        if (eqIdx > 0) {
-          const key = trimmed.slice(0, eqIdx).trim();
-          const val = trimmed.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, '');
-          envVars[key] = val;
-        }
-      }
-      console.log(`Loaded ${Object.keys(envVars).length} env vars from ${options.env}`);
-    }
-
-    // 3. Package
-    console.log('Packaging...');
-    let pkg;
-    try {
-      pkg = await packageApp(detection, cwd, {
-        skipBuild: options.skipBuild,
+      // 3. Droplet, upload, build, start
+      const result = await deployToDroplet(api, cwd, detection, {
+        name: options.name,
+        domain: options.domain,
+        region: options.region,
+        size: options.size,
         envFile: options.env,
+        yes: options.yes,
       });
-    } catch (err) {
-      console.error(`Packaging failed: ${(err as Error).message}`);
-      process.exit(1);
-    }
-    console.log(`  Package: ${pkg.sizeMB}MB`);
-    console.log('');
 
-    // 4. Upload and poll
-    let result;
-    try {
-      result = await uploadAndDeploy(pkg.tarballPath, detection, creds.token, {
-        name: effectiveName,
-        tier: effectiveTier,
-        env: envVars,
-      });
+      console.log('');
+      if (result.live) {
+        console.log(`  ✅ Live at ${result.url}`);
+      } else {
+        console.log(`  ⚠️  Deployed, but http://${result.ip} is not answering yet.`);
+        console.log(`     Check: turkeycode apps logs ${result.name}`);
+      }
+      if (options.domain) {
+        console.log(`     Point an A record for ${options.domain} at ${result.ip}. HTTPS starts once it resolves.`);
+      }
+      console.log('');
+      console.log(`  App:      ${result.name}`);
+      console.log(`  Droplet:  ${result.ip}${result.created ? ' (new)' : ''}`);
+      console.log(`  Stack:    ${detection.stack}`);
+      console.log('');
     } catch (err) {
       console.error(`Deploy failed: ${(err as Error).message}`);
       process.exit(1);
     }
-
-    console.log('');
-    console.log(`  App:    ${effectiveName}`);
-    console.log(`  Tier:   ${effectiveTier}`);
-    console.log(`  Stack:  ${detection.stack}`);
-    console.log(`  URL:    ${result.url}`);
-    console.log('');
   });
 
 // ==================== DELIVER COMMAND ====================
@@ -841,18 +686,21 @@ program
 // ==================== APPS COMMAND ====================
 const appsCmd = program
   .command('apps')
-  .description('Manage deployed apps');
+  .description('Manage apps deployed to your DigitalOcean account');
+
+async function digitalOceanApi() {
+  const { requireToken } = await import('./deploy/auth');
+  const { DigitalOcean } = await import('./deploy/digitalocean');
+  return new DigitalOcean(requireToken().token);
+}
 
 appsCmd
   .command('list', { isDefault: true })
   .description('List all deployed apps')
   .action(async () => {
-    const { requireAuth } = await import('./deploy/auth');
     const { listApps, printApps } = await import('./deploy/apps');
-    const creds = requireAuth();
     try {
-      const apps = await listApps(creds.token);
-      printApps(apps);
+      printApps(await listApps(await digitalOceanApi()));
     } catch (err) {
       console.error(`Failed to list apps: ${(err as Error).message}`);
       process.exit(1);
@@ -861,19 +709,12 @@ appsCmd
 
 appsCmd
   .command('status [app-name]')
-  .description('Show app health and status')
+  .description('Show droplet status')
   .action(async (appName?: string) => {
-    const { requireAuth } = await import('./deploy/auth');
     const { listApps, printApps, getAppStatus } = await import('./deploy/apps');
-    const creds = requireAuth();
     try {
-      if (appName) {
-        const app = await getAppStatus(appName, creds.token);
-        printApps([app]);
-      } else {
-        const apps = await listApps(creds.token);
-        printApps(apps);
-      }
+      const api = await digitalOceanApi();
+      printApps(appName ? [await getAppStatus(api, appName)] : await listApps(api));
     } catch (err) {
       console.error(`Failed to get status: ${(err as Error).message}`);
       process.exit(1);
@@ -882,19 +723,13 @@ appsCmd
 
 appsCmd
   .command('logs <app-name>')
-  .description('Tail logs for an app')
+  .description('Show recent container logs for an app')
   .option('-n, --lines <number>', 'Number of log lines', '100')
   .action(async (appName: string, options) => {
-    const { requireAuth } = await import('./deploy/auth');
     const { getAppLogs } = await import('./deploy/apps');
-    const creds = requireAuth();
     try {
-      const logs = await getAppLogs(appName, creds.token, parseInt(options.lines, 10));
-      if (logs.length === 0) {
-        console.log('No logs found.');
-      } else {
-        console.log(logs.join('\n'));
-      }
+      const logs = await getAppLogs(await digitalOceanApi(), appName, parseInt(options.lines, 10));
+      console.log(logs.trim() ? logs.trimEnd() : 'No logs found.');
     } catch (err) {
       console.error(`Failed to get logs: ${(err as Error).message}`);
       process.exit(1);
@@ -903,21 +738,19 @@ appsCmd
 
 appsCmd
   .command('delete <app-name>')
-  .description('Tear down a deployed app')
+  .description('Destroy an app\'s droplet')
   .option('-f, --force', 'Skip confirmation')
   .action(async (appName: string, options) => {
-    const { requireAuth } = await import('./deploy/auth');
     const { deleteApp } = await import('./deploy/apps');
-    const creds = requireAuth();
 
     if (!options.force) {
-      console.log(`This will permanently delete '${appName}' and all its data.`);
+      console.log(`This destroys the droplet for '${appName}' and everything on it, including its database.`);
       console.log(`Use --force to confirm.`);
       process.exit(1);
     }
 
     try {
-      await deleteApp(appName, creds.token);
+      await deleteApp(await digitalOceanApi(), appName);
       console.log(`✅ Deleted ${appName}`);
     } catch (err) {
       console.error(`Failed to delete app: ${(err as Error).message}`);

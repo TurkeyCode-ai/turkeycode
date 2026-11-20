@@ -1,61 +1,57 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdirSync, rmSync, readFileSync, writeFileSync, statSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
 import { detectProject } from '../deploy/detect';
-import { printApps } from '../deploy/apps';
+import { printApps, toApp } from '../deploy/apps';
+import { getCredentials, resolveToken, saveCredentials } from '../deploy/auth';
 
 // ============================================================================
-// auth helpers — test credential read/write logic directly (no mock of homedir)
+// auth — where the DigitalOcean token comes from
 // ============================================================================
 
-describe('deploy/auth credential helpers', () => {
-  const testCredsDir = join(tmpdir(), `.test-turkeycode-${Date.now()}`);
-  const testCredsPath = join(testCredsDir, 'credentials.json');
+describe('deploy/auth token resolution', () => {
+  let dir: string;
+  let credsPath: string;
 
   beforeEach(() => {
-    mkdirSync(testCredsDir, { recursive: true });
+    dir = mkdtempSync(join(tmpdir(), 'tc-auth-'));
+    credsPath = join(dir, 'credentials.json');
   });
 
   afterEach(() => {
-    if (existsSync(testCredsDir)) {
-      rmSync(testCredsDir, { recursive: true, force: true });
-    }
+    rmSync(dir, { recursive: true, force: true });
   });
 
-  it('returns null when credentials file does not exist', () => {
-    const creds = existsSync(testCredsPath)
-      ? JSON.parse(readFileSync(testCredsPath, 'utf-8'))
-      : null;
-    expect(creds).toBeNull();
+  it('finds nothing when there is no env var and no saved login', () => {
+    expect(resolveToken({}, credsPath)).toBeNull();
   });
 
-  it('writes and reads credentials correctly', () => {
-    const data = { token: 'tc_usr_abc', email: 'test@example.com', tier: 'starter' };
-    writeFileSync(testCredsPath, JSON.stringify(data, null, 2), { mode: 0o600 });
-    const saved = JSON.parse(readFileSync(testCredsPath, 'utf-8'));
-    expect(saved.token).toBe('tc_usr_abc');
-    expect(saved.email).toBe('test@example.com');
-    expect(saved.tier).toBe('starter');
+  it('saves the login with owner-only permissions and reads it back', () => {
+    saveCredentials({ token: 'dop_v1_saved', email: 'someone@example.com' }, credsPath);
+    expect(statSync(credsPath).mode & 0o777).toBe(0o600);
+    expect(resolveToken({}, credsPath)).toEqual({ token: 'dop_v1_saved', source: 'turkeycode login' });
   });
 
-  it('credentials file has restricted permissions (0o600)', () => {
-    const data = { token: 'tc_usr_abc', email: 'test@example.com', tier: 'free' };
-    writeFileSync(testCredsPath, JSON.stringify(data), { mode: 0o600 });
-    const stat = statSync(testCredsPath);
-    expect(stat.mode & 0o777).toBe(0o600);
+  it('prefers the environment over the saved login', () => {
+    saveCredentials({ token: 'dop_v1_saved', email: '' }, credsPath);
+    expect(resolveToken({ DIGITALOCEAN_ACCESS_TOKEN: 'dop_v1_env' }, credsPath))
+      .toEqual({ token: 'dop_v1_env', source: 'DIGITALOCEAN_ACCESS_TOKEN' });
+    expect(resolveToken({ DIGITALOCEAN_TOKEN: ' dop_v1_other ' }, credsPath))
+      .toEqual({ token: 'dop_v1_other', source: 'DIGITALOCEAN_TOKEN' });
   });
 
-  it('invalid JSON in credentials file returns null safely', () => {
-    writeFileSync(testCredsPath, 'not-valid-json');
-    let result: unknown = null;
-    try {
-      result = JSON.parse(readFileSync(testCredsPath, 'utf-8'));
-    } catch {
-      result = null;
-    }
-    expect(result).toBeNull();
+  it('treats a corrupt or token-less credentials file as no login', () => {
+    writeFileSync(credsPath, 'not-valid-json');
+    expect(getCredentials(credsPath)).toBeNull();
+    writeFileSync(credsPath, JSON.stringify({ email: 'x@example.com' }));
+    expect(getCredentials(credsPath)).toBeNull();
+  });
+
+  it('ignores a login left over from the old turkeycode.ai hosting', () => {
+    writeFileSync(credsPath, JSON.stringify({ token: 'tc_usr_old', email: 'x@example.com', tier: 'starter' }));
+    expect(resolveToken({}, credsPath)).toBeNull();
   });
 });
 
@@ -80,7 +76,6 @@ describe('deploy/detect', () => {
     writeFileSync(join(testDir, 'index.html'), '<html><body>Hello</body></html>');
     const detection = detectProject(testDir);
     expect(detection.runtime).toBe('static');
-    expect(detection.tier).toBe('free');
   });
 
   it('detects Next.js stack', () => {
@@ -187,36 +182,6 @@ describe('deploy/detect', () => {
     expect(detection.features.s3).toBe(true);
   });
 
-  it('estimates free tier for plain app', () => {
-    writeFileSync(join(testDir, 'package.json'), JSON.stringify({
-      name: 'simple-app',
-      version: '1.0.0',
-      dependencies: { express: '^4.18.0' },
-    }));
-    const detection = detectProject(testDir);
-    expect(detection.tier).toBe('free');
-  });
-
-  it('estimates starter tier when db is needed', () => {
-    writeFileSync(join(testDir, 'package.json'), JSON.stringify({
-      name: 'db-app',
-      version: '1.0.0',
-      dependencies: { express: '^4.18.0', pg: '^8.0.0' },
-    }));
-    const detection = detectProject(testDir);
-    expect(detection.tier).toBe('starter');
-  });
-
-  it('estimates pro tier when stripe is needed', () => {
-    writeFileSync(join(testDir, 'package.json'), JSON.stringify({
-      name: 'paid-app',
-      version: '1.0.0',
-      dependencies: { next: '^14.0.0', stripe: '^14.0.0' },
-    }));
-    const detection = detectProject(testDir);
-    expect(detection.tier).toBe('pro');
-  });
-
   it('detects node version from engines field', () => {
     writeFileSync(join(testDir, 'package.json'), JSON.stringify({
       name: 'my-app',
@@ -262,136 +227,65 @@ describe('deploy/detect', () => {
 });
 
 // ============================================================================
-// upload.ts — manifest construction tests (no network)
-// ============================================================================
-
-describe('deploy/upload manifest shape', () => {
-  it('builds manifest with all required fields', () => {
-    const detection = {
-      name: 'my-app',
-      version: '1.2.3',
-      stack: 'nextjs' as const,
-      runtimeVersion: "20",
-      features: {
-        database: true, redis: false, stripe: false,
-        auth: false, s3: false, email: false, backgroundJobs: false,
-      },
-      scripts: { build: 'next build', start: 'next start', migrate: 'prisma migrate deploy' },
-      tier: 'starter' as const,
-      tierReason: 'requires database',
-    };
-
-    const manifest = {
-      name: 'custom-name',
-      version: detection.version,
-      stack: detection.stack,
-      node: detection.runtimeVersion,
-      features: detection.features,
-      scripts: detection.scripts,
-      env: { API_KEY: 'secret' },
-      tier: 'pro',
-    };
-
-    expect(manifest.name).toBe('custom-name');
-    expect(manifest.stack).toBe('nextjs');
-    expect(manifest.node).toBe('20');
-    expect(manifest.tier).toBe('pro');
-    expect(manifest.env.API_KEY).toBe('secret');
-    expect(manifest.features.database).toBeTruthy();
-    expect(manifest.scripts.migrate).toBe('prisma migrate deploy');
-  });
-
-  it('manifest uses detection tier when no override', () => {
-    const opts: { tier?: string } = {};
-    const tier = opts.tier ?? 'starter';
-    expect(tier).toBe('starter');
-  });
-
-  it('manifest uses options name when provided', () => {
-    const opts: { name?: string } = { name: 'override-name' };
-    const name = opts.name ?? 'original-name';
-    expect(name).toBe('override-name');
-  });
-});
-
-// ============================================================================
-// apps.ts — printApps tests
+// apps.ts — droplets shown as apps
 // ============================================================================
 
 describe('deploy/apps', () => {
-  it('printApps prints "No deployed apps" for empty list', () => {
+  function printed(apps: Parameters<typeof printApps>[0]): string {
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    printApps([]);
+    printApps(apps);
     const output = consoleSpy.mock.calls.map(c => c.join(' ')).join('\n');
-    expect(output).toContain('No deployed apps');
     consoleSpy.mockRestore();
+    return output;
+  }
+
+  const droplet = {
+    id: 7,
+    name: 'my-app',
+    status: 'active',
+    created_at: '2026-11-20T00:00:00Z',
+    size_slug: 's-1vcpu-2gb',
+    size: { price_monthly: 12 },
+    region: { slug: 'nyc3' },
+    tags: ['turkeycode', 'tc-stack:nextjs'],
+    networks: { v4: [
+      { ip_address: '10.0.0.5', type: 'private' },
+      { ip_address: '203.0.113.9', type: 'public' },
+    ] },
+  };
+
+  it('says so when nothing is deployed', () => {
+    expect(printed([])).toContain('No deployed apps');
   });
 
-  it('printApps renders app name, stack, tier, status', () => {
-    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    printApps([{
+  it('reads name, stack, size, price and public URL off a droplet', () => {
+    expect(toApp(droplet)).toEqual({
       name: 'my-app',
-      url: 'https://my-app.turkeycode.ai',
-      tier: 'starter',
+      url: 'http://203.0.113.9',
       stack: 'nextjs',
-      status: 'running',
-      createdAt: '2026-03-08T00:00:00Z',
-      lastDeployed: '2026-03-08T00:00:00Z',
-    }]);
-    const output = consoleSpy.mock.calls.map(c => c.join(' ')).join('\n');
+      size: 's-1vcpu-2gb',
+      region: 'nyc3',
+      status: 'active',
+      priceMonthly: 12,
+      createdAt: '2026-11-20T00:00:00Z',
+    });
+  });
+
+  it('copes with a droplet that has no address or stack tag yet', () => {
+    const app = toApp({ id: 1, name: 'new-app', status: 'new', created_at: '', size_slug: 's-1vcpu-1gb' });
+    expect(app.url).toBe('');
+    expect(app.stack).toBe('unknown');
+    expect(app.priceMonthly).toBeNull();
+  });
+
+  it('prints one row per app with its status', () => {
+    const output = printed([toApp(droplet), toApp({ ...droplet, name: 'other', status: 'off' })]);
     expect(output).toContain('my-app');
     expect(output).toContain('nextjs');
-    expect(output).toContain('starter');
-    expect(output).toContain('running');
-    consoleSpy.mockRestore();
-  });
-
-  it('printApps shows sleeping icon for sleeping apps', () => {
-    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    printApps([{
-      name: 'sleepy', url: 'https://sleepy.turkeycode.ai',
-      tier: 'free', stack: 'express', status: 'sleeping',
-      createdAt: '', lastDeployed: '',
-    }]);
-    const output = consoleSpy.mock.calls.map(c => c.join(' ')).join('\n');
-    expect(output).toContain('💤');
-    consoleSpy.mockRestore();
-  });
-
-  it('printApps shows failed icon for failed apps', () => {
-    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    printApps([{
-      name: 'broken', url: 'https://broken.turkeycode.ai',
-      tier: 'free', stack: 'node', status: 'failed',
-      createdAt: '', lastDeployed: '',
-    }]);
-    const output = consoleSpy.mock.calls.map(c => c.join(' ')).join('\n');
-    expect(output).toContain('❌');
-    consoleSpy.mockRestore();
-  });
-
-  it('printApps shows provisioning icon', () => {
-    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    printApps([{
-      name: 'new-app', url: 'https://new-app.turkeycode.ai',
-      tier: 'starter', stack: 'nestjs', status: 'provisioning',
-      createdAt: '', lastDeployed: '',
-    }]);
-    const output = consoleSpy.mock.calls.map(c => c.join(' ')).join('\n');
-    expect(output).toContain('⏳');
-    consoleSpy.mockRestore();
-  });
-
-  it('printApps handles multiple apps', () => {
-    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    printApps([
-      { name: 'app-one', url: 'https://app-one.turkeycode.ai', tier: 'free', stack: 'express', status: 'running', createdAt: '', lastDeployed: '' },
-      { name: 'app-two', url: 'https://app-two.turkeycode.ai', tier: 'starter', stack: 'nextjs', status: 'sleeping', createdAt: '', lastDeployed: '' },
-    ]);
-    const output = consoleSpy.mock.calls.map(c => c.join(' ')).join('\n');
-    expect(output).toContain('app-one');
-    expect(output).toContain('app-two');
-    consoleSpy.mockRestore();
+    expect(output).toContain('s-1vcpu-2gb');
+    expect(output).toContain('✅ active');
+    expect(output).toContain('⏹ off');
+    expect(output).toContain('http://203.0.113.9');
   });
 });
 

@@ -1,91 +1,105 @@
 /**
- * turkey login — Authentication with turkeycode.ai
- * Stores credentials at ~/.turkeycode/credentials.json
+ * turkeycode login — the caller's own DigitalOcean API token.
+ *
+ * `turkeycode deploy` creates droplets in whatever account this token belongs
+ * to. The token comes from the environment (DIGITALOCEAN_ACCESS_TOKEN, the name
+ * doctl uses, or DIGITALOCEAN_TOKEN) or from ~/.turkeycode/credentials.json,
+ * which `turkeycode login --token` writes. It is only ever sent to
+ * api.digitalocean.com.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
+import { DigitalOcean } from './digitalocean';
 
-const API_BASE = 'https://turkeycode.ai/api/v1';
 const CREDS_DIR = join(homedir(), '.turkeycode');
 const CREDS_PATH = join(CREDS_DIR, 'credentials.json');
+
+export const TOKEN_ENV_VARS = ['DIGITALOCEAN_ACCESS_TOKEN', 'DIGITALOCEAN_TOKEN'] as const;
+const TOKENS_URL = 'https://cloud.digitalocean.com/account/api/tokens';
 
 export interface Credentials {
   token: string;
   email: string;
-  tier: string;
 }
 
-export function getCredentials(): Credentials | null {
-  if (!existsSync(CREDS_PATH)) return null;
+export interface ResolvedToken {
+  token: string;
+  /** Where it came from, for the "Using ..." line. */
+  source: string;
+}
+
+export function getCredentials(path: string = CREDS_PATH): Credentials | null {
+  if (!existsSync(path)) return null;
   try {
-    return JSON.parse(readFileSync(CREDS_PATH, 'utf-8')) as Credentials;
+    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as Partial<Credentials> & { tier?: unknown };
+    // A file with a tier is a login to the old turkeycode.ai hosting, not a
+    // DigitalOcean token. Never send that to DigitalOcean.
+    if ('tier' in parsed) return null;
+    if (typeof parsed.token !== 'string' || !parsed.token) return null;
+    return { token: parsed.token, email: typeof parsed.email === 'string' ? parsed.email : '' };
   } catch {
     return null;
   }
 }
 
-export function saveCredentials(creds: Credentials): void {
-  if (!existsSync(CREDS_DIR)) {
+export function saveCredentials(creds: Credentials, path: string = CREDS_PATH): void {
+  if (path === CREDS_PATH && !existsSync(CREDS_DIR)) {
     mkdirSync(CREDS_DIR, { recursive: true });
   }
-  writeFileSync(CREDS_PATH, JSON.stringify(creds, null, 2), { mode: 0o600 });
+  writeFileSync(path, JSON.stringify(creds, null, 2), { mode: 0o600 });
 }
 
-export function isLoggedIn(): boolean {
-  return getCredentials() !== null;
-}
-
-async function validateToken(token: string): Promise<{ email: string; tier: string }> {
-  const response = await fetch(`${API_BASE}/auth/me`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-
-  if (!response.ok) {
-    if (response.status === 401) {
-      throw new Error('Invalid token. Check your API key at https://turkeycode.ai/settings/api-keys');
-    }
-    throw new Error(`Auth failed: ${response.status} ${response.statusText}`);
+/** The environment wins over the saved login, so CI can override per run. */
+export function resolveToken(
+  env: NodeJS.ProcessEnv = process.env,
+  credsPath: string = CREDS_PATH
+): ResolvedToken | null {
+  for (const name of TOKEN_ENV_VARS) {
+    const value = env[name]?.trim();
+    if (value) return { token: value, source: name };
   }
+  const creds = getCredentials(credsPath);
+  if (creds) return { token: creds.token, source: 'turkeycode login' };
+  return null;
+}
 
-  const data = await response.json() as { email: string; tier: string };
-  return data;
+function printTokenHelp(): void {
+  console.log('turkeycode deploys to your own DigitalOcean account.');
+  console.log('');
+  console.log('  1. Create an API token with read and write access:');
+  console.log(`       ${TOKENS_URL}`);
+  console.log('  2. Give it to turkeycode, either way:');
+  console.log('       turkeycode login --token <token>');
+  console.log(`       export ${TOKEN_ENV_VARS[0]}=<token>`);
+  console.log('');
 }
 
 export async function login(options: { token?: string }): Promise<void> {
-  if (options.token) {
-    // Headless / CI mode
-    console.log('Verifying token...');
-    try {
-      const { email, tier } = await validateToken(options.token);
-      saveCredentials({ token: options.token, email, tier });
-      console.log(`✅ Logged in as ${email} (${tier} tier)`);
-    } catch (err) {
-      console.error(`Login failed: ${(err as Error).message}`);
-      process.exit(1);
-    }
+  if (!options.token) {
+    printTokenHelp();
     return;
   }
 
-  // Browser-based OAuth flow
-  const loginUrl = `${API_BASE.replace('/api/v1', '')}/login/cli`;
-  console.log('');
-  console.log('Open this URL in your browser to authenticate:');
-  console.log('');
-  console.log(`  ${loginUrl}`);
-  console.log('');
-  console.log('After logging in, run:');
-  console.log('  turkey login --token <your-api-key>');
-  console.log('');
-  console.log('You can find your API key at https://turkeycode.ai/settings/api-keys');
-}
-
-export function requireAuth(): Credentials {
-  const creds = getCredentials();
-  if (!creds) {
-    console.error('Not logged in. Run: turkey login');
+  console.log('Checking the token with DigitalOcean...');
+  try {
+    const account = await new DigitalOcean(options.token).getAccount();
+    saveCredentials({ token: options.token, email: account.email });
+    console.log(`✅ Saved. Deploys will go to the DigitalOcean account ${account.email}`);
+  } catch (err) {
+    console.error(`Login failed: ${(err as Error).message}`);
     process.exit(1);
   }
-  return creds;
+}
+
+export function requireToken(): ResolvedToken {
+  const resolved = resolveToken();
+  if (!resolved) {
+    console.error('No DigitalOcean token found.');
+    console.error('');
+    printTokenHelp();
+    process.exit(1);
+  }
+  return resolved;
 }

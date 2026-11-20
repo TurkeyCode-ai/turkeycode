@@ -1,101 +1,92 @@
 /**
- * turkey apps — list, logs, delete deployed apps
+ * turkeycode apps — list, logs, delete. An app is a droplet tagged `turkeycode`
+ * in the caller's own DigitalOcean account.
  */
 
-const API_BASE = 'https://turkeycode.ai/api/v1';
+import { DigitalOcean, dropletName, publicIp, stackOf, type Droplet } from './digitalocean';
+import { remoteLogs } from './droplet';
 
 export interface DeployedApp {
   name: string;
   url: string;
-  tier: string;
   stack: string;
+  size: string;
+  region: string;
   status: string;
+  priceMonthly: number | null;
   createdAt: string;
-  lastDeployed: string;
 }
 
 const STATUS_ICON: Record<string, string> = {
-  running: '✅',
-  sleeping: '💤',
-  provisioning: '⏳',
-  stopped: '⏹',
-  failed: '❌',
+  active: '✅',
+  new: '⏳',
+  off: '⏹',
+  archive: '📦',
 };
 
-async function apiRequest<T>(path: string, token: string, options: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(options.headers ?? {}),
-    },
-  });
-
-  if (!res.ok) {
-    let errMsg = `API error: ${res.status} ${res.statusText}`;
-    try {
-      const body = await res.json() as { error?: string };
-      if (body.error) errMsg = body.error;
-    } catch { /* ignore */ }
-    throw new Error(errMsg);
-  }
-
-  return res.json() as Promise<T>;
+export function toApp(droplet: Droplet): DeployedApp {
+  const ip = publicIp(droplet);
+  return {
+    name: droplet.name,
+    url: ip ? `http://${ip}` : '',
+    stack: stackOf(droplet),
+    size: droplet.size_slug,
+    region: droplet.region?.slug ?? '',
+    status: droplet.status,
+    priceMonthly: droplet.size?.price_monthly ?? null,
+    createdAt: droplet.created_at,
+  };
 }
 
-export async function listApps(token: string): Promise<DeployedApp[]> {
-  const data = await apiRequest<{ apps: DeployedApp[] }>('/apps', token);
-  return data.apps;
+export async function listApps(api: DigitalOcean): Promise<DeployedApp[]> {
+  return (await api.listAppDroplets()).map(toApp);
+}
+
+async function requireDroplet(api: DigitalOcean, appName: string): Promise<Droplet> {
+  const droplet = await api.findAppDroplet(dropletName(appName));
+  if (!droplet) throw new Error(`No app named "${appName}" in this DigitalOcean account. Run: turkeycode apps`);
+  return droplet;
+}
+
+export async function getAppStatus(api: DigitalOcean, appName: string): Promise<DeployedApp> {
+  return toApp(await requireDroplet(api, appName));
+}
+
+export async function getAppLogs(api: DigitalOcean, appName: string, lines = 100): Promise<string> {
+  const droplet = await requireDroplet(api, appName);
+  const ip = publicIp(droplet);
+  if (!ip) throw new Error(`Droplet ${droplet.name} has no public address.`);
+  return remoteLogs(ip, droplet.name, lines);
+}
+
+/** Destroys the droplet and everything on it, including database volumes. */
+export async function deleteApp(api: DigitalOcean, appName: string): Promise<void> {
+  const droplet = await requireDroplet(api, appName);
+  await api.deleteDroplet(droplet.id);
 }
 
 export function printApps(apps: DeployedApp[]): void {
   if (apps.length === 0) {
-    console.log('No deployed apps. Run: turkey deploy');
+    console.log('No deployed apps. Run: turkeycode deploy');
     return;
   }
 
   const nameWidth = Math.max(4, ...apps.map(a => a.name.length));
   const stackWidth = Math.max(5, ...apps.map(a => a.stack.length));
+  const sizeWidth = Math.max(4, ...apps.map(a => a.size.length));
 
   console.log('');
   console.log(
-    `  ${'NAME'.padEnd(nameWidth)}  ${'STACK'.padEnd(stackWidth)}  ${'TIER'.padEnd(8)}  ${'STATUS'.padEnd(12)}  URL`
+    `  ${'NAME'.padEnd(nameWidth)}  ${'STACK'.padEnd(stackWidth)}  ${'SIZE'.padEnd(sizeWidth)}  ${'$/MO'.padEnd(5)}  ${'STATUS'.padEnd(10)}  URL`
   );
-  console.log('  ' + '-'.repeat(nameWidth + stackWidth + 50));
+  console.log('  ' + '-'.repeat(nameWidth + stackWidth + sizeWidth + 48));
 
   for (const app of apps) {
     const icon = STATUS_ICON[app.status] ?? '?';
-    const status = `${icon} ${app.status}`.padEnd(14);
+    const price = app.priceMonthly === null ? '-' : String(app.priceMonthly);
     console.log(
-      `  ${app.name.padEnd(nameWidth)}  ${app.stack.padEnd(stackWidth)}  ${app.tier.padEnd(8)}  ${status}  ${app.url}`
+      `  ${app.name.padEnd(nameWidth)}  ${app.stack.padEnd(stackWidth)}  ${app.size.padEnd(sizeWidth)}  ${price.padEnd(5)}  ${icon} ${app.status.padEnd(8)}  ${app.url}`
     );
   }
   console.log('');
-}
-
-export async function getAppLogs(appName: string, token: string, lines = 100): Promise<string[]> {
-  const data = await apiRequest<{ logs: string[] }>(
-    `/apps/${encodeURIComponent(appName)}/logs`,
-    token,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lines }),
-    }
-  );
-  return data.logs;
-}
-
-export async function deleteApp(appName: string, token: string): Promise<void> {
-  await apiRequest<void>(`/apps/${encodeURIComponent(appName)}`, token, {
-    method: 'DELETE',
-  });
-}
-
-export async function getAppStatus(appName: string, token: string): Promise<DeployedApp> {
-  const data = await apiRequest<{ app: DeployedApp }>(
-    `/apps/${encodeURIComponent(appName)}`,
-    token
-  );
-  return data.app;
 }

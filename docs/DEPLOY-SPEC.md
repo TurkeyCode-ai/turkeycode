@@ -1,467 +1,85 @@
-# `turkey deploy` — App Hosting Spec
+# `turkeycode deploy`
 
-## Overview
+Deploys the current project to a droplet in the caller's own DigitalOcean account.
 
-Deploy apps built with TurkeyCode to turkeycode.ai hosting. One command, live in 60 seconds.
+turkeycode has no hosting service. Earlier versions uploaded to turkeycode.ai; that
+path, its tiers and its checkout are gone. The only outside service `deploy` talks to
+is `api.digitalocean.com`, with the caller's token.
 
-```bash
-turkey deploy
-# → ✅ Live at https://my-app.turkeycode.ai
-```
+## Credentials
 
----
+A DigitalOcean API token with read and write access, looked up in this order:
 
-## CLI Commands
+1. `DIGITALOCEAN_ACCESS_TOKEN` (the name `doctl` uses)
+2. `DIGITALOCEAN_TOKEN`
+3. `~/.turkeycode/credentials.json`, written by `turkeycode login --token <token>` (mode 600)
 
-### `turkey deploy`
-Package and deploy the current project.
+`login` checks the token against `GET /v2/account` before saving it.
 
-```bash
-turkey deploy                          # auto-detect everything
-turkey deploy --name cool-app          # custom subdomain
-turkey deploy --domain mycoolapp.com   # custom domain (Pro+)
-turkey deploy --tier starter           # explicit tier
-turkey deploy --env .env.production    # inject env vars
-```
+SSH uses a dedicated keypair, `~/.turkeycode/deploy_key`, generated on first use and
+registered in the account as `turkeycode-deploy`. Host keys go in
+`~/.turkeycode/deploy_known_hosts`.
 
-### `turkey login`
-Authenticate with turkeycode.ai.
+## Commands
 
 ```bash
-turkey login                           # browser-based OAuth
-turkey login --token <api-key>         # headless / CI
+turkeycode login --token <token>
+turkeycode deploy [--name <name>] [--domain <domain>] [--region <slug>] [--size <slug>] [--env <file>] [--yes]
+turkeycode apps [list]
+turkeycode apps status [name]
+turkeycode apps logs <name> [-n <lines>]
+turkeycode apps delete <name> --force
 ```
 
-Stores credentials at `~/.turkeycode/credentials.json`:
-```json
-{
-  "token": "tc_usr_...",
-  "email": "user@example.com",
-  "tier": "starter"
-}
-```
+## Model
 
-### `turkey apps`
-List deployed apps.
+- One droplet per app. The droplet is named after the app and tagged `turkeycode`
+  and `tc-stack:<stack>`. An app is found again by that tag and name, so there is no
+  local state file and nothing to keep in sync.
+- Image `ubuntu-24-04-x64`. First boot (cloud-init) installs Docker with the Compose
+  plugin and adds 2 GB of swap.
+- Default size `s-1vcpu-1gb`, or `s-1vcpu-2gb` when the app needs a database or Redis.
+  Default region `nyc3`. Both only apply when the droplet is created.
+- Creating a droplet costs the account owner money, so the first deploy prints the
+  size and monthly price and asks. `--yes` skips the question; without a TTY and
+  without `--yes` it refuses.
 
-```bash
-turkey apps                            # list all
-turkey apps status                     # with health/uptime
-turkey apps logs my-app                # tail logs
-turkey apps delete my-app              # teardown
-```
+## Flow
 
-### `turkey upgrade`
-Change hosting tier.
+1. Resolve the token and call `GET /v2/account`.
+2. Detect the project (`src/deploy/detect.ts`).
+3. Find the app's droplet, or create one and wait for it to be active.
+4. Wait for SSH.
+5. Build the Compose file: the `run-local` services, changed for production
+   (`productionCompose` in `src/deploy/droplet.ts`):
+   - no service publishes a port except Caddy (80 and 443)
+   - development database passwords become `${DB_PASSWORD}`
+   - the app gets `env_file: ../app.env`, and keys set there win over generated ones
+   - Caddy reverse-proxies to the app: `--from <domain>` for HTTPS, `--from :80` otherwise
+6. Tar the project (`src/deploy/package.ts`; `.env*`, `node_modules`, `.git` excluded).
+   There is no local build. The image is built on the droplet.
+7. Copy `release.tar.gz`, `compose.yml` and `app.env` to `/opt/turkeycode/<app>/`.
+8. Run the remote script (`remoteScript`): wait for cloud-init, create `secrets.env`
+   with a random `DB_PASSWORD` if it is not there yet, swap in the new source, build,
+   start databases and wait for them, run the migration, start everything.
+9. Poll `http://<ip>/` and report.
 
-```bash
-turkey upgrade my-app --tier pro       # opens Stripe checkout if needed
-```
-
----
-
-## Deploy Flow (Client Side)
-
-```
-turkey deploy
-    │
-    ├── 1. Check auth (~/.turkeycode/credentials.json)
-    │      └── No auth? → Run `turkey login` interactively
-    │
-    ├── 2. Detect project
-    │      ├── Read package.json → name, scripts, deps
-    │      ├── Detect stack (Next.js, Express, etc.)
-    │      ├── Detect DB needs (prisma? → needs postgres)
-    │      ├── Detect features needed (stripe, auth, s3, email)
-    │      └── Estimate tier requirement
-    │
-    ├── 3. Package
-    │      ├── Run build if not already built (npm run build)
-    │      ├── Create tarball of deploy-ready files:
-    │      │     .next/, dist/, prisma/, package.json,
-    │      │     package-lock.json, public/, Dockerfile (if exists)
-    │      ├── Exclude: node_modules, .git, .env, .turkey/
-    │      └── Compress: deploy-{name}-{timestamp}.tar.gz
-    │
-    ├── 4. Upload
-    │      POST turkeycode.ai/api/v1/deploy
-    │      Headers: Authorization: Bearer tc_usr_...
-    │      Body: multipart/form-data
-    │        - tarball: the package
-    │        - manifest.json: {name, stack, tier, features, env}
-    │
-    ├── 5. Wait for provisioning
-    │      Poll turkeycode.ai/api/v1/deploy/{id}/status
-    │      Show progress spinner:
-    │        ▸ Uploading...
-    │        ▸ Provisioning container...
-    │        ▸ Installing dependencies...
-    │        ▸ Running migrations...
-    │        ▸ Starting app...
-    │        ▸ Configuring SSL...
-    │
-    └── 6. Done
-           ✅ Live at https://my-app.turkeycode.ai
-           
-           App:    my-app
-           Tier:   starter ($12/mo)
-           Stack:  Next.js + Postgres
-           URL:    https://my-app.turkeycode.ai
-```
-
----
-
-## Deploy Flow (Server Side)
-
-### API Endpoints
-
-#### `POST /api/v1/deploy`
-Create a new deployment.
+On the droplet:
 
 ```
-Authorization: Bearer tc_usr_...
-Content-Type: multipart/form-data
-
-Fields:
-  tarball: <file>
-  manifest: <json string>
+/opt/turkeycode/<app>/
+  secrets.env   DB_PASSWORD, generated once, kept across redeploys
+  app.env       from --env, replaced on every deploy
+  src/          the project, docker-compose.turkeycode.yml, Dockerfile
 ```
 
-Response:
-```json
-{
-  "deployId": "dep_abc123",
-  "appName": "my-app",
-  "status": "provisioning",
-  "url": "https://my-app.turkeycode.ai"
-}
-```
+Database data lives in named Docker volumes, so a redeploy keeps it.
+`apps delete` destroys the droplet and the data with it.
 
-#### `GET /api/v1/deploy/:id/status`
-Poll deployment progress.
+## Not handled
 
-```json
-{
-  "deployId": "dep_abc123",
-  "status": "running",        // provisioning | installing | migrating | starting | running | failed
-  "step": "Installing dependencies...",
-  "url": "https://my-app.turkeycode.ai",
-  "logs": ["...", "..."]
-}
-```
-
-#### `GET /api/v1/apps`
-List user's deployed apps.
-
-```json
-{
-  "apps": [
-    {
-      "name": "my-app",
-      "url": "https://my-app.turkeycode.ai",
-      "tier": "starter",
-      "stack": "nextjs",
-      "status": "running",
-      "createdAt": "2026-03-08T...",
-      "lastDeployed": "2026-03-08T..."
-    }
-  ]
-}
-```
-
-#### `DELETE /api/v1/apps/:name`
-Tear down an app.
-
-#### `POST /api/v1/apps/:name/logs`
-Stream app logs.
-
----
-
-## Server-Side Provisioning
-
-### Container Architecture — Stack & Platform Agnostic
-
-TurkeyCode is NOT a Next.js hosting platform. It deploys **any** stack.
-
-The CLI detects the project type and generates an appropriate Dockerfile if one doesn't exist. If the project already has a Dockerfile, we use that as-is.
-
-**Auto-detected stacks:**
-
-| Stack | Detection | Base Image | Start Command |
-|-------|-----------|------------|---------------|
-| Next.js | `next` in deps | node:20-slim | `npm start` |
-| Express/Node | `express` in deps | node:20-slim | `npm start` |
-| Go | `go.mod` exists | golang:1.22-alpine → scratch | `./app` |
-| Python/Django | `requirements.txt` or `pyproject.toml` | python:3.12-slim | `gunicorn` |
-| Python/Flask | `flask` in requirements | python:3.12-slim | `gunicorn` |
-| Python/FastAPI | `fastapi` in requirements | python:3.12-slim | `uvicorn` |
-| Ruby/Rails | `Gemfile` + `rails` | ruby:3.3-slim | `rails server` |
-| Rust | `Cargo.toml` | rust:1.77 → debian:slim | `./target/release/app` |
-| PHP/Laravel | `composer.json` + `laravel` | php:8.3-fpm-alpine | `php artisan serve` |
-| Static | `index.html` only | caddy:2-alpine | serves static files |
-| Docker | `Dockerfile` exists | user-provided | user-defined |
-
-**Dockerfile generation:**
-
-If no Dockerfile exists, `turkey deploy` generates one based on detection:
-
-```typescript
-// src/deploy/detect.ts
-function generateDockerfile(stack: DetectedStack): string {
-  // Returns a production-optimized Dockerfile for the detected stack
-  // Multi-stage builds where appropriate (Go, Rust)
-  // Proper caching of dependency layers
-}
-```
-
-If a Dockerfile already exists, we use it verbatim — the developer knows best.
-
-**Database detection:**
-
-| ORM/Driver | Detection | DB Provisioned |
-|------------|-----------|----------------|
-| Prisma | `prisma/schema.prisma` | Postgres |
-| Drizzle | `drizzle.config.ts` | Postgres |
-| SQLAlchemy | `sqlalchemy` in requirements | Postgres |
-| ActiveRecord | `db/schema.rb` | Postgres |
-| GORM | `gorm.io` in go.mod | Postgres |
-| Diesel | `diesel` in Cargo.toml | Postgres |
-| Mongoose | `mongoose` in deps | MongoDB |
-| sqlite3 | `sqlite3`/`better-sqlite3` in deps | SQLite (local volume) |
-| None detected | — | No DB provisioned |
-
-### Environment Injection by Tier
-
-**Free tier:**
-```
-PORT=3000
-NODE_ENV=production
-```
-
-**Starter ($12/mo) — adds:**
-```
-DATABASE_URL=postgresql://app_myapp:generated@db:5432/myapp
-REDIS_URL=redis://redis:6379/N
-```
-
-**Pro ($29/mo) — adds:**
-```
-# Stripe (user provides their own keys via turkey deploy --env)
-STRIPE_SECRET_KEY=sk_...
-STRIPE_WEBHOOK_SECRET=whsec_...
-
-# Auth
-NEXTAUTH_URL=https://my-app.turkeycode.ai
-NEXTAUTH_SECRET=generated
-GOOGLE_CLIENT_ID=turkeycode-shared-oauth-id
-GOOGLE_CLIENT_SECRET=turkeycode-shared-oauth-secret
-
-# S3
-S3_BUCKET=turkeycode-apps
-S3_PREFIX=my-app/
-S3_ENDPOINT=https://nyc3.digitaloceanspaces.com
-S3_ACCESS_KEY=...
-S3_SECRET_KEY=...
-
-# Email
-SENDGRID_API_KEY=...
-SENDGRID_FROM=noreply@my-app.turkeycode.ai
-```
-
-**Business ($49/mo) — adds:**
-```
-# Same as Pro, plus:
-BACKUP_ENABLED=true
-BACKUP_SCHEDULE=0 3 * * *
-```
-
-### Caddy Configuration
-
-Wildcard subdomain routing via Caddy:
-
-```caddyfile
-*.turkeycode.ai {
-    tls {
-        dns digitalocean {env.DO_API_TOKEN}
-    }
-
-    @app {
-        header_regexp Host ^(?P<app>[a-z0-9-]+)\.turkeycode\.ai$
-    }
-
-    handle @app {
-        reverse_proxy {re.app.app}:3000
-    }
-}
-```
-
-Each app container gets a hostname matching its subdomain. Caddy routes `my-app.turkeycode.ai` → container `my-app:3000`.
-
-Custom domains (Pro+):
-```caddyfile
-mycoolapp.com {
-    reverse_proxy my-app:3000
-}
-```
-
-### Database Provisioning
-
-Per-app database (Starter+):
-```sql
-CREATE USER app_myapp WITH PASSWORD 'generated';
-CREATE DATABASE myapp OWNER app_myapp;
-```
-
-All on the shared Postgres instance. Each app is isolated by user/database.
-
-### Free Tier: Sleep/Wake
-
-Apps on free tier sleep after 30 minutes of inactivity:
-
-1. **Caddy middleware** tracks last request timestamp per app
-2. **Cron job** (every 5 min) checks for idle free-tier apps → `docker stop`
-3. **Wake-on-request:** Caddy detects stopped container → `docker start` → wait for health → proxy
-4. Cold start adds ~3-5s on first request
-
-```
-Request → Caddy → Container running? 
-                    ├── Yes → proxy immediately
-                    └── No → docker start → poll health → proxy (3-5s)
-```
-
-### Docker Compose (per server)
-
-```yaml
-services:
-  caddy:
-    image: caddy:2-alpine
-    ports: ["80:80", "443:443"]
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
-      - caddy_data:/data
-
-  db:
-    image: postgres:16-alpine
-    volumes: [pgdata:/var/lib/postgresql/data]
-
-  redis:
-    image: redis:7-alpine
-
-  # App containers are managed dynamically via docker CLI
-  # Not in compose — created/destroyed by the deploy API
-```
-
----
-
-## Manifest Format
-
-Generated by CLI, sent with tarball:
-
-```json
-{
-  "name": "my-app",
-  "version": "1.0.0",
-  "stack": "nextjs",
-  "runtime": "node",
-  "runtimeVersion": "20",
-  "hasDockerfile": false,
-  "features": {
-    "database": "postgres",
-    "redis": false,
-    "stripe": false,
-    "auth": false,
-    "s3": false,
-    "email": false,
-    "backgroundJobs": false
-  },
-  "scripts": {
-    "install": "npm ci --only=production",
-    "build": "next build",
-    "start": "next start",
-    "migrate": "prisma migrate deploy"
-  },
-  "expose": 3000,
-  "env": {
-    "CUSTOM_VAR": "value"
-  },
-  "tier": "starter"
-}
-```
-
-**Runtime detection:**
-
-| Runtime | Detection |
-|---------|-----------|
-| `node` | `package.json` exists |
-| `python` | `requirements.txt` or `pyproject.toml` |
-| `go` | `go.mod` exists |
-| `ruby` | `Gemfile` exists |
-| `rust` | `Cargo.toml` exists |
-| `php` | `composer.json` exists |
-| `static` | `index.html` only, no backend detected |
-| `docker` | `Dockerfile` exists (skip all detection, use as-is) |
-```
-
----
-
-## Database Schema (additions to existing)
-
-```prisma
-model DeployedApp {
-  id            String   @id @default(cuid())
-  name          String   @unique  // subdomain
-  userId        String
-  user          User     @relation(fields: [userId], references: [id])
-  tier          String   @default("free")  // free | starter | pro | business
-  stack         String   // nextjs | express | etc
-  status        String   @default("provisioning")  // provisioning | running | sleeping | stopped | failed
-  containerName String?
-  customDomain  String?
-  features      Json     @default("{}")
-  lastActivity  DateTime @default(now())
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-
-  deployments   Deployment[]
-}
-
-model Deployment {
-  id        String   @id @default(cuid())
-  appId     String
-  app       DeployedApp @relation(fields: [appId], references: [id])
-  status    String   @default("pending")  // pending | building | running | failed
-  version   String
-  logs      String   @default("")
-  createdAt DateTime @default(now())
-}
-```
-
----
-
-## Security
-
-- **Isolation:** Each app runs in its own Docker container with limited resources
-- **Network:** Apps can only reach their own database and redis (Docker network isolation)
-- **Secrets:** User env vars stored encrypted in DB, injected at container start
-- **Rate limiting:** Deploy endpoint: 5 deploys per hour per user
-- **Size limits:** Tarball max 500MB, container max 1GB disk
-- **Resource limits per tier:**
-  | Tier | RAM | CPU | Disk | Bandwidth |
-  |------|-----|-----|------|-----------|
-  | Free | 256MB | 0.25 | 512MB | 1GB/mo |
-  | Starter | 512MB | 0.5 | 2GB | 10GB/mo |
-  | Pro | 1GB | 1 | 5GB | 50GB/mo |
-  | Business | 2GB | 2 | 10GB | 100GB/mo |
-
----
-
-## Implementation Order
-
-1. **CLI: `turkey login` + `turkey deploy`** — package, upload, poll status
-2. **API: `/api/v1/deploy`** — receive tarball, create container, provision DB
-3. **Caddy: wildcard subdomain routing** — proxy to containers
-4. **Free tier: sleep/wake** — cron + wake-on-request
-5. **Stripe: tier checkout** — upgrade flow
-6. **CLI: `turkey apps`** — list, logs, delete
-7. **Custom domains** — Pro tier Caddy config
-8. **Backups** — Business tier daily pg_dump
+- Backups. Turn on droplet backups in DigitalOcean, or dump the database yourself.
+- More than one app per droplet, or more than one droplet per app.
+- Resizing or moving a droplet. Do that in DigitalOcean.
+- DNS. `--domain` configures Caddy; the A record is the owner's to create.
+- Zero-downtime deploys. The app container restarts when the new image is up.

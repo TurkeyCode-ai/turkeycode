@@ -1,22 +1,17 @@
 ---
 name: turkeycode
-description: "Run, monitor, and manage TurkeyCode CLI builds. Use when: (1) building/creating apps with turkeycode/turkey-enterprise-v3, (2) checking build status, (3) restarting failed builds, (4) reviewing build results/verdicts. NOT for: editing TurkeyCode source code itself (use coding-agent), deploying to turkeycode.ai (use deploy commands directly)."
+description: "Run, monitor, and manage TurkeyCode CLI builds. Use when: (1) building/creating apps with turkeycode, (2) checking build status, (3) restarting failed builds, (4) reviewing build results/verdicts. NOT for: editing TurkeyCode source code itself (use coding-agent), deploying a built app to DigitalOcean (use `turkeycode deploy` directly)."
 ---
 
 # TurkeyCode Build Skill
 
 Manage TurkeyCode CLI builds — start, monitor, check results.
 
-## Binary Location
+## Command
 
-```
-/home/mrcdcox/turkey-enterprise-v3/dist/index.js
-```
-
-Always rebuild before running if source changed:
-```bash
-cd /home/mrcdcox/turkey-enterprise-v3 && npm run build
-```
+Use the installed `turkeycode` command (`npm install -g turkeycode`). When working from a
+source checkout, run `npm run build` there after any source change; `npm link` makes that
+build the `turkeycode` on your PATH.
 
 ## Starting a Build
 
@@ -24,12 +19,12 @@ cd /home/mrcdcox/turkey-enterprise-v3 && npm run build
 
 ```bash
 mkdir -p ~/test-builds/<project-name>
-cd ~/test-builds/<project-name> && setsid nohup node /home/mrcdcox/turkey-enterprise-v3/dist/index.js run "<description>" --verbose > build.log 2>&1 < /dev/null &
+cd ~/test-builds/<project-name> && setsid nohup turkeycode run "<description>" --verbose > build.log 2>&1 < /dev/null &
 ```
 
 ### With a spec file:
 ```bash
-setsid nohup node /home/mrcdcox/turkey-enterprise-v3/dist/index.js run "<description>" --spec spec.md --verbose > build.log 2>&1 < /dev/null &
+setsid nohup turkeycode run "<description>" --spec spec.md --verbose > build.log 2>&1 < /dev/null &
 ```
 
 ### Clean restart (wipe previous state):

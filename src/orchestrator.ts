@@ -699,8 +699,8 @@ export class Orchestrator {
     this.log('  Run locally (Docker):');
     this.log('    turkeycode run-local');
     this.log('');
-    this.log('  Deploy to turkeycode.ai:');
-    this.log('    turkeycode login');
+    this.log('  Deploy to your own DigitalOcean account:');
+    this.log('    turkeycode login --token <digitalocean-token>');
     this.log('    turkeycode deploy');
     this.log('');
     this.log('  Iterate — add features or fix bugs:');
