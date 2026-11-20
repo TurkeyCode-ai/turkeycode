@@ -244,7 +244,7 @@ program
     console.log(`Project: ${state.projectDescription || '(not set)'}`);
     if (state.agent) console.log(`Agent: ${state.agent}`);
     console.log(`Phase: ${state.currentPhase}`);
-    console.log(`Step: ${state.currentStep || '(none)'}`);
+    if (state.projectType) console.log(`Type: ${state.projectType}${state.projectTypeGuessed ? ' (guess, until the plan says)' : ''}`);
     console.log('');
 
     if (state.buildPhases.length > 0) {

@@ -104,6 +104,8 @@ export interface BuildPhase {
 
 export interface PhasePlan {
   projectName: string;
+  /** What the planner says it is building, from the stack it chose. Adopted when the type was only a guess. */
+  projectType?: ProjectType;
   totalPhases: number;
   phases: BuildPhase[];
   architecture: {
@@ -159,6 +161,9 @@ export interface ProjectState {
 
   // Project type (stack-agnostic)
   projectType?: ProjectType;
+  // True when projectType was a guess: a greenfield build has no files to detect from, so the type came from
+  // the description or the web-fullstack default. The planner, who reads the spec and picks the stack, corrects it.
+  projectTypeGuessed?: boolean;
 
   // Agent backend the run started with ('claude'/'codex'/'gemini'/'opencode'
   // or an agents.yaml id). Pinned so `resume` runs the rest of the build on

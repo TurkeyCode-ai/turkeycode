@@ -75,8 +75,8 @@ import {
 import { audit, auditGate, auditPhase, auditBuildPhase, auditQA } from './audit';
 import { runQuickChecks } from './quick-check';
 import { captureGodotFrames, GODOT_CAPTURE_TIMELINE } from './godot-capture';
-import { detectProjectTypeStrict, inferProjectTypeFromDescription } from './detect-project-type';
-import { shouldSkipVisualQA } from './types';
+import { adoptPlannedProjectType, detectProjectTypeStrict, inferProjectTypeFromDescription } from './detect-project-type';
+import { shouldSkipVisualQA, PhasePlan } from './types';
 
 export interface OrchestratorOptions {
   verbose?: boolean;
@@ -499,6 +499,7 @@ export class Orchestrator {
         if (isGreenfield) {
           const inferred = inferProjectTypeFromDescription(description);
           this.state.projectType = inferred ?? 'web-fullstack';
+          this.state.projectTypeGuessed = true;
           this.log(
             inferred
               ? `Greenfield build — project type inferred from description: ${this.state.projectType}`
@@ -595,6 +596,7 @@ export class Orchestrator {
 
     // Load phase plan — gracefully handle missing file on resume
     const plan = loadPhasePlan();
+    this.takeProjectTypeFromPlan(plan);
     if (!plan) {
       if (this.state.buildPhases.length > 0) {
         this.log('Phase plan file missing but build phases exist in state, continuing...');
@@ -606,6 +608,7 @@ export class Orchestrator {
           this.log('ERROR: Failed to generate phase plan after retry');
           process.exit(1);
         }
+        this.takeProjectTypeFromPlan(retryPlan);
         this.state.buildPhases = retryPlan.phases;
       }
     } else {
@@ -752,6 +755,13 @@ export class Orchestrator {
     auditGate('research', finalGate.passed);
     enforceGate(finalGate);
     auditPhase('research', 'completed', { durationMs: result.durationMs });
+  }
+
+  /** A greenfield run's type starts as a guess; the plan says what is really being built. */
+  private takeProjectTypeFromPlan(plan: PhasePlan | null): void {
+    const adopted = adoptPlannedProjectType(this.state, plan?.projectType);
+    if (adopted) this.log(`Project type per the plan: ${adopted} (replaces the starting guess).`);
+    saveState(this.state);
   }
 
   /**

@@ -66,6 +66,7 @@ Create this file with the following EXACT structure:
 \`\`\`json
 {
   "projectName": "${state.projectDescription}",
+  "projectType": "<what you are actually building, from the stack you chose: web-frontend (runs in the browser with no server of its own: static site, SPA, single HTML file) | web-fullstack (frontend AND its own backend) | web-api | cli | library | desktop | mobile | game-godot | embedded | legacy | monorepo>",
   "totalPhases": "<number of phases>",
   "phases": [
     {
