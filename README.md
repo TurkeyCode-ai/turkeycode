@@ -266,6 +266,8 @@ turkeycode run-ticket PROJ-123 --deep --base-local stack/week-46 --no-push
 | `--base-local <ref>` | Cut the ticket branch from a **local** ref and rebase onto it (no fetch) instead of `origin/<base>`. A bare `<ref>` applies to every scoped repo where it exists; the others keep `origin/<base>`. Pin per repo with `<repoPath>=<ref>` (comma-separated; the ref must exist there). |
 | `--no-push` | Stop after review/fix + rebase: the branch stays local, branch + SHA per repo are printed and written to `~/.turkeycode/tickets/<KEY>/local-branches.json`. No push, no Jira transition; the Jira comment and worklog still happen. |
 
+**Running several tickets at once.** Each `run-ticket` process leaves a marker in `~/.turkeycode/tickets/<KEY>/in-flight.json` while it works. The plan and build sessions are told which other tickets are being built in the same repos and where their plans are, so they can keep shared edits small and record any overlap. It is information, not a lock: nothing waits. The deep tier also rebases before review, so a conflict with a ticket that landed meanwhile is resolved while review rounds are still ahead.
+
 Coding tickets need a manifest at `~/.turkeycode/repos.yaml` (override with `--manifest`):
 
 ```yaml

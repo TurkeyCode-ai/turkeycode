@@ -40,6 +40,8 @@ import { buildTicketTriagePrompt } from './prompts/ticket-triage';
 import { buildTicketResearchPrompt } from './prompts/ticket-research';
 import { buildTicketBuildPrompt } from './prompts/ticket-build';
 import { buildMergeFixPrompt } from './prompts/merge-fix';
+import { clearInFlight, listInFlight, markInFlight } from './ticket-inflight';
+import { InFlightNeighbour } from './prompts/ticket-common';
 import { buildTicketPlanPrompt } from './prompts/ticket-plan';
 import { buildTicketReviewPrompt } from './prompts/ticket-review';
 import { buildTicketFixPrompt } from './prompts/ticket-fix';
@@ -243,6 +245,7 @@ export class TicketOrchestrator {
       await this.runCodingPath(ticket, imagePaths, ticketDir, verdict, this.manifest, timings);
       audit('ticket_run_completed', { details: { ticket: ticketKey } });
     } finally {
+      clearInFlight(TICKETS_ROOT, ticketKey);
       const totalMs = Date.now() - runStart;
       await this.logTicketTime(ticketKey, totalMs, timings);
     }
@@ -489,11 +492,20 @@ export class TicketOrchestrator {
       cutTicketBranch(repo, branchName);
     }
 
+    // 2b. Announce this run to other run-ticket processes on the machine, and see who else is in these repos.
+    const repoPaths = scopedManifest.repos.map((r) => r.path);
+    markInFlight(TICKETS_ROOT, { key: ticket.key, summary: ticket.summary, branch: branchName, repos: repoPaths });
+    const neighbours = (): InFlightNeighbour[] => {
+      const others = listInFlight(TICKETS_ROOT, ticket.key, repoPaths);
+      if (others.length > 0) console.log(`[ticket] Also being built in these repos: ${others.map((o) => o.key).join(', ')}`);
+      return others;
+    };
+
     // 3a. Deep tier: plan session (research only) the build follows
     let planPath: string | undefined;
     if (this.deep) {
       const planStart = Date.now();
-      planPath = await this.runPlan(ticket, imagePaths, ticketDir, verdict, scopedManifest);
+      planPath = await this.runPlan(ticket, imagePaths, ticketDir, verdict, scopedManifest, neighbours());
       timings.plan = Date.now() - planStart;
     }
 
@@ -510,6 +522,8 @@ export class TicketOrchestrator {
       doneFile: buildDoneFile,
       planPath,
       localBases: Object.fromEntries(this.currentLocalBases),
+      // Asked again here, not reused from the plan step: a neighbour that had no plan then has one now.
+      inFlight: neighbours(),
     });
 
     const buildModel = this.buildModel ?? getModelForPhase('build');
@@ -681,6 +695,7 @@ export class TicketOrchestrator {
     ticketDir: string,
     verdict: TriageVerdict,
     manifest: RepoManifest,
+    inFlight: InFlightNeighbour[] = [],
   ): Promise<string> {
     const planPath = join(ticketDir, 'plan.md');
     const doneFile = join(ticketDir, 'plan.done');
@@ -696,6 +711,7 @@ export class TicketOrchestrator {
         planPath,
         doneFile,
         localBases: Object.fromEntries(this.currentLocalBases),
+        inFlight,
       }),
       timeoutMs: TICKET_PLAN_TIMEOUT_MS,
       sessionName: `plan-${ticket.key}`,
@@ -956,6 +972,7 @@ export class TicketOrchestrator {
       contextKey: ticket.key,
       contextSummary: verdict.summary || ticket.summary,
       planPath,
+      ticketsRoot: TICKETS_ROOT,
       doneFile,
     });
 
