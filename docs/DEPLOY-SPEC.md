@@ -24,7 +24,7 @@ registered in the account as `turkeycode-deploy`. Host keys go in
 
 ```bash
 turkeycode login --token <token>
-turkeycode deploy [--name <name>] [--domain <domain>] [--region <slug>] [--size <slug>] [--env <file>] [--yes]
+turkeycode deploy [--name <name>] [--domain <domain>[,<domain>...]] [--region <slug>] [--size <slug>] [--env <file>] [--yes]
 turkeycode apps [list]
 turkeycode apps status [name]
 turkeycode apps logs <name> [-n <lines>]
@@ -60,10 +60,12 @@ turkeycode apps delete <name> --force
    - no service publishes a port except Caddy (80 and 443)
    - development database passwords become `${DB_PASSWORD}`
    - the app gets `env_file: ../app.env`, and keys set there win over generated ones
-   - Caddy reverse-proxies to the app: `--from <domain>` for HTTPS, `--from :80` otherwise
+   - Caddy reverse-proxies to the app. Its `Caddyfile` is generated (`caddyfile`): the
+     first `--domain` serves the app over HTTPS, further ones redirect to it, and with
+     no domain the app is plain HTTP on port 80
 6. Tar the project (`src/deploy/package.ts`; `.env*`, `node_modules`, `.git` excluded).
    There is no local build. The image is built on the droplet.
-7. Copy `release.tar.gz`, `compose.yml` and `app.env` to `/opt/turkeycode/<app>/`.
+7. Copy `release.tar.gz`, `compose.yml`, `Caddyfile` and `app.env` to `/opt/turkeycode/<app>/`.
 8. Run the remote script (`remoteScript`): wait for cloud-init, create `secrets.env`
    with a random `DB_PASSWORD` if it is not there yet, swap in the new source, build,
    start databases and wait for them, run the migration, start everything.
@@ -75,6 +77,7 @@ On the droplet:
 /opt/turkeycode/<app>/
   secrets.env   DB_PASSWORD, generated once, kept across redeploys
   app.env       from --env, replaced on every deploy
+  Caddyfile     from --domain, replaced on every deploy
   src/          the project, docker-compose.turkeycode.yml, Dockerfile
 ```
 
@@ -86,5 +89,5 @@ Database data lives in named Docker volumes, so a redeploy keeps it.
 - Backups. Turn on droplet backups in DigitalOcean, or dump the database yourself.
 - More than one app per droplet, or more than one droplet per app.
 - Resizing or moving a droplet. Do that in DigitalOcean.
-- DNS. `--domain` configures Caddy; the A record is the owner's to create.
+- DNS. `--domain` configures Caddy; the A records are the owner's to create.
 - Zero-downtime deploys. The app container restarts when the new image is up.
