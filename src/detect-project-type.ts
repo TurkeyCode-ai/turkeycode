@@ -95,6 +95,25 @@ export const PROJECT_TYPES: readonly ProjectType[] = [
   'library', 'desktop', 'mobile', 'game-godot', 'embedded', 'legacy', 'monorepo', 'unknown'
 ];
 
+/**
+ * A greenfield run starts with a guessed type, because there are no files to
+ * detect from. The planner reads the spec and chooses the stack, so it knows
+ * what is being built: take its answer, once, when ours was only a guess.
+ * A type that was forced with --type or detected from real files is never
+ * overridden. Returns the adopted type, or null when nothing changed.
+ */
+export function adoptPlannedProjectType(
+  state: { projectType?: ProjectType; projectTypeGuessed?: boolean },
+  planned: unknown,
+): ProjectType | null {
+  if (!state.projectTypeGuessed) return null;
+  if (typeof planned !== 'string' || !isValidProjectType(planned) || planned === 'unknown') return null;
+  state.projectTypeGuessed = false;
+  if (planned === state.projectType) return null;
+  state.projectType = planned;
+  return planned;
+}
+
 function isValidProjectType(type: string): type is ProjectType {
   return (PROJECT_TYPES as readonly string[]).includes(type);
 }
