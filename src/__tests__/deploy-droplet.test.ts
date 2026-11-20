@@ -238,6 +238,12 @@ describe('deploy/droplet', () => {
     const detection = project({ name: 'site', dependencies: { express: '^4' }, scripts: { start: 'node index.js' } });
     buildCompose(detection, dir, { loadDotEnv: false });
     expect(existsSync(join(dir, 'Dockerfile.turkeycode'))).toBe(true);
+    // A static site copies its whole folder into the web root; none of the
+    // deploy files may ride along and be served.
+    const ignored = readFileSync(join(dir, '.dockerignore'), 'utf-8').split('\n');
+    for (const name of ['.dockerignore', 'Dockerfile.turkeycode', 'docker-compose*.yml', '.env']) {
+      expect(ignored).toContain(name);
+    }
   });
 
   it('routes to the port the container really listens on', () => {

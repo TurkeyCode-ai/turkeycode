@@ -305,6 +305,9 @@ export function buildCompose(
         '.env.*.local',
         'docker-compose*.yml',
         'Dockerfile.turkeycode',
+        // Docker reads this file before applying it, so it can list itself.
+        // Without this a static site would serve its own .dockerignore.
+        '.dockerignore',
       ].join('\n') + '\n';
       writeFileSync(join(cwd, '.dockerignore'), dockerignore);
       console.log(`  Generated .dockerignore`);

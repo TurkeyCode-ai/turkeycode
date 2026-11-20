@@ -52,3 +52,8 @@ next-env.d.ts
 
 # test scratch repos created by repos.test.ts
 .test-repos/
+
+# Written by `turkeycode deploy` / `run-local` into the project being deployed
+Dockerfile.turkeycode
+docker-compose.turkeycode.yml
+site/.dockerignore
