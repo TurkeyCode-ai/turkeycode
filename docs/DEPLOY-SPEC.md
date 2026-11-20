@@ -38,6 +38,11 @@ turkeycode apps delete <name> --force
   local state file and nothing to keep in sync.
 - Image `ubuntu-24-04-x64`. First boot (cloud-init) installs Docker with the Compose
   plugin and adds 2 GB of swap.
+- One cloud firewall, `turkeycode-apps`, applies to the `turkeycode` tag and so to
+  every app droplet. It lets in SSH (22), HTTP (80), HTTPS (443, TCP and UDP) and
+  ping. Every deploy creates it if it is missing; a firewall that already has that
+  name keeps its rules. It is a cloud firewall because Docker publishes ports past
+  a host firewall such as `ufw`.
 - Default size `s-1vcpu-1gb`, or `s-1vcpu-2gb` when the app needs a database or Redis.
   Default region `nyc3`. Both only apply when the droplet is created.
 - Creating a droplet costs the account owner money, so the first deploy prints the

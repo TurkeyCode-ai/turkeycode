@@ -95,6 +95,35 @@ describe('deploy/digitalocean', () => {
     expect(calls[1].body).toEqual({ name: 'turkeycode-deploy', public_key: 'ssh-ed25519 AAAAmine turkeycode-deploy' });
   });
 
+  it('creates one firewall for the app tag that lets in only SSH, HTTP, HTTPS and ping', async () => {
+    const { api, calls } = fakeApi({
+      'GET /firewalls': () => ({ json: { firewalls: [{ id: 'a', name: 'someone-elses', tags: [] }] } }),
+      'POST /firewalls': () => ({ status: 202, json: { firewall: { id: 'b' } } }),
+    });
+    expect(await api.ensureFirewall()).toBe(true);
+    const body = calls[1].body;
+    expect(body.name).toBe('turkeycode-apps');
+    expect(body.tags).toEqual([APP_TAG]);
+    expect(body.inbound_rules.map((r: any) => `${r.protocol}:${r.ports ?? ''}`).sort())
+      .toEqual(['icmp:', 'tcp:22', 'tcp:443', 'tcp:80', 'udp:443']);
+    expect(body.outbound_rules.length).toBeGreaterThan(0);
+  });
+
+  it('leaves an existing turkeycode firewall alone, adding the tag only if it is missing', async () => {
+    const tagged = fakeApi({
+      'GET /firewalls': () => ({ json: { firewalls: [{ id: 'b', name: 'turkeycode-apps', tags: [APP_TAG] }] } }),
+    });
+    expect(await tagged.api.ensureFirewall()).toBe(false);
+    expect(tagged.calls.length).toBe(1);
+
+    const untagged = fakeApi({
+      'GET /firewalls': () => ({ json: { firewalls: [{ id: 'b', name: 'turkeycode-apps', tags: [] }] } }),
+      'POST /firewalls/b/tags': () => ({ status: 204 }),
+    });
+    expect(await untagged.api.ensureFirewall()).toBe(true);
+    expect(untagged.calls[1].body).toEqual({ tags: [APP_TAG] });
+  });
+
   it('creates the droplet tagged, with the key and first-boot script', async () => {
     const { api, calls } = fakeApi({
       'POST /droplets': () => ({ status: 202, json: { droplet: { id: 5, name: 'shop', status: 'new', created_at: '', size_slug: 's-1vcpu-1gb' } } }),

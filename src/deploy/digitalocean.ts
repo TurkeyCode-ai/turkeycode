@@ -11,6 +11,30 @@ const API_BASE = 'https://api.digitalocean.com/v2';
 export const APP_TAG = 'turkeycode';
 const STACK_TAG_PREFIX = 'tc-stack:';
 
+/** One cloud firewall covers every droplet carrying APP_TAG. */
+export const FIREWALL_NAME = 'turkeycode-apps';
+
+const ANYWHERE = { addresses: ['0.0.0.0/0', '::/0'] };
+
+/**
+ * Inbound: SSH for deploys, HTTP and HTTPS for Caddy (UDP 443 is HTTP/3), ping.
+ * Everything else is dropped before it reaches the droplet, which matters
+ * because Docker publishes ports past a host firewall such as ufw.
+ */
+export const FIREWALL_INBOUND = [
+  { protocol: 'tcp', ports: '22', sources: ANYWHERE },
+  { protocol: 'tcp', ports: '80', sources: ANYWHERE },
+  { protocol: 'tcp', ports: '443', sources: ANYWHERE },
+  { protocol: 'udp', ports: '443', sources: ANYWHERE },
+  { protocol: 'icmp', sources: ANYWHERE },
+];
+
+export const FIREWALL_OUTBOUND = [
+  { protocol: 'tcp', ports: 'all', destinations: ANYWHERE },
+  { protocol: 'udp', ports: 'all', destinations: ANYWHERE },
+  { protocol: 'icmp', destinations: ANYWHERE },
+];
+
 export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
 
 export interface Droplet {
@@ -135,6 +159,38 @@ export class DigitalOcean {
       body: JSON.stringify({ name, public_key: publicKey.trim() }),
     });
     return created.ssh_key.id;
+  }
+
+  /**
+   * Make sure the account has the turkeycode firewall and that it applies to
+   * the app tag. A firewall with that name is left as the owner set it up,
+   * apart from adding the tag if it is missing. Returns true when it changed
+   * something.
+   */
+  async ensureFirewall(): Promise<boolean> {
+    const data = await this.request<{ firewalls: Array<{ id: string; name: string; tags?: string[] }> }>(
+      '/firewalls?per_page=200'
+    );
+    const existing = data.firewalls.find(f => f.name === FIREWALL_NAME);
+    if (existing) {
+      if (existing.tags?.includes(APP_TAG)) return false;
+      await this.request<void>(`/firewalls/${existing.id}/tags`, {
+        method: 'POST',
+        body: JSON.stringify({ tags: [APP_TAG] }),
+      });
+      return true;
+    }
+
+    await this.request<unknown>('/firewalls', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: FIREWALL_NAME,
+        inbound_rules: FIREWALL_INBOUND,
+        outbound_rules: FIREWALL_OUTBOUND,
+        tags: [APP_TAG],
+      }),
+    });
+    return true;
   }
 
   async listAppDroplets(): Promise<Droplet[]> {
