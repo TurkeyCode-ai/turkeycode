@@ -6,10 +6,16 @@ dist/
 
 # Environment files
 .env
-deploy/.env
+.env.*
+!.env.example
 
-# Build prompts (private project specs)
-deploy/prompts/
+# Deploy credentials. These live in ~/.turkeycode, not here; ignored anyway in
+# case a copy is ever dropped into the repo.
+credentials.json
+deploy_key
+deploy_key.pub
+deploy_known_hosts
+*.pem
 
 # State files (created during orchestration)
 .turkey/
@@ -43,7 +49,6 @@ releases/
 roast-my-repo/
 tsconfig.tsbuildinfo
 next-env.d.ts
-turkey-enterprise-v3-*.tgz
 
 # test scratch repos created by repos.test.ts
 .test-repos/

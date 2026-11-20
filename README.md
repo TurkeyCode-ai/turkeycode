@@ -63,15 +63,6 @@ turkeycode run "internal admin tool" --persona persona.md
 
 Load order (first found wins): `--persona <file>` → `./.turkey/persona.md` (project) → `~/.turkeycode/persona.md` (global) → a built-in scoping doctrine. So the dialog is always opinionated — narrow, binary, invariants-first; drop your own file to make the options *yours*.
 
-## Built with TurkeyCode 🦃
-
-| App | What it does | Link |
-|-----|-------------|------|
-| **HomeChef** | Recipe and meal planning app | [homechef.turkeycode.ai](https://homechef.turkeycode.ai) |
-| **Roast My Repo** | Paste a GitHub URL, get your repo graded on code quality, docs, CI, and security | [roastmyrepo.turkeycode.ai](https://roastmyrepo.turkeycode.ai) |
-
-*Built something with TurkeyCode? Open a PR to add it here.*
-
 ## Quick Start
 
 ### Prerequisites
@@ -91,8 +82,8 @@ npx turkeycode run "your app description"
 npm install -g turkeycode
 
 # From source
-git clone https://github.com/rangerchaz/turkey-enterprise-v3.git
-cd turkey-enterprise-v3
+git clone https://github.com/TurkeyCode-ai/turkeycode.git
+cd turkeycode
 npm install
 npm run build
 npm link
@@ -429,50 +420,68 @@ Options (run):
 
 ## Deploy
 
-Built something? Ship it.
+Built something? Ship it to your own DigitalOcean account. turkeycode has no hosting
+of its own: `deploy` uses your API token, the droplet is yours, and DigitalOcean bills you.
 
 ```bash
-# Authenticate (once)
-turkey login
+# Once: a DigitalOcean API token with read and write access
+# (https://cloud.digitalocean.com/account/api/tokens)
+turkey login --token dop_v1_...
+# or: export DIGITALOCEAN_ACCESS_TOKEN=dop_v1_...
 
-# Deploy to turkeycode.ai
+# Deploy the current project
 turkey deploy
-# → ✅ Live at https://my-app.turkeycode.ai
+#   No droplet for this app yet. This will create one in your DigitalOcean account:
+#     Name:    my-app
+#     Region:  nyc3
+#     Size:    s-1vcpu-1gb (1 vCPU, 1024 MB, 25 GB disk)
+#     Cost:    $6/mo, billed by DigitalOcean until you delete it
+#   Create it? [y/N] y
+#   ...
+#   ✅ Live at http://203.0.113.9
 
-# Deploy with a specific tier
-turkey deploy --tier starter
+# HTTPS on your own domain (point its A record at the droplet)
+turkey deploy --domain app.example.com
 
-# Deploy with a custom subdomain
-turkey deploy --name cool-app
+# Pick the name, region or size of a new droplet
+turkey deploy --name cool-app --region sfo3 --size s-2vcpu-4gb
 
 # Deploy with env vars
 turkey deploy --env .env.production
 ```
 
-**Hosting tiers:**
+**What it does:**
 
-| Tier | Price | What you get |
-|------|-------|-------------|
-| Free | $0/mo | Static hosting, subdomain, sleeps on idle |
-| Starter | $12/mo | Full stack (DB + Redis), always-on |
-| Pro | $29/mo | + Stripe, Auth, S3, Email, background jobs, custom domain |
-| Business | $49/mo | + Priority support, daily backups, analytics |
+1. Detects your stack and generates a Dockerfile if the project has none (an existing `Dockerfile` is used as-is).
+2. The first time, shows the droplet it is about to create and what DigitalOcean charges for it, and asks before creating it (`--yes` skips the question). It is one droplet per app: 1 GB by default, 2 GB when the app needs a database or Redis.
+3. Copies the project over SSH and builds it on the droplet with the same Compose services `turkey run-local` uses: your app, plus Postgres, MySQL, MongoDB or Redis when it needs them.
+4. Puts Caddy in front on ports 80 and 443. Nothing else is published, so the database is not reachable from the internet.
+
+Run `turkey deploy` again to redeploy to the same droplet. Database volumes and the generated database password stay where they are.
+
+The first deploy takes about five minutes: DigitalOcean creates the droplet, the droplet installs Docker, then the image builds. A redeploy skips all of that and only rebuilds what changed. For a small Node and Postgres app that was 5 minutes 20 seconds the first time and 17 seconds after.
+
+New droplets go in `nyc3` unless you pass `--region`. `--region` and `--size` are only used when the droplet is created; resize or move it in DigitalOcean after that.
+
+Your local `.env` is never uploaded. Only the file you pass with `--env` is, and it goes straight to your droplet.
+
+turkeycode reaches the droplet with its own SSH key, `~/.turkeycode/deploy_key`, created on first use and added to your DigitalOcean account as `turkeycode-deploy`. To redeploy from another machine, copy that key over.
 
 ```bash
-# List your deployed apps
+# List your deployed apps (droplets tagged "turkeycode")
 turkey apps
 
 # Check app status
 turkey apps status my-app
 
-# Tail logs
+# Recent container logs
 turkey apps logs my-app
 
-# Tear down
-turkey apps delete my-app
+# Destroy the droplet, including its database
+turkey apps delete my-app --force
 ```
 
-The CLI auto-detects your stack, generates a Dockerfile if needed, packages your app, and deploys it. If a `Dockerfile` already exists, it's used as-is.
+`apps delete` removes the droplet and stops the billing for it. It leaves the `turkeycode-deploy` SSH key in your DigitalOcean account, ready for the next deploy.
 
 ### Non-Web Projects
 
@@ -490,8 +499,6 @@ turkey deliver --name my-cool-cli
 ```
 
 Uses your `gh` CLI auth — no extra tokens needed. Go projects get cross-compiled for Linux, macOS, and Windows. Rust projects get a native release build. A GitHub release is created automatically with the binaries.
-
-Free tool builds your app. [turkeycode.ai](https://turkeycode.ai) hosts it for you.
 
 ## Setup
 

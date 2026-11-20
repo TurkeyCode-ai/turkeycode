@@ -1,6 +1,6 @@
 /**
  * Project detection — stack & platform agnostic
- * Detects runtime, framework, database, features, and estimates hosting tier
+ * Detects runtime, framework, database and features
  */
 
 import { existsSync, readFileSync, readdirSync } from 'fs';
@@ -27,7 +27,6 @@ export type Stack =
   | 'static' | 'docker' | 'unknown';
 
 export type DatabaseType = 'postgres' | 'mysql' | 'mongodb' | 'sqlite' | 'redis' | false;
-export type Tier = 'free' | 'starter' | 'pro' | 'business';
 
 export interface Features {
   database: DatabaseType;
@@ -54,8 +53,6 @@ export interface ProjectDetection {
     migrate?: string;
   };
   expose: number;
-  tier: Tier;
-  tierReason: string;
 }
 
 // ==================== Runtime Detection ====================
@@ -124,7 +121,6 @@ function detectNodeProject(cwd: string): ProjectDetection {
 
   const stack = detectNodeStack({ ...deps, ...devDeps });
   const features = detectNodeFeatures(deps, devDeps);
-  const { tier, reason } = estimateTier(features);
 
   const migrateScript = scripts['migrate'] ?? scripts['db:migrate'] ??
     (existsSync(join(cwd, 'prisma/schema.prisma')) ? 'npx prisma migrate deploy' : undefined);
@@ -150,8 +146,6 @@ function detectNodeProject(cwd: string): ProjectDetection {
       migrate: migrateScript,
     },
     expose: 3000,
-    tier,
-    tierReason: reason,
   };
 }
 
@@ -201,7 +195,6 @@ function detectPythonProject(cwd: string): ProjectDetection {
     backgroundJobs: has('celery', 'rq', 'huey', 'dramatiq'),
   };
 
-  const { tier, reason } = estimateTier(features);
 
   // Detect Python version
   let pythonVersion = '3.12';
@@ -229,8 +222,6 @@ function detectPythonProject(cwd: string): ProjectDetection {
       migrate: migrateCmd,
     },
     expose: 8000,
-    tier,
-    tierReason: reason,
   };
 }
 
@@ -270,7 +261,6 @@ function detectGoProject(cwd: string): ProjectDetection {
     backgroundJobs: has('github.com/hibiken/asynq', 'github.com/robfig/cron'),
   };
 
-  const { tier, reason } = estimateTier(features);
 
   return {
     name: appName,
@@ -287,8 +277,6 @@ function detectGoProject(cwd: string): ProjectDetection {
       migrate: has('golang-migrate') ? 'migrate -database $DATABASE_URL -path migrations up' : undefined,
     },
     expose: 8080,
-    tier,
-    tierReason: reason,
   };
 }
 
@@ -318,7 +306,6 @@ function detectRubyProject(cwd: string): ProjectDetection {
     backgroundJobs: has('sidekiq', 'resque', 'delayed_job', 'good_job'),
   };
 
-  const { tier, reason } = estimateTier(features);
 
   // Detect Ruby version
   let rubyVersion = '3.3';
@@ -341,8 +328,6 @@ function detectRubyProject(cwd: string): ProjectDetection {
       migrate: stack === 'rails' ? 'bundle exec rails db:migrate' : undefined,
     },
     expose: 3000,
-    tier,
-    tierReason: reason,
   };
 }
 
@@ -381,7 +366,6 @@ function detectRustProject(cwd: string): ProjectDetection {
     backgroundJobs: has('tokio-cron-scheduler'),
   };
 
-  const { tier, reason } = estimateTier(features);
 
   return {
     name: appName,
@@ -398,8 +382,6 @@ function detectRustProject(cwd: string): ProjectDetection {
       migrate: has('diesel') ? 'diesel migration run' : (has('sqlx') ? 'sqlx migrate run' : undefined),
     },
     expose: 8080,
-    tier,
-    tierReason: reason,
   };
 }
 
@@ -432,7 +414,6 @@ function detectPhpProject(cwd: string): ProjectDetection {
     backgroundJobs: has('laravel/horizon', 'php-amqplib'),
   };
 
-  const { tier, reason } = estimateTier(features);
 
   return {
     name: composer.name?.split('/').pop() || 'php-app',
@@ -449,8 +430,6 @@ function detectPhpProject(cwd: string): ProjectDetection {
       migrate: stack === 'laravel' ? 'php artisan migrate --force' : undefined,
     },
     expose: 8000,
-    tier,
-    tierReason: reason,
   };
 }
 
@@ -480,8 +459,6 @@ function detectStaticProject(cwd: string): ProjectDetection {
       migrate: undefined,
     },
     expose: 80,
-    tier: 'free',
-    tierReason: 'static site — no backend required',
   };
 }
 
@@ -562,21 +539,7 @@ function detectDockerProject(cwd: string): ProjectDetection {
       migrate: undefined,
     },
     expose: port,
-    tier: 'starter', // Docker apps need at least starter for always-on
-    tierReason: 'custom Dockerfile — requires container hosting',
   };
-}
-
-// ==================== Tier Estimation ====================
-
-function estimateTier(features: Features): { tier: Tier; reason: string } {
-  if (features.stripe || features.auth || features.s3 || features.email) {
-    return { tier: 'pro', reason: 'requires Pro features (Stripe, Auth, S3, or Email)' };
-  }
-  if (features.database || features.redis || features.backgroundJobs) {
-    return { tier: 'starter', reason: 'requires database or background services' };
-  }
-  return { tier: 'free', reason: 'no paid infrastructure required' };
 }
 
 // ==================== Main Entry Point ====================
