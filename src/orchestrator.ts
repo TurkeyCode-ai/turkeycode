@@ -1450,6 +1450,10 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       saveState(this.state);
     }
 
+    // Persist the final verdict while the phase is still under QA, so the
+    // phase record keeps it (pass or fail) after the run moves on.
+    saveState(this.state);
+
     if (!qaPass) {
       this.log('QA FAILED after maximum attempts');
       auditPhase('qa', 'completed', { passed: false, attempts: this.state.qaAttempts });
@@ -1701,6 +1705,10 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
 
       saveState(this.state);
     }
+
+    // Persist the final verdict while the phase is still under QA, so the
+    // phase record keeps it (pass or fail) after the run moves on.
+    saveState(this.state);
 
     if (!qaPass) {
       this.log('QA FAILED after maximum attempts');

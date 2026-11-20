@@ -76,8 +76,22 @@ export function loadState(): ProjectState {
 /**
  * Save state to disk
  */
+/**
+ * The QA loop counts attempts and verdicts on the run (`state.qaAttempts`,
+ * `state.lastQaVerdict`), and those reset when the run moves to the next
+ * phase. Copy them onto the phase under QA so its record keeps them after the
+ * run has moved on: `turkeycode status` reports per phase.
+ */
+export function recordQaOnPhase(state: ProjectState): void {
+  const phase = state.buildPhases.find(p => p.number === state.currentBuildPhaseNumber);
+  if (!phase || (phase.status !== 'qa' && phase.status !== 'fixing')) return;
+  phase.qaAttempts = state.qaAttempts;
+  if (state.lastQaVerdict) phase.lastQaVerdict = state.lastQaVerdict;
+}
+
 export function saveState(state: ProjectState): void {
   ensureDirectories();
+  recordQaOnPhase(state);
   state.lastUpdatedAt = new Date().toISOString();
   writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
 }
