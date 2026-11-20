@@ -38,13 +38,15 @@ Each repo's CLAUDE.md / CLAUDE.local.md house rules apply.
 
 ## PROCESS
 1. Read each finding and open its \`evidence\` citations; check it against the code (and the references, when it is a fidelity finding). If a finding is wrong, don't change code for it; say why in the done file.
-2. Fix the real ones. Update or add tests so each fix is covered.
-3. Run the tests for every area you touched; they must pass.
-4. Commit per repo with a message starting \`${ticket.key}:\` (stage explicit paths only).
+2. Fix the real ones, one finding at a time. Update or add tests so each fix is covered.
+3. Run the tests for the area you touched; they must pass.
+4. Commit each finished fix before starting the next, with a message starting \`${ticket.key}:\` (stage explicit paths only). The session has a time limit, and only committed work survives it.
 
 ## RULES
 - Do NOT switch, create or delete branches. Do NOT push. Stay on \`${branchName}\`.
 - Do NOT rebase, reset or move the branch onto another base; the orchestrator rebases at the end. A finding that asks for a different base is not a code fix: reject it in the done file.
+- A finding with severity \`needs-human\` has already been judged to need a person. Do not attempt it; list it as rejected with the same reason.
+- If a real finding cannot be fixed by a code session (it needs a person's decision, an identifier only a person can assign, or access you don't have), do not improvise around it: reject it and say exactly what the person has to decide or supply. The next reviewer reads your reasons.
 - Do NOT modify repos outside the list above or anything in the reference or related-repo paths.
 
 ${oneTurnRule(doneFile)}
