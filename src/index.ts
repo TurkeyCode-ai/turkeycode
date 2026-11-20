@@ -557,7 +557,11 @@ program
   .command('deploy')
   .description('Deploy the current project to a droplet in your own DigitalOcean account')
   .option('-n, --name <name>', 'App name (also the droplet name)')
-  .option('-d, --domain <domain>', 'Serve over HTTPS on this domain (point its A record at the droplet)')
+  .option(
+    '-d, --domain <domain>',
+    'Serve over HTTPS on this domain (point its A record at the droplet). Repeat it or use commas for more names; they redirect to the first',
+    (value: string, previous: string[] = []) => [...previous, value]
+  )
   .option('-r, --region <region>', 'DigitalOcean region for a new droplet (default: nyc3)')
   .option('-s, --size <size>', 'Droplet size for a new droplet (default: picked from what the app needs)')
   .option('-e, --env <file>', 'Env file to inject (e.g. .env.production)')
@@ -566,7 +570,7 @@ program
     const { requireToken } = await import('./deploy/auth');
     const { DigitalOcean } = await import('./deploy/digitalocean');
     const { detectProject } = await import('./deploy/detect');
-    const { deployToDroplet } = await import('./deploy/droplet');
+    const { deployToDroplet, parseDomains } = await import('./deploy/droplet');
 
     const cwd = process.cwd();
 
@@ -577,6 +581,8 @@ program
     console.log('');
 
     try {
+      const domains = parseDomains(options.domain);
+
       // 1. Whose DigitalOcean account
       const resolved = requireToken();
       const api = new DigitalOcean(resolved.token);
@@ -594,7 +600,7 @@ program
       // 3. Droplet, upload, build, start
       const result = await deployToDroplet(api, cwd, detection, {
         name: options.name,
-        domain: options.domain,
+        domains,
         region: options.region,
         size: options.size,
         envFile: options.env,
@@ -608,8 +614,11 @@ program
         console.log(`  ⚠️  Deployed, but http://${result.ip} is not answering yet.`);
         console.log(`     Check: turkeycode apps logs ${result.name}`);
       }
-      if (options.domain) {
-        console.log(`     Point an A record for ${options.domain} at ${result.ip}. HTTPS starts once it resolves.`);
+      if (domains.length > 0) {
+        console.log(`     Point an A record for ${domains.join(' and ')} at ${result.ip}. HTTPS starts once it resolves.`);
+      }
+      if (domains.length > 1) {
+        console.log(`     ${domains.slice(1).join(' and ')} redirect${domains.length > 2 ? '' : 's'} to https://${domains[0]}.`);
       }
       console.log('');
       console.log(`  App:      ${result.name}`);

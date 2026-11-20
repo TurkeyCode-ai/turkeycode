@@ -6,9 +6,11 @@ import { tmpdir } from 'os';
 import { detectProject } from '../deploy/detect';
 import { APP_TAG, DigitalOcean, dropletName, stackTag, type FetchLike } from '../deploy/digitalocean';
 import {
+  caddyfile,
   cloudInit,
   defaultSize,
   envFileContent,
+  parseDomains,
   parseEnvFile,
   productionCompose,
   remoteScript,
@@ -220,7 +222,8 @@ describe('deploy/droplet', () => {
     expect(compose.services.redis.ports).toBeUndefined();
     expect(compose.services.app.ports).toBeUndefined();
     expect(compose.services.caddy.ports).toEqual(['80:80', '443:443']);
-    expect(compose.services.caddy.command).toBe('caddy reverse-proxy --from :80 --to app:3000');
+    expect(compose.services.caddy.volumes).toContain('../Caddyfile:/etc/caddy/Caddyfile:ro');
+    expect(caddyfile({ appPort: 3000 })).toBe(':80 {\n\treverse_proxy app:3000\n}\n');
   });
 
   it('swaps the development passwords for the secret generated on the droplet', () => {
@@ -254,13 +257,35 @@ describe('deploy/droplet', () => {
     expect(compose.services.app.environment?.REDIS_URL).toBe('redis://redis:6379');
   });
 
-  it('serves a domain over HTTPS by handing it to Caddy', () => {
+  it('serves the first domain over HTTPS and redirects the others to it', () => {
+    expect(caddyfile({ appPort: 3000, domains: ['example.com'] })).toBe('example.com {\n\treverse_proxy app:3000\n}\n');
+    expect(caddyfile({ appPort: 3000, domains: ['example.com', 'www.example.com'] })).toBe(
+      'example.com {\n\treverse_proxy app:3000\n}\n\n' +
+      'www.example.com {\n\tredir https://example.com{uri} permanent\n}\n'
+    );
+  });
+
+  it('reads --domain from repeated flags and comma lists, in order', () => {
+    expect(parseDomains(undefined)).toEqual([]);
+    expect(parseDomains(['Example.com, www.example.com', 'www.example.com'])).toEqual(['example.com', 'www.example.com']);
+  });
+
+  it('refuses a --domain that is not a bare hostname, since it goes into the Caddyfile', () => {
+    for (const bad of ['https://example.com', 'example.com:8080', 'example.com/x', 'a b.com', 'localhost', 'x.com {\n']) {
+      expect(() => parseDomains([bad])).toThrow(/not a domain name/);
+    }
+  });
+
+  it('restarts Caddy when its config changes and not otherwise', () => {
     const detection = project({ name: 'site', dependencies: { express: '^4' } });
-    const compose = productionCompose(buildCompose(detection, dir, { loadDotEnv: false }), {
+    const base = buildCompose(detection, dir, { loadDotEnv: false });
+    const sha = (domains: string[]) => productionCompose(base, {
       appPort: 3000,
-      domain: 'shop.example.com',
-    });
-    expect(compose.services.caddy.command).toBe('caddy reverse-proxy --from shop.example.com --to app:3000');
+      caddyfile: caddyfile({ appPort: 3000, domains }),
+    }).services.caddy.environment?.CADDYFILE_SHA;
+
+    expect(sha(['example.com'])).toBe(sha(['example.com']));
+    expect(sha(['example.com'])).not.toBe(sha(['example.com', 'www.example.com']));
   });
 
   it('generates the Dockerfile before packaging when the project has none', () => {

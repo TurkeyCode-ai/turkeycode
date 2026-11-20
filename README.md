@@ -443,6 +443,9 @@ turkey deploy
 # HTTPS on your own domain (point its A record at the droplet)
 turkey deploy --domain app.example.com
 
+# More than one name: the first serves the app, the rest redirect to it
+turkey deploy --domain example.com,www.example.com
+
 # Pick the name, region or size of a new droplet
 turkey deploy --name cool-app --region sfo3 --size s-2vcpu-4gb
 
