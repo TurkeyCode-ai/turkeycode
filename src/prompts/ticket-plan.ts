@@ -7,7 +7,7 @@
 import { oneTurnRule } from './one-turn';
 import { TicketDetail } from '../jira';
 import { RepoManifest } from '../repos';
-import { renderReferenceBlock, renderRelatedBlock, renderTicketBlock, renderLocalBaseBlock } from './ticket-common';
+import { renderReferenceBlock, renderRelatedBlock, renderTicketBlock, renderLocalBaseBlock, renderInFlightBlock, InFlightNeighbour } from './ticket-common';
 
 export interface TicketPlanPromptInput {
   ticket: TicketDetail;
@@ -19,6 +19,8 @@ export interface TicketPlanPromptInput {
   doneFile: string;
   /** --base-local runs: repo path -> local ref the branch is built on. */
   localBases?: Record<string, string>;
+  /** Other tickets being built right now in the same repos. */
+  inFlight?: InFlightNeighbour[];
 }
 
 export function buildTicketPlanPrompt(input: TicketPlanPromptInput): string {
@@ -40,7 +42,7 @@ ${renderTicketBlock(ticket)}
 ${images}
 ## REPOS IN SCOPE
 ${repos}
-${renderReferenceBlock(manifest)}${renderRelatedBlock(manifest)}
+${renderReferenceBlock(manifest)}${renderRelatedBlock(manifest)}${renderInFlightBlock(input.inFlight, 'plan')}
 Read each repo's CLAUDE.md / CLAUDE.local.md first; their house rules apply to the plan.
 
 ## WHAT THE PLAN MUST COVER

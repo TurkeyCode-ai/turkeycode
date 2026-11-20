@@ -8,7 +8,7 @@
 import { oneTurnRule } from './one-turn';
 import { TicketDetail } from '../jira';
 import { RepoManifest } from '../repos';
-import { renderRelatedBlock, renderLocalBaseBlock } from './ticket-common';
+import { renderRelatedBlock, renderLocalBaseBlock, renderInFlightBlock, InFlightNeighbour } from './ticket-common';
 
 export interface TicketBuildPromptInput {
   ticket: TicketDetail;
@@ -25,6 +25,8 @@ export interface TicketBuildPromptInput {
   planPath?: string;
   /** --base-local runs: repo path -> local ref the branch is built on. */
   localBases?: Record<string, string>;
+  /** Other tickets being built right now in the same repos. */
+  inFlight?: InFlightNeighbour[];
 }
 
 export function buildTicketBuildPrompt(input: TicketBuildPromptInput): string {
@@ -73,7 +75,7 @@ ${imageBlock}
 ${repoLines}
 
 All repos are on branch \`${branchName}\` (cut off their configured base branch). You may \`cd\` between them with the Bash tool as needed. Use aimem (MCP) for cross-repo understanding before making changes.
-${referenceBlock}${renderRelatedBlock(manifest)}
+${referenceBlock}${renderRelatedBlock(manifest)}${renderInFlightBlock(input.inFlight, 'build')}
 ${planPath ? `\n## PLAN\nA plan session already researched this ticket. Read \`${planPath}\` first and follow it; where you find it wrong, do the right thing and say so under Follow-ups in the done file.\n` : ''}
 ## PROCESS
 1. **Understand** the ticket: re-read description and comments. Consult aimem for repo context, conventions, and related prior work.
