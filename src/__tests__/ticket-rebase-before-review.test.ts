@@ -47,6 +47,10 @@ function commit(file: string, content: string, message: string) {
  */
 function makeRepo(stackEdit: [string, string], ticketEdit: [string, string]) {
   execSync(`git init -q -b stack "${repoPath}"`, { env: ENV });
+  // The orchestrator's own git calls don't get ENV, and a CI runner has no global identity: a rebase that
+  // replays a commit needs one, so it lives in the repo's config.
+  git('config user.name t');
+  git('config user.email t@example.com');
   commit('service.txt', 'line one\n', 'base');
   const cutFrom = git('rev-parse HEAD');
   git(`checkout -q -b ${BRANCH}`);
