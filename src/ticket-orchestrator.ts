@@ -547,9 +547,17 @@ export class TicketOrchestrator {
     }
     console.log(`[ticket] Touched repos: ${touched.map((r) => r.path).join(', ')}`);
 
+    let mergeFixMs = 0;
+    let rebasePushMs = 0;
+
     // 4b. Deep tier: review → fix rounds before anything leaves the machine
     let openFindings: ReviewFinding[] = [];
     if (this.deep) {
+      // Rebase first, so the reviewer reads the code as it will merge and a conflict with other in-flight
+      // work is resolved while there are still review rounds left to check the resolution.
+      const early = await this.rebaseBeforeReview(ticket, touched, branchName, ticketDir, verdict, localBases, baseShas, planPath);
+      mergeFixMs += early.mergeFixMs;
+      rebasePushMs += early.totalMs;
       openFindings = await this.runReviewRounds(ticket, ticketDir, scopedManifest, touched, baseShas, branchName, planPath, timings);
       // A fix session may have committed in a scoped repo the build left alone
       for (const repo of scopedManifest.repos) {
@@ -565,37 +573,16 @@ export class TicketOrchestrator {
     const local: { repo: RepoEntry; sha: string }[] = [];
     const failed: { repo: RepoEntry; reason: string }[] = [];
 
-    let mergeFixMs = 0;
-    let rebasePushMs = 0;
-
     for (const repo of touched) {
       const repoStart = Date.now();
       const step = planFinalizeStep(repo, { localRef: localBases.get(repo.path), noPush: this.noPush });
       console.log(`[ticket] Rebasing ${repo.path} onto ${step.rebaseOnto}...`);
-      let rebase = rebaseOntoBase(repo, step.localRef);
+      const rebase = await this.rebaseWithMergeFix(ticket, repo, branchName, ticketDir, verdict, step.localRef, planPath);
+      mergeFixMs += rebase.mergeFixMs;
 
-      while (rebase.status === 'conflict') {
-        console.log(`[ticket] Conflict(s) in ${repo.path}: ${rebase.conflictedPaths?.join(', ')}`);
-        const mergeFixStart = Date.now();
-        const resolved = await this.runMergeFix(
-          ticket, repo, branchName, rebase.conflictedPaths ?? [], ticketDir, verdict, step.localRef,
-        );
-        mergeFixMs += Date.now() - mergeFixStart;
-        if (!resolved) {
-          abortRebase(repo.path);
-          failed.push({ repo, reason: 'rebase conflict could not be resolved' });
-          rebase = { status: 'error', detail: 'aborted by merge-fix' };
-          break;
-        }
-        // Merge-fix session may have already run `git rebase --continue`; verify rebase state
-        rebase = continueRebase(repo.path);
-      }
-
-      if (rebase.status === 'error') {
+      if (!rebase.ok) {
         rebasePushMs += Date.now() - repoStart;
-        if (!failed.find((f) => f.repo.path === repo.path)) {
-          failed.push({ repo, reason: rebase.detail ?? 'rebase error' });
-        }
+        failed.push({ repo, reason: rebase.reason });
         continue;
       }
 
@@ -835,6 +822,85 @@ export class TicketOrchestrator {
     return findings;
   }
 
+  /**
+   * Deep tier, before the first review round: rebase every touched repo onto its
+   * base as it is NOW. Other tickets land while this one is being built, and a
+   * conflict found only after the last review round is resolved by a session
+   * nobody reviews, or not at all. Done here, the reviewer sees the integrated
+   * code and the resolution gets the same scrutiny as the rest of the change.
+   *
+   * On success the repo's review base moves to the new base tip, so the review
+   * diff stays "this ticket's change" and does not pick up what landed meanwhile.
+   * A conflict that cannot be resolved here does not fail the ticket: the branch
+   * is restored, reviewed as built, and the final rebase gets another attempt.
+   */
+  private async rebaseBeforeReview(
+    ticket: TicketDetail,
+    touched: RepoEntry[],
+    branchName: string,
+    ticketDir: string,
+    verdict: TriageVerdict,
+    localBases: Map<string, string>,
+    baseShas: Map<string, string>,
+    planPath: string | undefined,
+  ): Promise<{ mergeFixMs: number; totalMs: number }> {
+    const start = Date.now();
+    let mergeFixMs = 0;
+    for (const repo of touched) {
+      const localRef = localBases.get(repo.path);
+      const onto = localRef ?? `origin/${repo.base}`;
+      console.log(`[ticket] Rebasing ${repo.path} onto ${onto} before review...`);
+      const rebase = await this.rebaseWithMergeFix(ticket, repo, branchName, ticketDir, verdict, localRef, planPath);
+      mergeFixMs += rebase.mergeFixMs;
+      if (rebase.ok) {
+        baseShas.set(repo.path, resolveLocalBase(repo, onto));
+      } else {
+        console.warn(
+          `[ticket] Could not rebase ${repo.path} before review (${rebase.reason}). ` +
+            `Reviewing the branch as built; the final rebase will try again.`,
+        );
+      }
+    }
+    return { mergeFixMs, totalMs: Date.now() - start };
+  }
+
+  /**
+   * Rebase the current branch of `repo` onto its base, handing each round of
+   * conflicts to a merge-fix session. Never leaves a rebase in progress: on any
+   * failure the branch is put back where it was.
+   */
+  private async rebaseWithMergeFix(
+    ticket: TicketDetail,
+    repo: RepoEntry,
+    branchName: string,
+    ticketDir: string,
+    verdict: TriageVerdict,
+    localRef: string | undefined,
+    planPath: string | undefined,
+  ): Promise<{ ok: true; mergeFixMs: number } | { ok: false; reason: string; mergeFixMs: number }> {
+    let mergeFixMs = 0;
+    let rebase = rebaseOntoBase(repo, localRef);
+    while (rebase.status === 'conflict') {
+      console.log(`[ticket] Conflict(s) in ${repo.path}: ${rebase.conflictedPaths?.join(', ')}`);
+      const mergeFixStart = Date.now();
+      const resolved = await this.runMergeFix(
+        ticket, repo, branchName, rebase.conflictedPaths ?? [], ticketDir, verdict, localRef, planPath,
+      );
+      mergeFixMs += Date.now() - mergeFixStart;
+      if (!resolved) {
+        abortRebase(repo.path);
+        return { ok: false, reason: 'rebase conflict could not be resolved', mergeFixMs };
+      }
+      // Merge-fix session may have already run `git rebase --continue`; verify rebase state
+      rebase = continueRebase(repo.path);
+    }
+    if (rebase.status === 'error') {
+      abortRebase(repo.path);
+      return { ok: false, reason: rebase.detail ?? 'rebase error', mergeFixMs };
+    }
+    return { ok: true, mergeFixMs };
+  }
+
   private async runMergeFix(
     ticket: TicketDetail,
     repo: RepoEntry,
@@ -843,6 +909,7 @@ export class TicketOrchestrator {
     ticketDir: string,
     verdict: TriageVerdict,
     rebaseOnto?: string,
+    planPath?: string,
   ): Promise<boolean> {
     const doneFile = join(ticketDir, `merge-fix-${sanitizeFilename(repo.path)}.done`);
     if (existsSync(doneFile)) unlinkSafe(doneFile);
@@ -856,6 +923,7 @@ export class TicketOrchestrator {
       mode: 'rebase',
       contextKey: ticket.key,
       contextSummary: verdict.summary || ticket.summary,
+      planPath,
       doneFile,
     });
 

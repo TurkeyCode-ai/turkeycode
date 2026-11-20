@@ -26,12 +26,14 @@ export interface MergeFixPromptInput {
   contextSummary?: string;
   /** Rebase mode: the exact ref being rebased onto, when it isn't origin/<baseBranch> (e.g. a local stack ref). */
   rebaseOnto?: string;
+  /** Optional plan the branch was built from: what its change is meant to do. */
+  planPath?: string;
 }
 
 export function buildMergeFixPrompt(input: MergeFixPromptInput): string {
   const {
     repoPath, branchName, baseBranch, conflictedPaths, doneFile,
-    mode = 'rebase', contextKey, contextSummary, rebaseOnto,
+    mode = 'rebase', contextKey, contextSummary, rebaseOnto, planPath,
   } = input;
 
   const isRebase = mode === 'rebase';
@@ -51,6 +53,11 @@ export function buildMergeFixPrompt(input: MergeFixPromptInput): string {
   const newConflictNote = isRebase
     ? 'If the next commit raises a NEW conflict, repeat for the new conflicted files.'
     : 'A merge produces a single conflict set — once it is resolved and committed you are done.';
+
+  // Rebase: ORIG_HEAD is the branch tip from before the rebase started. Merge: MERGE_HEAD is the branch being merged in.
+  const baseHistoryStep = isRebase
+    ? `\`git log -p $(git merge-base ORIG_HEAD ${baseRef})..${baseRef} -- <file>\` shows what the base did to it since this branch was cut`
+    : `\`git log -p $(git merge-base HEAD MERGE_HEAD)..HEAD -- <file>\` shows what \`${baseBranch}\` did to it since the branch was cut`;
 
   const contextBlock = (contextKey || contextSummary)
     ? `## CONTEXT
@@ -82,6 +89,7 @@ ${conflictedPaths.map((p) => `  - ${p}`).join('\n')}
 2. For each conflicted file:
    - Read the file. Find all conflict markers (\`<<<<<<<\`, \`=======\`, \`>>>>>>>\`).
    - Understand both sides: ${headMeaning}.
+   - Find out WHY the base changed the file before choosing anything: ${baseHistoryStep}. The conflict is usually another change that landed while this branch was being built, and its commit messages say what it was for.${planPath ? `\n   - What this branch's change is meant to do is written in \`${planPath}\`.` : ''}
    - Resolve semantically — keep the intent of the branch's change **and** whatever the base branch added. Do NOT just pick one side unless you're certain the other is superseded.
    - For mechanical conflicts (imports, lockfiles, import order, formatting): regenerate / re-sort rather than hand-pick.
    - For lockfiles (package-lock.json, yarn.lock, pnpm-lock.yaml, Gemfile.lock, Cargo.lock): prefer running the package manager's install command to regenerate cleanly.
@@ -97,6 +105,7 @@ Before writing the done file, verify:
 - No conflict markers remain anywhere: \`git grep -n '<<<<<<< '\` returns nothing
 
 ## WHEN YOU CAN'T RESOLVE
+Abort only when the two sides demand contradictory behaviour and choosing between them is a person's call. A conflict that is large, or that needs more reading of either side's history to understand, is not a reason to abort: read more.
 If a conflict is genuinely unresolvable (a semantic conflict you can't reconcile without a human decision):
 1. Run ${abortCmd} to restore the repo to its pre-${inProgressName} state
 2. Write a short explanation of the conflict to ${doneFile} starting with \`ABORTED:\`
