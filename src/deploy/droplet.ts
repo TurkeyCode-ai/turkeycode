@@ -14,7 +14,7 @@ import { join } from 'path';
 import { createInterface } from 'readline';
 
 import type { ProjectDetection } from './detect';
-import { DigitalOcean, dropletName, publicIp, type Droplet } from './digitalocean';
+import { DigitalOcean, FIREWALL_NAME, dropletName, publicIp, type Droplet } from './digitalocean';
 import { packageApp } from './package';
 import {
   buildCompose,
@@ -431,6 +431,11 @@ export async function deployToDroplet(
     ensureDeployKey();
   } else {
     droplet = await provision(api, name, detection, options);
+  }
+
+  // After the droplet exists, because DigitalOcean only accepts a tag that is in use.
+  if (await api.ensureFirewall()) {
+    console.log(`  🔒 Firewall "${FIREWALL_NAME}" on: only SSH, HTTP and HTTPS reach turkeycode droplets.`);
   }
 
   const ip = publicIp(droplet);
