@@ -1,0 +1,9 @@
+reference/
+.turkey/
+.git
+.gitignore
+node_modules
+test/
+Dockerfile
+.dockerignore
+*.log
