@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TurkeyCode: unattended builds with Claude Code, Codex CLI, Gemini CLI or OpenCode (open source CLI)</title>
+<meta name="description" content="TurkeyCode is an open-source CLI that drives your logged-in Claude Code (or Codex CLI, Gemini CLI, OpenCode) through research, plan, build, test, fix and review, with hard checks between steps. Needs Node.js 20+ and Git. Runs locally. MIT.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23b4441c'/%3E%3Ccircle cx='16' cy='12' r='6' fill='%23f6ecd9'/%3E%3Cpath d='M12.5 26l2-11h3l2 11z' fill='%23f6ecd9'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --cream: #f6ecd9;
+    --paper: #fffaf0;
+    --stone: #2a221c;
+    --rust: #b4441c;
+    --gold: #d9952b;
+    --muted: #6b5d50;
+    --edge: 3px solid var(--stone);
+    --drop: 6px 6px 0 var(--rust);
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--cream);
+    color: var(--stone);
+    font-family: var(--sans);
+    font-size: 18px;
+    line-height: 1.5;
+  }
+  a { color: inherit; }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 0 20px; }
+  .sr-only {
+    position: absolute;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  /* Hero: the video is a turkey running across black, so the hero is black and the type is light */
+  .hero { position: relative; overflow: hidden; background: #000; color: var(--cream); }
+  .hero-bg { position: absolute; left: 0; bottom: 0; width: 100%; height: auto; min-height: 100%; object-fit: cover; object-position: 50% 100%; opacity: 0.5; pointer-events: none; }
+  .hero-in { position: relative; padding-top: 48px; padding-bottom: 56px; }
+  .hero h1, .hero .lede { text-shadow: 0 2px 0 #000, 0 0 18px #000; }
+  .hero h1 em { font-style: normal; color: #e2602c; }
+  .tag {
+    display: inline-block;
+    background: var(--gold);
+    color: var(--stone);
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 6px 12px;
+  }
+  h1 {
+    margin: 22px 0 18px;
+    font-size: clamp(30px, 8.4vw, 84px);
+    line-height: 0.98;
+    font-weight: 900;
+    letter-spacing: -0.02em;
+    text-transform: uppercase;
+    text-wrap: balance;
+  }
+  .lede { max-width: 680px; margin: 0; font-size: 20px; }
+
+  /* Sections */
+  section { border-top: var(--edge); padding: 56px 0; }
+  section.start { border-top: 0; padding-top: 44px; }
+  h2 {
+    margin: 0 0 28px;
+    font-size: clamp(26px, 5vw, 38px);
+    line-height: 1.05;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: -0.01em;
+  }
+  h3 { margin: 0 0 8px; font-size: 18px; font-weight: 900; text-transform: uppercase; }
+  p { margin: 0 0 16px; }
+  code {
+    font-family: var(--mono);
+    font-size: 0.92em;
+    font-weight: 700;
+    background: rgba(42, 34, 28, 0.08);
+    padding: 1px 5px;
+  }
+
+  .facts { list-style: none; margin: 0 0 30px; padding: 0; max-width: 760px; }
+  .facts li { border: var(--edge); background: var(--paper); padding: 14px 18px; margin: 0 0 14px; font-size: 17px; }
+  .facts li:last-child { margin-bottom: 0; }
+
+  .label { max-width: 760px; margin: 0 0 12px; font-weight: 700; }
+
+  .cmd {
+    display: flex;
+    align-items: stretch;
+    max-width: 720px;
+    margin: 0 0 22px;
+    border: var(--edge);
+    background: var(--stone);
+    box-shadow: var(--drop);
+  }
+  .cmd code {
+    flex: 1;
+    min-width: 0;
+    padding: 18px 18px;
+    color: var(--cream);
+    background: none;
+    font-family: var(--mono);
+    font-size: 16px;
+    font-weight: 400;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .cmd code::before { content: "$ "; color: var(--gold); }
+  .cmd button {
+    flex: none;
+    min-height: 44px;
+    border: 0;
+    border-left: var(--edge);
+    background: var(--gold);
+    color: var(--stone);
+    font: 900 14px var(--sans);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 0 18px;
+    cursor: pointer;
+  }
+  .cmd button:hover, .cmd button:focus-visible { background: var(--cream); }
+
+  /* The two lines that gate an unattended run: keep them loud on every screen */
+  .steps {
+    list-style: none;
+    counter-reset: step;
+    max-width: 720px;
+    margin: 0 0 26px;
+    padding: 20px 22px;
+    border: var(--edge);
+    border-left: 10px solid var(--rust);
+    background: var(--paper);
+    box-shadow: var(--drop);
+    font-size: clamp(20px, 3.4vw, 26px);
+    font-weight: 800;
+    line-height: 1.3;
+  }
+  .steps li { counter-increment: step; margin: 0 0 14px; padding-left: 44px; position: relative; }
+  .steps li:last-child { margin-bottom: 0; }
+  .steps li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    top: 2px;
+    width: 32px;
+    height: 32px;
+    border: var(--edge);
+    background: var(--rust);
+    color: var(--paper);
+    font: 900 18px/28px var(--mono);
+    text-align: center;
+  }
+  .steps code { font-size: 0.8em; }
+
+  .btns { display: flex; flex-wrap: wrap; gap: 16px; margin: 30px 0 0; }
+  .btn {
+    display: inline-block;
+    border: var(--edge);
+    background: var(--paper);
+    padding: 12px 20px;
+    font-weight: 900;
+    font-size: 15px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    text-decoration: none;
+    box-shadow: 4px 4px 0 var(--stone);
+  }
+  .btn.primary { background: var(--rust); color: var(--paper); }
+  .btn:hover, .btn:focus-visible { background: var(--stone); color: var(--cream); box-shadow: 4px 4px 0 var(--rust); }
+
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 22px; align-items: stretch; }
+  .card { border: var(--edge); background: var(--paper); padding: 20px; }
+  .card h3 { margin-bottom: 10px; }
+  .card ul { margin-bottom: 0; }
+
+  ul, ol { margin: 0 0 16px; padding-left: 24px; }
+  li { margin: 6px 0; }
+  .list > li { margin: 10px 0; }
+  .list .cmd { margin: 10px 0 6px; }
+
+  .note {
+    margin: 22px 0;
+    border: var(--edge);
+    border-left: 10px solid var(--rust);
+    background: var(--paper);
+    padding: 16px 18px;
+  }
+  .note.no { border-left-color: var(--stone); }
+  .note p:last-child, .note ul:last-child { margin-bottom: 0; }
+
+  footer { border-top: var(--edge); background: var(--stone); color: var(--cream); padding: 28px 0; font-size: 15px; }
+  footer p { margin: 0 0 8px; }
+  footer p:last-child { margin-bottom: 0; }
+  footer code { background: rgba(246, 236, 217, 0.14); color: var(--cream); }
+  footer a { text-underline-offset: 3px; }
+  footer a:hover, footer a:focus-visible { color: var(--gold); }
+
+  :focus-visible { outline: 3px solid var(--gold); outline-offset: 3px; }
+
+  @media (max-width: 760px) {
+    body { font-size: 17px; }
+    .hero-in { padding-top: 28px; padding-bottom: 120px; }
+    .hero-bg { min-height: 0; opacity: 0.9; }
+    .lede { font-size: 17px; }
+    section { padding: 40px 0; }
+    section.start { padding-top: 32px; }
+    .grid { grid-template-columns: 1fr; }
+    .cmd { flex-direction: column; }
+    .cmd button { width: 100%; border-left: 0; border-top: var(--edge); padding: 12px; }
+  }
+</style>
+</head>
+<body data-page="b">
+<main>
+
+  <div class="hero">
+    <video class="hero-bg" id="turkey" src="/b/turkey.mp4" poster="/b/turkey-poster.jpg" autoplay muted loop playsinline preload="metadata" aria-hidden="true"></video>
+    <div class="wrap hero-in">
+      <span class="tag">Open source CLI &middot; MIT &middot; runs on your machine &middot; Claude Code, Codex CLI, Gemini CLI or OpenCode</span>
+      <h1>Hand a whole build to Claude Code. Come back to <em>tested</em> code.</h1>
+      <p class="lede"><strong>TurkeyCode</strong> runs a whole build from one prompt while you are away. It drives the Claude Code you are already logged into through research, plan, build, test, fix and review. Plain code, not an AI, decides each next step, and every step must leave a valid file on disk or the run stops.</p>
+    </div>
+  </div>
+
+  <section class="start">
+    <div class="wrap">
+      <ul class="facts">
+        <li><strong>You need: Node.js 20+ and Git</strong>, plus an agent CLI <strong>installed and logged in</strong>: Claude Code by default, or Codex CLI, Gemini CLI or OpenCode with <code>--agent</code>.</li>
+        <li><strong>You pay for:</strong> only your own agent usage (for example your Claude Pro or Max plan). TurkeyCode is free and MIT.</li>
+        <li><strong>What checks the work:</strong> separate QA agent sessions test each phase (web apps in a real browser via Playwright), code review runs before each merge, and plain code refuses to move on unless each step leaves a valid file on disk.</li>
+      </ul>
+
+      <p class="label">Start a build: <code>npx turkeycode run</code> plus a description of your app, in an empty folder.</p>
+      <div class="cmd">
+        <code>npx turkeycode run "a todo app with user accounts"</code>
+        <button type="button" data-copy="npx turkeycode run &quot;a todo app with user accounts&quot;" aria-label="Copy command: npx turkeycode run &quot;a todo app with user accounts&quot;">Copy</button>
+      </div>
+
+      <ol class="steps">
+        <li><strong>Settle the scope first.</strong> At a terminal it asks a few numbered scope questions; answer them. Or skip them: run <code>npx turkeycode scope</code> first, or pass <code>--spec</code> with a spec file.</li>
+        <li><strong>Then it runs on its own.</strong> No further input: it builds, tests, fixes and reviews without waiting for you.</li>
+      </ol>
+
+      <p><strong>Use Codex CLI, Gemini CLI or OpenCode?</strong> Add one flag: <code>--agent codex</code>, <code>--agent gemini</code> or <code>--agent opencode</code>. <a href="#agents">More</a></p>
+      <div class="cmd">
+        <code>npx turkeycode run --agent codex "a todo app with user accounts"</code>
+        <button type="button" data-copy="npx turkeycode run --agent codex &quot;a todo app with user accounts&quot;" aria-label="Copy command: npx turkeycode run --agent codex &quot;a todo app with user accounts&quot;">Copy</button>
+      </div>
+
+      <div class="btns">
+        <a class="btn primary" href="#quick-start">Quick start</a>
+        <a class="btn" href="#install">Install</a>
+        <a class="btn" href="https://github.com/TurkeyCode-ai/turkeycode">GitHub repo</a>
+        <a class="btn" href="https://www.npmjs.com/package/turkeycode">npm package</a>
+      </div>
+    </div>
+  </section>
+
+  <section id="need">
+    <div class="wrap">
+      <h2>What you need: Node.js 20+, Git and a logged-in agent CLI</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>On your machine</h3>
+          <ul>
+            <li><strong>Node.js 20 or later</strong> and <strong>Git</strong></li>
+            <li><strong>An agent CLI, installed and logged in.</strong> Claude Code by default. Codex CLI, Gemini CLI or OpenCode also work via <code>--agent</code>.</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>What you pay for: your agent usage only</h3>
+          <ul>
+            <li>TurkeyCode itself: free, MIT licensed. No hosted service; it runs on your machine.</li>
+            <li>Your agent usage. With a Claude Pro or Max login it uses your existing Claude CLI session, no API key. Those plans have usage limits, and a build uses them.</li>
+            <li>Optional: deploying to your own DigitalOcean account (default droplet $6 a month, billed by DigitalOcean).</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="quick-start">
+    <div class="wrap">
+      <h2>Quick start: one build</h2>
+      <ol class="list">
+        <li>Check you have Node.js 20+, Git and a logged-in agent CLI (Claude Code by default).</li>
+        <li>Make an empty folder and go into it:
+          <div class="cmd">
+            <code>mkdir my-app &amp;&amp; cd my-app</code>
+            <button type="button" data-copy="mkdir my-app &amp;&amp; cd my-app" aria-label="Copy command: mkdir my-app &amp;&amp; cd my-app">Copy</button>
+          </div>
+        </li>
+        <li>Start the build with <code>npx turkeycode run</code> plus a description:
+          <div class="cmd">
+            <code>npx turkeycode run "a todo app with user accounts"</code>
+            <button type="button" data-copy="npx turkeycode run &quot;a todo app with user accounts&quot;" aria-label="Copy command: npx turkeycode run &quot;a todo app with user accounts&quot;">Copy</button>
+          </div>
+        </li>
+        <li><strong>Answer the scope questions, or skip them.</strong> At a terminal, <code>run</code> first offers numbered options to pin down scope. Once you have picked, it builds with no further input and does not wait for you again. If nobody will be at the terminal, scope first or pass <code>--spec</code> (below).</li>
+      </ol>
+      <div class="note">
+        <strong>Want it unattended from the first moment?</strong> Scope first with <code>npx turkeycode scope</code>, which writes a spec without building, then run later with <code>--spec</code> pointing at that spec file. Passing <code>--spec</code>, or running with no terminal attached, skips the scope questions and the run is fully autonomous. A <code>persona.md</code> file lets scoping weigh options the way you would.
+      </div>
+      <p><strong>If no agent CLI is found</strong>, TurkeyCode prints its banner, runs preflight checks, and stops with exit code 1, telling you how to install Claude Code and log in. Do that, then run again.</p>
+
+      <h3>While it runs</h3>
+      <ul>
+        <li>Builds can take 30 to 60 minutes or more. A single phase build session is allowed up to 90 minutes.</li>
+        <li>Claude Code sessions run with permissions skipped, so they never stop to wait for approval.</li>
+        <li><code>turkeycode status</code> shows where a build is. The log prints <code>ORCHESTRATION COMPLETE</code> when it finishes.</li>
+        <li>Interrupted? <code>turkeycode resume</code> continues from the last checkpoint.</li>
+        <li>The README recommends starting long builds detached and watching <code>build.log</code>. Its <code>setsid nohup</code> example is for Linux; <code>setsid</code> is not on macOS.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="checks">
+    <div class="wrap">
+      <h2>What has checked the work when you come back</h2>
+      <ul>
+        <li><strong>Separate sessions, not the builder.</strong> Each agent session gets one scoped job: build one phase, run one QA tier, or fix all issues at once. The session that wrote the code is not the one that tests it.</li>
+        <li><strong>File gates.</strong> Every step must leave a specific file with valid content on disk. Missing or invalid means the run stops, not a warning.</li>
+        <li><strong>Pre-QA check.</strong> Installs missing prerequisites, starts Docker services, checks compilation and confirms the server starts.</li>
+        <li><strong>QA with zero blockers.</strong> A phase passes only with zero blockers, with up to 3 QA attempts per phase. Web QA drives the app with Playwright and Chromium, which the QA session installs itself.</li>
+        <li><strong>Code review, then merge.</strong> The plan has as many phases as the work needs. Each phase is merged only after QA and code review.</li>
+        <li><strong>Fixes and polish.</strong> Blockers are fixed in one session. Cosmetic warnings go to one polish pass at the end, which re-verifies the build and reverts any cleanup that breaks compilation or boot.</li>
+        <li><strong>Evidence on disk.</strong> Build state, QA reports, reviews and screenshots are kept in a <code>.turkey</code> folder in your project.</li>
+      </ul>
+      <p>It builds and detects Node, Python, Go, Ruby, Rust, PHP, static sites and Docker projects.</p>
+    </div>
+  </section>
+
+  <section id="machine">
+    <div class="wrap">
+      <h2>What runs on your machine</h2>
+      <ul>
+        <li>TurkeyCode writes no code itself. It launches your agent CLI in print mode, one scoped job per session.</li>
+        <li>Claude Code runs with <code>--dangerously-skip-permissions</code>. Use a folder and machine where you accept that.</li>
+        <li>It removes <code>ANTHROPIC_API_KEY</code> from the agent's environment by default, so your subscription login is used. To use an API key instead, also set <code>TURKEYCODE_USE_API_KEY=1</code>.</li>
+        <li>On the Claude backend, build and blocker-fix sessions are pinned to <code>claude-fable-5</code>; other phases use opus, sonnet or haiku tiers.</li>
+        <li>Git: it creates a repository with a <code>main</code> branch if there is none. With no remote it skips PRs and merges phases locally; <code>--no-push</code> keeps everything local.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="agents">
+    <div class="wrap">
+      <h2>Not on Claude Code? Switch with one flag</h2>
+      <div class="cmd">
+        <code>npx turkeycode run --agent codex "a todo app with user accounts"</code>
+        <button type="button" data-copy="npx turkeycode run --agent codex &quot;a todo app with user accounts&quot;" aria-label="Copy command: npx turkeycode run --agent codex &quot;a todo app with user accounts&quot;">Copy</button>
+      </div>
+      <p>Built-in backends: <code>claude</code> (default), <code>codex</code>, <code>gemini</code>, <code>opencode</code>. Each must be installed and logged in. Other print-mode agent CLIs can be added in <code>~/.turkeycode/agents.yaml</code> without code changes.</p>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="wrap">
+      <h2>Install</h2>
+      <p>You don't need to install: <code>npx turkeycode run</code> works on its own. To install globally:</p>
+      <div class="cmd">
+        <code>npm install -g turkeycode</code>
+        <button type="button" data-copy="npm install -g turkeycode" aria-label="Copy command: npm install -g turkeycode">Copy</button>
+      </div>
+      <p>Then run it as <code>turkeycode</code> or <code>turkey</code>. As a non-root user with npm's default global folder, this can fail with a permissions error (EACCES). In that case use <code>npx</code>.</p>
+    </div>
+  </section>
+
+  <section id="more">
+    <div class="wrap">
+      <h2>After the build</h2>
+      <ul>
+        <li><code>turkey deploy</code> ships a web app to a droplet in your own DigitalOcean account. TurkeyCode has no hosting of its own. First build with <code>npx turkeycode run "&lt;description&gt;"</code>. To build with nobody answering, run <code>npx turkeycode scope</code> first or pass <code>--spec</code>; otherwise <code>run</code> asks scope questions at the terminal. Then deploy.</li>
+        <li><code>turkey deliver</code> pushes non-web projects to your GitHub with release binaries, using <code>gh</code> auth.</li>
+        <li>With Jira environment variables set, <code>run-ticket</code> builds an existing ticket and <code>story</code> files and runs a new one.</li>
+        <li>The repository includes Claude Code skills for running and monitoring builds and for scoping in chat. They come from the repo, not the npm package.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="not-for">
+    <div class="wrap">
+      <h2>What TurkeyCode is not</h2>
+      <div class="note no">
+        <ul>
+          <li><strong>Not a hosted app builder.</strong> There is no website where you describe an app and it goes live. You need a CLI, Node, Git and your own logged-in agent.</li>
+          <li><strong>Not an editor plugin or autocomplete.</strong> It does not pair with you as you type. It runs whole builds in the terminal while you are away.</li>
+          <li><strong>Not a coding model.</strong> It orchestrates an agent you already have.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>TurkeyCode &middot; MIT licensed &middot; version 4.0.0 on npm &middot; CI tests on Node 20 and 22.</p>
+    <p><a href="https://github.com/TurkeyCode-ai/turkeycode">github.com/TurkeyCode-ai/turkeycode</a> &middot; <a href="https://www.npmjs.com/package/turkeycode">npmjs.com/package/turkeycode</a> &middot; <a href="https://github.com/TurkeyCode-ai">github.com/TurkeyCode-ai</a> &middot; <a href="https://turkeycode.ai">turkeycode.ai</a></p>
+  </div>
+</footer>
+
+<div id="copy-status" class="sr-only" aria-live="polite"></div>
+
+<script>
+  (function () {
+    var v = document.getElementById('turkey');
+    if (v && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      v.removeAttribute('autoplay');
+      v.pause();
+    }
+  })();
+  (function () {
+    var status = document.getElementById('copy-status');
+    var buttons = document.querySelectorAll('button[data-copy]');
+    Array.prototype.forEach.call(buttons, function (btn) {
+      btn.addEventListener('click', function () {
+        var text = btn.getAttribute('data-copy');
+        function done() {
+          btn.textContent = 'Copied';
+          if (status) status.textContent = 'Copied: ' + text;
+          setTimeout(function () { btn.textContent = 'Copy'; }, 1500);
+        }
+        function fallback() {
+          var ta = document.createElement('textarea');
+          ta.value = text;
+          ta.setAttribute('readonly', '');
+          ta.style.position = 'fixed';
+          ta.style.left = '-9999px';
+          document.body.appendChild(ta);
+          ta.select();
+          var ok = false;
+          try { ok = document.execCommand('copy'); } catch (e) {}
+          document.body.removeChild(ta);
+          if (ok) { done(); }
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(text).then(done, fallback);
+        } else {
+          fallback();
+        }
+      });
+    });
+  })();
+</script>
+<script src="/t.js"></script>
+</body>
+</html>
