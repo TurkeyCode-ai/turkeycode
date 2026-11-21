@@ -173,6 +173,7 @@ describe('resolveModelForPhase', () => {
       'qa-smoke': 'haiku', 'qa-functional': 'sonnet', 'qa-visual': 'sonnet', 'qa-verdict': 'sonnet',
       'qa-fix': 'claude-fable-5', 'quick-fix': 'sonnet',
       'code-review': 'sonnet', 'ticket-review': 'opus', 'aar': 'sonnet', 'polish': 'sonnet',
+      'simulate-spec': 'opus', 'simulate-fix': 'opus',
     };
     for (const phase of Object.keys(PHASE_TIERS)) {
       expect(resolveModelForPhase(CLAUDE_BACKEND, phase), phase).toBe(expected[phase]);

@@ -89,6 +89,21 @@ export interface OrchestratorOptions {
   aar?: boolean;
   /** Run the end-of-build polish pass: one session that drives all warnings to zero across the repo, then verifies the build. On by default (defer-warnings model). */
   polish?: boolean;
+  /**
+   * After the build: simulated visitors use the app and it is scored against the
+   * spec. Report only, so it can never fail a run. Needs the sdd-engine package;
+   * without it the stage says so and is skipped.
+   */
+  simulate?: boolean;
+  /**
+   * After the simulation, revise the app and simulate again, keeping a change
+   * only when the score improved. Implies simulate. Off by default: the sim is
+   * uncalibrated, so this optimises against numbers nobody has checked.
+   */
+  simulateLoop?: boolean;
+  /** Visits per visitor and screen size, and the spend cap, for --simulate. With the loop the cap covers every simulation in it. */
+  simulateRuns?: number;
+  simulateBudgetUsd?: number;
   /** Force the project type (skips auto-detection). Essential for greenfield builds where the dir is empty. */
   projectType?: ProjectType;
   /**
@@ -299,6 +314,10 @@ export class Orchestrator {
   private workDir: string;
   private aar: boolean;
   private polish: boolean;
+  private simulate: boolean;
+  private simulateLoop: boolean;
+  private simulateRuns?: number;
+  private simulateBudgetUsd?: number;
   private baseBranch?: string;
   private featureBranch?: string;
 
@@ -306,6 +325,10 @@ export class Orchestrator {
     this.verbose = options.verbose ?? false;
     this.aar = options.aar ?? false;
     this.polish = options.polish ?? false;
+    this.simulateLoop = options.simulateLoop ?? false;
+    this.simulate = (options.simulate ?? false) || this.simulateLoop;
+    this.simulateRuns = options.simulateRuns;
+    this.simulateBudgetUsd = options.simulateBudgetUsd;
     this.workDir = process.cwd();
     this.state = loadState();
     this.spawner = createSpawner({ verbose: this.verbose });
@@ -680,6 +703,15 @@ export class Orchestrator {
       }
     } catch { /* best effort — never fail the run over this */ }
 
+    // ==================== SIMULATION (opt-in, report only) ====================
+    // Runs on the finished, merged app. currentPhase is left alone so an
+    // interrupted simulation resumes exactly as an interrupted polish would.
+    if (this.simulateLoop) {
+      await this.runSimulationLoopStage();
+    } else if (this.simulate) {
+      await this.runSimulationStage();
+    }
+
     // ==================== DONE ====================
     this.state.currentPhase = 'done';
     saveState(this.state);
@@ -694,11 +726,17 @@ export class Orchestrator {
     this.log('ORCHESTRATION COMPLETE');
     this.log('='.repeat(60));
     this.log('');
+    this.logSimulationSummary();
     this.log('🦃 Your project is ready! Here\'s what you can do next:');
     this.log('');
     this.log('  Run locally (Docker):');
     this.log('    turkeycode run-local');
     this.log('');
+    if (!this.simulate) {
+      this.log('  See how simulated visitors get on with it (needs the sdd-engine package):');
+      this.log('    turkeycode simulate');
+      this.log('');
+    }
     this.log('  Deploy to your own DigitalOcean account:');
     this.log('    turkeycode login --token <digitalocean-token>');
     this.log('    turkeycode deploy');
@@ -2227,7 +2265,14 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
   /** Merge the polish branch into the default branch (PR when a remote exists, else local).
    * Conflicts get the same agent-driven recovery as phase merges (mergeWithResolution) —
    * the bare mergeBranch aborts on conflict, which would strand the verified cleanup. */
-  private async mergePolishBranch(polishBranch: string, defaultBranch: string): Promise<boolean> {
+  private async mergePolishBranch(
+    polishBranch: string,
+    defaultBranch: string,
+    pr: { title: string; body: string } = {
+      title: 'Polish: warning cleanup',
+      body: 'Repo-wide warning cleanup (defer-warnings polish pass). Build re-verified after cleanup.',
+    }
+  ): Promise<boolean> {
     if (!this.github.branchExists(polishBranch)) {
       // Built directly on default — already merged.
       return true;
@@ -2235,13 +2280,13 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     if (this.github.hasRemote()) {
       this.github.push(polishBranch);
       const existing = this.github.findExistingPR(polishBranch);
-      const pr = existing || this.github.createPR({
-        title: 'Polish: warning cleanup',
-        body: 'Repo-wide warning cleanup (defer-warnings polish pass). Build re-verified after cleanup.',
+      const opened = existing || this.github.createPR({
+        title: pr.title,
+        body: pr.body,
         base: defaultBranch,
         head: polishBranch
       });
-      let merged = pr ? this.github.mergePR(pr) : false;
+      let merged = opened ? this.github.mergePR(opened) : false;
       if (!merged) {
         merged = await this.landPolishLocally(polishBranch, defaultBranch);
         // --no-push makes push() a deliberate no-op, so false only means failure otherwise.
@@ -2737,11 +2782,168 @@ Generated by turkeycode (phase-based)
    * run: on resume at phase 12, Opus being out of credit says nothing about
    * whether the remaining phases can finish.
    */
+  /**
+   * Simulated visitors on the finished app. A measurement, never a gate: a
+   * missing engine, an app that will not start, or any error here is recorded
+   * and the run still completes.
+   */
+  private async runSimulationStage(): Promise<void> {
+    this.log('='.repeat(60));
+    this.log('SIMULATION: simulated visitors use the built app');
+    this.log('='.repeat(60));
+    auditPhase('simulate', 'started');
+    const started = Date.now();
+    try {
+      const { defaultDeps, newRunId, runSimulation } = await import('./simulate');
+      const run = newRunId();
+      const outcome = await runSimulation(
+        this.workDir,
+        { runsPerPersona: this.simulateRuns, budgetUsd: this.simulateBudgetUsd, runId: run, log: line => this.log(line) },
+        defaultDeps(this.spawner)
+      );
+      const finishedAt = new Date().toISOString();
+      this.state.simulation = outcome.status === 'done'
+        ? { run, status: 'done', verdict: outcome.report.verdict, costUsd: outcome.report.costUsd, reportPath: outcome.markdownPath, finishedAt }
+        : { run, status: outcome.status, reason: outcome.reason, finishedAt };
+    } catch (err) {
+      this.state.simulation = { run: '', status: 'failed', reason: (err as Error).message, finishedAt: new Date().toISOString() };
+    }
+    saveState(this.state);
+    auditPhase('simulate', 'completed', { ...this.state.simulation, durationMs: Date.now() - started });
+  }
+
+  /**
+   * The revise loop (--simulate-loop). The decisions are in simulate/loop.ts;
+   * this supplies the git, the fix session and the build check, on a branch of
+   * its own so the merged app is untouched unless a change is kept and verified.
+   */
+  private async runSimulationLoopStage(): Promise<void> {
+    this.log('='.repeat(60));
+    this.log('SIMULATION LOOP: simulate, revise, simulate again');
+    this.log('='.repeat(60));
+    auditPhase('simulate', 'started', { loop: true });
+    const started = Date.now();
+    const target = this.getMergeTarget();
+    const branch = 'simulate/revise';
+
+    try {
+      // A branch left by an earlier run that does not contain the target is stale.
+      if (this.github.branchExists(branch)) {
+        try {
+          execSync(`git merge-base --is-ancestor ${target} ${branch}`, { cwd: this.workDir, stdio: 'pipe' });
+        } catch {
+          const sha = execSync(`git rev-parse --short ${branch}`, { cwd: this.workDir, stdio: 'pipe' }).toString().trim();
+          execSync(`git branch -M ${branch} ${branch}-stale-${sha}`, { cwd: this.workDir, stdio: 'pipe' });
+          this.log(`Set aside stale ${branch} as ${branch}-stale-${sha}`);
+        }
+      }
+      this.github.createBranch(branch, target);
+
+      const { defaultDeps, newRunId, runSimulation } = await import('./simulate');
+      const { describeStop, runReviseLoop } = await import('./simulate/loop');
+      const { buildSimulateFixPrompt, simulateFixFiles } = await import('./prompts/simulate-fix');
+      const deps = defaultDeps(this.spawner);
+      const base = newRunId();
+      let simulations = 0;
+
+      const result = await runReviseLoop({
+        simulate: async budgetUsd => {
+          const run = `${base}-${simulations++}`;
+          const outcome = await runSimulation(
+            this.workDir,
+            { runsPerPersona: this.simulateRuns, budgetUsd, runId: run, log: line => this.log(line) },
+            deps
+          );
+          // Commit the report (and any Dockerfile the copy needed) now, so a later
+          // revert of a fix cannot take them with it.
+          if (this.github.hasUncommittedChanges()) this.github.commit(`simulate: report ${run}`);
+          return outcome.status === 'done'
+            ? { status: 'done', report: outcome.report, markdownPath: outcome.markdownPath }
+            : outcome;
+        },
+        revise: async input => {
+          const before = this.getGitHead();
+          const files = simulateFixFiles(input.iteration);
+          if (existsSync(join(this.workDir, files.done))) unlinkSync(join(this.workDir, files.done));
+          await this.spawner.run({
+            cwd: this.workDir,
+            prompt: buildSimulateFixPrompt({ projectName: this.state.projectName, ...input }),
+            timeoutMs: FIX_TIMEOUT_MS,
+            sessionName: `simulate-fix-${input.iteration}`,
+            doneFile: files.done,
+            model: getModelForPhase('simulate-fix')
+          });
+          if (this.github.hasUncommittedChanges()) {
+            this.github.commit(`simulate: revise after simulated visitors (iteration ${input.iteration})`);
+          }
+          return this.getGitHead() !== before;
+        },
+        verify: async () => {
+          this.log('Verifying the build still passes after the change...');
+          const check = await runQuickChecks(this.workDir);
+          for (const c of check.checks) this.log(`  ${c.passed ? '✓' : '✗'} ${c.name}: ${c.message}`);
+          return check.passed;
+        },
+        head: () => this.getGitHead() ?? '',
+        revertTo: sha => {
+          if (!sha) return;
+          try { execSync(`git reset --hard ${sha}`, { cwd: this.workDir, stdio: 'pipe' }); } catch { /* best effort */ }
+        },
+        log: line => this.log(line),
+      }, { budgetUsd: this.simulateBudgetUsd });
+
+      const finishedAt = new Date().toISOString();
+      if (result.final) {
+        this.log(`Loop stopped: ${describeStop(result)}. ${result.kept} change(s) kept in ${result.iterations.length} iteration(s).`);
+        this.state.simulation = {
+          run: result.final.run, status: 'done', verdict: result.final.verdict, costUsd: result.spentUsd,
+          reportPath: result.finalMarkdownPath, finishedAt,
+          loop: { stop: result.stop, kept: result.kept, iterations: result.iterations.length },
+        };
+      } else {
+        this.state.simulation = { run: base, status: result.baselineStatus === 'skipped' ? 'skipped' : 'failed', reason: result.reason, finishedAt };
+      }
+
+      // Land what the loop left: kept changes, already build-verified, plus the reports.
+      const ahead = this.getGitHead() !== execSync(`git rev-parse ${target}`, { cwd: this.workDir, stdio: 'pipe' }).toString().trim();
+      if (ahead) {
+        const merged = await this.mergePolishBranch(branch, target, {
+          title: result.kept > 0 ? 'Simulation: revisions after simulated visitors' : 'Simulation: report',
+          body: `Simulated visitors used the app (${result.final?.verdict ?? 'no verdict'}). ${result.kept} revision(s) kept; each was kept only because the working-set score improved and the build still verified. The simulation is uncalibrated.`,
+        });
+        if (!merged) this.log(`⚠ The simulation branch could not be merged. It remains on ${branch}. Merge it manually.`);
+      }
+    } catch (err) {
+      this.state.simulation = { run: '', status: 'failed', reason: (err as Error).message, finishedAt: new Date().toISOString() };
+    }
+
+    try {
+      if (this.github.getCurrentBranch() !== target) this.github.checkoutBranch(target);
+    } catch { /* best effort */ }
+    saveState(this.state);
+    auditPhase('simulate', 'completed', { ...this.state.simulation, durationMs: Date.now() - started });
+  }
+
+  private logSimulationSummary(): void {
+    const sim = this.state.simulation;
+    if (!this.simulate || !sim) return;
+    if (sim.status === 'done') {
+      this.log(`Simulation: ${sim.verdict} ($${(sim.costUsd ?? 0).toFixed(2)} at list prices). Uncalibrated: it compares versions of this app, it does not predict real visitors.`);
+      if (sim.loop) this.log(`  Revise loop: ${sim.loop.kept} change(s) kept in ${sim.loop.iterations} iteration(s); stopped on "${sim.loop.stop}".`);
+      this.log(`  Report: ${sim.reportPath}`);
+    } else {
+      this.log(`Simulation ${sim.status}: ${sim.reason}`);
+    }
+    this.log('');
+  }
+
   private phasesThatWontRun(): Set<string> {
     // scope runs in the CLI before the orchestrator starts; ticket-review is the ticket flow's.
     const skip = new Set(['scope', 'ticket-review']);
     if (!this.aar) skip.add('aar');
     if (!this.polish) skip.add('polish');
+    if (!this.simulate) skip.add('simulate-spec');
+    if (!this.simulateLoop) skip.add('simulate-fix');
     if (existsSync(join(this.workDir, RESEARCH_DONE))) skip.add('research');
     if (existsSync(join(this.workDir, PLAN_DONE))) skip.add('plan');
     return skip;

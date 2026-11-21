@@ -133,6 +133,8 @@ export const PHASE_TIERS: Record<string, keyof AgentModels['tiers']> = {
   'ticket-review': 'high',
   'aar': 'medium',
   'polish': 'medium',
+  'simulate-spec': 'high',
+  'simulate-fix': 'high',
 };
 
 /**
