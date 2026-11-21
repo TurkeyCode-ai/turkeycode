@@ -204,6 +204,17 @@ export interface ProjectState {
 
   // Timestamps
   startedAt: string;
+  /** The last end-of-run simulation, when one was asked for. Report only: it never gates anything. */
+  simulation?: {
+    run: string;
+    status: 'done' | 'skipped' | 'failed';
+    verdict?: string;
+    costUsd?: number;
+    reportPath?: string;
+    reason?: string;
+    finishedAt: string;
+  };
+
   lastUpdatedAt: string;
 }
 

@@ -24,6 +24,25 @@ import {
 } from './constants';
 import { resolveBackendId, setActiveBackend } from './agents';
 
+/** --simulate and its two numbers, checked once for `run` and `resume`. */
+function simulateOptions(options: { simulate?: boolean; simulateRuns?: string; simulateBudgetUsd?: string }): {
+  simulate: boolean; simulateRuns?: number; simulateBudgetUsd?: number;
+} {
+  const simulateRuns = options.simulateRuns === undefined ? undefined : Number(options.simulateRuns);
+  const simulateBudgetUsd = options.simulateBudgetUsd === undefined ? undefined : Number(options.simulateBudgetUsd);
+  if (simulateRuns !== undefined && (!Number.isInteger(simulateRuns) || simulateRuns < 1 || simulateRuns > 40)) {
+    console.error(`❌ --simulate-runs must be a whole number from 1 to 40 (got "${options.simulateRuns}").`);
+    process.exit(1);
+  }
+  if (simulateBudgetUsd !== undefined && !(simulateBudgetUsd > 0)) {
+    console.error(`❌ --simulate-budget-usd must be a number above 0 (got "${options.simulateBudgetUsd}").`);
+    process.exit(1);
+  }
+  // Giving a number means you want the simulation.
+  const simulate = !!options.simulate || simulateRuns !== undefined || simulateBudgetUsd !== undefined;
+  return { simulate, simulateRuns, simulateBudgetUsd };
+}
+
 /**
  * Resolve and activate the agent backend for this command.
  * Precedence: --agent flag > TURKEYCODE_AGENT > state.json pin > claude.
@@ -90,6 +109,9 @@ program
   .option('--no-push', 'Skip git push (use for local-only repos or no_push remotes)')
   .option('--no-pr', 'Skip gh pr create (implied by --no-push)')
   .option('--aar', 'Generate a per-phase After-Action Report (extra LLM session per phase; off by default)')
+  .option('--simulate', 'After the build, simulated visitors use the app and it is scored against the spec (report only; needs the sdd-engine package)')
+  .option('--simulate-runs <n>', 'Visits per visitor and screen size for --simulate (default 10)')
+  .option('--simulate-budget-usd <n>', 'Spend cap for --simulate, at list prices (default 5)')
   .option('--strict-phases', 'Gate every phase on ZERO warnings (old behavior). Disables the end-of-build polish pass.')
   .option('--type <type>', `Force project type (skips auto-detection): ${PROJECT_TYPES.filter(t => t !== 'unknown').join(', ')}`)
   .option('--base <branch>', 'Base branch override (e.g. develop). Defaults to detected main/master.')
@@ -200,6 +222,7 @@ program
       aar: options.aar,
       polish,
       projectType,
+      ...simulateOptions(options),
       base: options.base,
       feature: options.feature
     });
@@ -457,6 +480,9 @@ program
   .option('-v, --verbose', 'Verbose output')
   .option('-w, --allow-warnings', 'Allow warnings in QA (only blockers must be zero)')
   .option('--aar', 'Generate a per-phase After-Action Report (extra LLM session per phase; off by default)')
+  .option('--simulate', 'After the build, simulated visitors use the app and it is scored against the spec (report only; needs the sdd-engine package)')
+  .option('--simulate-runs <n>', 'Visits per visitor and screen size for --simulate (default 10)')
+  .option('--simulate-budget-usd <n>', 'Spend cap for --simulate, at list prices (default 5)')
   .option('--strict-phases', 'Gate every phase on ZERO warnings (old behavior). Disables the end-of-build polish pass.')
   .option('--no-push', 'Skip git push (use for local-only repos or no_push remotes)')
   .option('--no-pr', 'Skip gh pr create (implied by --no-push)')
@@ -495,6 +521,7 @@ program
       verbose: options.verbose,
       aar: options.aar,
       polish,
+      ...simulateOptions(options),
       noPush: options.push === false,
       noPr: options.pr === false,
       base: options.base,
