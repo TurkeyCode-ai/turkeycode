@@ -418,6 +418,53 @@ Options (run):
   -g, --github <repo>     Create PRs per phase (owner/repo)
 ```
 
+## Simulate
+
+QA answers "does it work?". A simulation answers "does it work for the people it is for?".
+
+`turkeycode simulate` sends simulated first-time visitors through the app you built and scores what happened against thresholds taken from your spec. It uses the separate [SDD engine](https://github.com/TurkeyCode-ai/sdd) (Simulation Driven Development):
+
+```bash
+npm install -g sdd-engine && sdd setup    # once
+
+turkeycode simulate                        # the app in this folder, report only
+turkeycode run "..." --simulate            # simulate at the end of a build
+turkeycode run "..." --simulate-loop       # simulate, revise, simulate again
+```
+
+What it does:
+
+1. One session reads `.turkey/reference/specs.md` and designs the study: 5 to 7 visitors drawn from your audience, 2 to 4 questions about the entry page, and up to 2 tasks from your core flows. Two of the visitors are held back.
+2. Starts a throwaway copy of the app in Docker, on its own port with its own empty database. Your `.env` is not loaded, so the copy holds no real keys. Pass `--env <file>` for values the app needs to start.
+3. Visitors skim the entry page for a fixed time and answer the questions from memory. Then they try each task: they can scroll, click, type, or leave, and leaving is the default.
+4. Prints a table and writes `.turkey/simulation/<run>.md`: pass rates with 95% intervals, what visitors missed, where they stopped, and a sample of what went wrong. The copy is destroyed.
+
+**The scores are not calibrated.** The simulated visitors have not been checked against real people. Use a score to compare two versions of your app. It is not a prediction of what real visitors will do, and every report says so.
+
+A threshold counts as met only when the low end of its interval clears it, for the visitors and for the held-back visitors. With few visits most results come back "inside the noise", which is the honest answer.
+
+| Flag | Meaning |
+|---|---|
+| `--runs <n>` | Visits per visitor and screen size. Default 10. |
+| `--budget-usd <n>` | Stop starting new visits once this much is spent at list prices. Default 5. |
+| `--regenerate` | Design the study again from the spec. |
+| `--env <file>` | Environment for the throwaway copy. |
+
+On `run` and `resume` the same numbers are `--simulate-runs` and `--simulate-budget-usd`.
+
+### The revise loop
+
+`--simulate-loop` is opt-in. After the first simulation, a fix session changes the app, the build is re-verified, and the simulation runs again on a fresh copy:
+
+- A change is kept only if the visitors' score improved. Otherwise the branch goes back to where it was.
+- A change that breaks the build is reverted before it is simulated.
+- The fix session sees the visitors' results only. The held-back visitors, the study and the judge live in `~/.turkeycode/sim/`, outside the project, so the app cannot be tuned to them.
+- It stops when everything passes, after 3 iterations, after 2 in a row that improved nothing, or when the simulation budget (default $20 for the whole loop) is spent.
+
+It works on its own branch, `simulate/revise`, and merges only what was kept and verified.
+
+If the engine, Docker or the `claude` CLI is missing, or the project is not a web app, the simulation says so and is skipped. It never fails a build.
+
 ## Deploy
 
 Built something? Ship it to your own DigitalOcean account. turkeycode has no hosting

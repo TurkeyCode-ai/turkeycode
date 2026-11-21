@@ -213,6 +213,8 @@ export interface ProjectState {
     reportPath?: string;
     reason?: string;
     finishedAt: string;
+    /** Present when the revise loop ran. */
+    loop?: { stop: string; kept: number; iterations: number };
   };
 
   lastUpdatedAt: string;

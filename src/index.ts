@@ -25,8 +25,8 @@ import {
 import { resolveBackendId, setActiveBackend } from './agents';
 
 /** --simulate and its two numbers, checked once for `run` and `resume`. */
-function simulateOptions(options: { simulate?: boolean; simulateRuns?: string; simulateBudgetUsd?: string }): {
-  simulate: boolean; simulateRuns?: number; simulateBudgetUsd?: number;
+function simulateOptions(options: { simulate?: boolean; simulateLoop?: boolean; simulateRuns?: string; simulateBudgetUsd?: string }): {
+  simulate: boolean; simulateLoop: boolean; simulateRuns?: number; simulateBudgetUsd?: number;
 } {
   const simulateRuns = options.simulateRuns === undefined ? undefined : Number(options.simulateRuns);
   const simulateBudgetUsd = options.simulateBudgetUsd === undefined ? undefined : Number(options.simulateBudgetUsd);
@@ -39,8 +39,9 @@ function simulateOptions(options: { simulate?: boolean; simulateRuns?: string; s
     process.exit(1);
   }
   // Giving a number means you want the simulation.
-  const simulate = !!options.simulate || simulateRuns !== undefined || simulateBudgetUsd !== undefined;
-  return { simulate, simulateRuns, simulateBudgetUsd };
+  const simulateLoop = !!options.simulateLoop;
+  const simulate = !!options.simulate || simulateLoop || simulateRuns !== undefined || simulateBudgetUsd !== undefined;
+  return { simulate, simulateLoop, simulateRuns, simulateBudgetUsd };
 }
 
 /**
@@ -110,8 +111,9 @@ program
   .option('--no-pr', 'Skip gh pr create (implied by --no-push)')
   .option('--aar', 'Generate a per-phase After-Action Report (extra LLM session per phase; off by default)')
   .option('--simulate', 'After the build, simulated visitors use the app and it is scored against the spec (report only; needs the sdd-engine package)')
+  .option('--simulate-loop', 'After simulating, revise the app and simulate again; a change is kept only if the score improved and the build still passes (opt-in)')
   .option('--simulate-runs <n>', 'Visits per visitor and screen size for --simulate (default 10)')
-  .option('--simulate-budget-usd <n>', 'Spend cap for --simulate, at list prices (default 5)')
+  .option('--simulate-budget-usd <n>', 'Spend cap on simulations, at list prices (default 5, or 20 for the whole --simulate-loop)')
   .option('--strict-phases', 'Gate every phase on ZERO warnings (old behavior). Disables the end-of-build polish pass.')
   .option('--type <type>', `Force project type (skips auto-detection): ${PROJECT_TYPES.filter(t => t !== 'unknown').join(', ')}`)
   .option('--base <branch>', 'Base branch override (e.g. develop). Defaults to detected main/master.')
@@ -481,8 +483,9 @@ program
   .option('-w, --allow-warnings', 'Allow warnings in QA (only blockers must be zero)')
   .option('--aar', 'Generate a per-phase After-Action Report (extra LLM session per phase; off by default)')
   .option('--simulate', 'After the build, simulated visitors use the app and it is scored against the spec (report only; needs the sdd-engine package)')
+  .option('--simulate-loop', 'After simulating, revise the app and simulate again; a change is kept only if the score improved and the build still passes (opt-in)')
   .option('--simulate-runs <n>', 'Visits per visitor and screen size for --simulate (default 10)')
-  .option('--simulate-budget-usd <n>', 'Spend cap for --simulate, at list prices (default 5)')
+  .option('--simulate-budget-usd <n>', 'Spend cap on simulations, at list prices (default 5, or 20 for the whole --simulate-loop)')
   .option('--strict-phases', 'Gate every phase on ZERO warnings (old behavior). Disables the end-of-build polish pass.')
   .option('--no-push', 'Skip git push (use for local-only repos or no_push remotes)')
   .option('--no-pr', 'Skip gh pr create (implied by --no-push)')
