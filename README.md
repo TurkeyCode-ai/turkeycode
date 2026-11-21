@@ -75,10 +75,10 @@ Load order (first found wins): `--persona <file>` → `./.turkey/persona.md` (pr
 ### Install
 
 ```bash
-# From npm
+# Recommended: nothing to install, works without admin rights
 npx turkeycode run "your app description"
 
-# Or install globally
+# Or install globally. If this fails with EACCES, see the note below.
 npm install -g turkeycode
 
 # From source
@@ -88,6 +88,8 @@ npm install
 npm run build
 npm link
 ```
+
+`npm install -g` writes to npm's global folder. On Linux with the system Node or the official Docker image, that folder belongs to root, so the install fails with `EACCES` for an ordinary user. Use `npx` as above, install Node with a version manager such as nvm, fnm or Volta so you own that folder, or run the install with `sudo`.
 
 ### Run Your First Build
 
@@ -608,6 +610,8 @@ links epics on both team- and company-managed projects.
 **Build seems stuck?** Check `build.log` or run `turkeycode status`. Each QA cycle can take a few minutes — up to 3 cycles per phase is normal.
 
 **"Claude not found" error?** Make sure Claude Code is installed: `npm install -g @anthropic-ai/claude-code` then `claude login`. (On another backend, preflight prints that CLI's install and setup hints instead.)
+
+**`npm install -g turkeycode` fails with `EACCES`?** Your user cannot write to npm's global folder. Run `npx turkeycode run "..."` instead, or see the note under [Install](#install).
 
 **QA keeps failing?** Try `--allow-warnings` to let cosmetic issues pass. If it's looping on real bugs, check `.turkey/qa/` for the latest report.
 
