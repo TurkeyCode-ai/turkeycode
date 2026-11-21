@@ -552,6 +552,71 @@ program
     await runLocal(cwd, detection);
   });
 
+// ==================== SIMULATE COMMAND ====================
+program
+  .command('simulate')
+  .description('Simulated visitors use the built app and it is scored against the spec (report only; needs the sdd-engine package)')
+  .option('--runs <n>', 'Visits per visitor and screen size', '10')
+  .option('--budget-usd <n>', 'Stop starting new visits once this much is spent, at list prices', '5')
+  .option('--regenerate', 'Design the study again from the spec (new visitors, questions and tasks)')
+  .option('-e, --env <file>', 'Environment for the throwaway copy of the app (it does not get the project .env)')
+  .option('-a, --agent <id>', 'Agent backend for the session that designs the study')
+  .option('--verbose', 'Show agent session output')
+  .action(async (options) => {
+    activateAgent(options.agent, canResume() ? loadState().agent : undefined);
+    const { createSpawner } = await import('./spawner');
+    const { defaultDeps, renderSummary, runSimulation } = await import('./simulate');
+    const { parseEnvFile } = await import('./deploy/droplet');
+    const { existsSync, readFileSync } = await import('fs');
+
+    const runs = Number(options.runs);
+    const budgetUsd = Number(options.budgetUsd);
+    if (!Number.isInteger(runs) || runs < 1 || runs > 40) {
+      console.error(`❌ --runs must be a whole number from 1 to 40 (got "${options.runs}").`);
+      process.exit(1);
+    }
+    if (!(budgetUsd > 0)) {
+      console.error(`❌ --budget-usd must be a number above 0 (got "${options.budgetUsd}").`);
+      process.exit(1);
+    }
+    let env: Record<string, string> | undefined;
+    if (options.env) {
+      if (!existsSync(options.env)) {
+        console.error(`❌ Env file not found: ${options.env}`);
+        process.exit(1);
+      }
+      env = parseEnvFile(readFileSync(options.env, 'utf-8'));
+    }
+
+    console.log('');
+    console.log('╔══════════════════════════════════════════════════════════╗');
+    console.log('║                  TURKEY SIMULATE                         ║');
+    console.log('╚══════════════════════════════════════════════════════════╝');
+    console.log('');
+
+    const outcome = await runSimulation(
+      process.cwd(),
+      { runsPerPersona: runs, budgetUsd, regenerate: options.regenerate, env },
+      defaultDeps(createSpawner({ verbose: options.verbose }))
+    );
+
+    console.log('');
+    if (outcome.status === 'skipped') {
+      console.log(`  Simulation skipped. ${outcome.reason}`);
+      console.log('');
+      return;
+    }
+    if (outcome.status === 'failed') {
+      console.error(`  ❌ Simulation failed. ${outcome.reason}`);
+      console.log('');
+      process.exit(1);
+    }
+    for (const line of renderSummary(outcome.report)) console.log(line);
+    console.log('');
+    console.log(`  Report: ${outcome.markdownPath}`);
+    console.log('');
+  });
+
 // ==================== DEPLOY COMMAND ====================
 program
   .command('deploy')

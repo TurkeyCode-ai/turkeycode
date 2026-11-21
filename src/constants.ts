@@ -51,6 +51,9 @@ export const AAR_DIR = `${STATE_DIR}/aar`;
 // Polish artifacts (end-of-build warning cleanup pass)
 export const POLISH_DIR = `${STATE_DIR}/polish`;
 
+// Simulation reports (simulated visitors; the study itself lives outside the repo)
+export const SIMULATION_DIR = `${STATE_DIR}/simulation`;
+
 // Timeouts (in milliseconds)
 export const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
 export const SCOPE_TURN_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per correction turn (interactive)
@@ -158,5 +161,6 @@ export const ALL_DIRS = [
   SCREENSHOTS_DIR,
   REVIEWS_DIR,
   AAR_DIR,
-  POLISH_DIR
+  POLISH_DIR,
+  SIMULATION_DIR
 ];
