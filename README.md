@@ -11,7 +11,7 @@ npx turkeycode run "Build a job board with employer dashboards, \
   applicant tracking, and Stripe payments"
 ```
 
-It locks the scope with you first — a few quick picks, or skip with `--spec` — then builds heads-down. Go make coffee; come back to a working app.
+It agrees the scope with you first: it restates what it thinks you want and you correct it until it is right. Skip that with `--spec`. Then it builds heads-down. Go make coffee; come back to a working app.
 
 ---
 
@@ -68,17 +68,17 @@ Load order (first found wins): `--persona <file>` → `./.turkey/persona.md` (pr
 ### Prerequisites
 
 - An agent CLI installed and authenticated — [Claude Code](https://docs.anthropic.com/en/docs/claude-code) by default, or Codex CLI / Gemini CLI / OpenCode (see [Agent Backends](#agent-backends))
-- For the default backend: Claude Max subscription ($100/mo) or Anthropic API key
+- For the default backend: a Claude subscription you are logged in to with `claude login`, or an Anthropic API key (see [Setup](#setup))
 - Node.js 20+
 - Git
 
 ### Install
 
 ```bash
-# From npm
+# Recommended: nothing to install, works without admin rights
 npx turkeycode run "your app description"
 
-# Or install globally
+# Or install globally. If this fails with EACCES, see the note below.
 npm install -g turkeycode
 
 # From source
@@ -88,6 +88,8 @@ npm install
 npm run build
 npm link
 ```
+
+`npm install -g` writes to npm's global folder. On Linux with the system Node or the official Docker image, that folder belongs to root, so the install fails with `EACCES` for an ordinary user. Use `npx` as above, install Node with a version manager such as nvm, fnm or Volta so you own that folder, or run the install with `sudo`.
 
 ### Run Your First Build
 
@@ -304,11 +306,18 @@ Builds can take 30-60+ minutes. To run in the background:
 
 ```bash
 cd /path/to/project
+
+# Linux
 setsid nohup turkeycode run "your description" --verbose \
   > build.log 2>&1 < /dev/null &
+
+# macOS (there is no setsid)
+nohup turkeycode run "your description" --verbose \
+  > build.log 2>&1 < /dev/null &
+disown
 ```
 
-> ⚠️ **Important:** Use `setsid` to create a new session group. Plain `nohup &` is not enough — most process managers and shell session cleanups will kill the process group on disconnect. `setsid` fully detaches it.
+> ⚠️ **Important:** On Linux, use `setsid` to create a new session group. Plain `nohup &` is not enough there: most process managers and shell session cleanups kill the process group on disconnect, and `setsid` fully detaches it. macOS does not ship `setsid`, so use `nohup` with `disown`, or run the build inside `tmux` or `screen`.
 
 Monitor progress:
 
@@ -524,14 +533,17 @@ turkeycode run "your idea"
 
 ### Option B: API Key
 
-If you prefer using an API key directly:
+If you prefer using an API key directly, you still need the Claude Code CLI installed, and you have to tell TurkeyCode to use the key. By default it ignores `ANTHROPIC_API_KEY` and uses the CLI login, so a key left in your shell cannot bill you by surprise.
 
 ```bash
+npm install -g @anthropic-ai/claude-code
+
 export ANTHROPIC_API_KEY=sk-ant-your-key-here
+export TURKEYCODE_USE_API_KEY=1
 turkeycode run "your idea"
 ```
 
-> ⚠️ API keys are billed per token and can get expensive for large builds. Claude Max ($100/mo or $200/mo) is unlimited and significantly cheaper for this use case.
+> ⚠️ API keys are billed per token and can get expensive for large builds. A Claude subscription has usage limits, but is usually much cheaper for this use case.
 
 ### GitHub Integration (Optional)
 
@@ -593,26 +605,17 @@ links epics on both team- and company-managed projects.
 | code-review | `reviews/phase-N.md` | exists |
 | aar | `aar/phase-N.done` | exists |
 
-## Docker
-
-```bash
-docker build -t turkeycode .
-
-docker run -it --rm \
-  -v $(pwd)/workspace:/workspace \
-  -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-  turkeycode run "Build a todo app"
-```
-
 ## Troubleshooting
 
 **Build seems stuck?** Check `build.log` or run `turkeycode status`. Each QA cycle can take a few minutes — up to 3 cycles per phase is normal.
 
 **"Claude not found" error?** Make sure Claude Code is installed: `npm install -g @anthropic-ai/claude-code` then `claude login`. (On another backend, preflight prints that CLI's install and setup hints instead.)
 
+**`npm install -g turkeycode` fails with `EACCES`?** Your user cannot write to npm's global folder. Run `npx turkeycode run "..."` instead, or see the note under [Install](#install).
+
 **QA keeps failing?** Try `--allow-warnings` to let cosmetic issues pass. If it's looping on real bugs, check `.turkey/qa/` for the latest report.
 
-**Process killed on disconnect?** Use `setsid nohup turkeycode run ... < /dev/null &` — see [Spawning Long-Running Builds](#spawning-long-running-builds).
+**Process killed on disconnect?** Detach the build properly. See [Spawning Long-Running Builds](#spawning-long-running-builds) for Linux and macOS.
 
 **Need to start over?** `turkeycode reset --force` nukes the `.turkey/` state directory.
 
@@ -624,7 +627,7 @@ PRs welcome. The orchestrator is intentionally simple — it's a deterministic l
 - **Gates:** `src/gates.ts` — artifact validation logic
 - **Orchestrator:** `src/orchestrator.ts` — the main loop
 - **Scope:** `src/prompts/scope.ts` + `src/scope-session.ts` — the converge-first correction loop
-- **Tests:** `npm test` — 248 tests across 26 modules
+- **Tests:** `npm test`
 
 Please include tests for new features.
 
