@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TurkeyCode: one prompt to a tested app</title>
-<meta name="description" content="TurkeyCode is an open-source build orchestrator. It runs a coding agent through research, planning, build, QA and review, and nothing merges past a gate it did not clear.">
+<meta name="description" content="TurkeyCode is an open-source orchestrator for unattended development. Give it a prompt or a ticket and it runs a coding agent through research, planning, build, QA and review without waiting for you.">
 <meta property="og:title" content="TurkeyCode">
-<meta property="og:description" content="One prompt in. A tested app out. Open source, any stack, any agent.">
+<meta property="og:description" content="Unattended development: one prompt in, a tested app out. Open source, any stack, any agent.">
 <meta property="og:url" content="https://turkeycode.ai">
 <meta property="og:type" content="website">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23b4441c'/%3E%3Ccircle cx='16' cy='12' r='6' fill='%23f6ecd9'/%3E%3Cpath d='M12.5 26l2-11h3l2 11z' fill='%23f6ecd9'/%3E%3C/svg%3E">
@@ -169,19 +169,14 @@
   .runcard p { margin: auto 0 0; font-size: 16px; font-weight: 700; }
   .pipe { margin: 22px 0 0; border: var(--edge); background: var(--stone); color: var(--cream); padding: 18px 20px; font-size: 17px; }
   .pipe strong { color: var(--gold); }
-  .sub { margin: 56px 0 10px; font-size: clamp(21px, 3.6vw, 26px); line-height: 1.1; font-weight: 900; text-transform: uppercase; }
-  .sub + .intro { margin-top: 0; }
-  .nums { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
-  .num { border: var(--edge); background: var(--paper); padding: 18px 20px 20px; }
-  .num b { display: block; font-size: clamp(40px, 7vw, 60px); line-height: 1; font-weight: 900; letter-spacing: -0.02em; color: var(--rust); }
-  .num b small { font-size: 0.45em; letter-spacing: 0; color: var(--stone); }
-  .num span { display: block; margin-top: 8px; font-size: 16px; font-weight: 700; }
+  .pipe a { color: var(--gold); }
   .fine { margin: 22px 0 0; max-width: 700px; font-size: 15px; color: var(--muted); }
 
   .facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
   .fact { border: var(--edge); background: var(--paper); padding: 20px; }
   .fact h3 { margin: 0 0 8px; font-size: 18px; font-weight: 900; text-transform: uppercase; }
   .fact p { margin: 0; font-size: 16px; }
+  .fact code { font-family: var(--mono); font-size: 0.92em; font-weight: 700; }
 
   footer { border-top: var(--edge); background: var(--stone); color: var(--cream); padding: 28px 0; font-size: 15px; }
   footer .wrap { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px 24px; }
@@ -199,7 +194,7 @@
     .steps li:nth-child(2) { border-right: 0; }
     .steps li:nth-child(-n+2) { border-bottom: var(--edge); }
     .facts { grid-template-columns: 1fr; }
-    .runs, .nums { grid-template-columns: 1fr; }
+    .runs { grid-template-columns: 1fr; }
     .sub { margin-top: 44px; }
     .cmd { flex-direction: column; }
     .cmd button { border-left: 0; border-top: var(--edge); padding: 12px; }
@@ -234,7 +229,7 @@
     <div class="wrap hero-in">
     <span class="kicker">Turkey = Turnkey</span>
     <h1>One prompt in.<br>A <em>tested</em> app out.</h1>
-    <p class="lede">TurkeyCode is an open-source build orchestrator. It runs a coding agent through research, planning, build, QA and code review, one phase at a time. You describe the app. It does the rest, unattended.</p>
+    <p class="lede">TurkeyCode is an open-source orchestrator for unattended development. Give it a prompt or a ticket and walk away. It runs a coding agent through research, planning, build, QA and code review, and you come back to tested, reviewed code.</p>
 
     <div class="cmd">
       <code id="cmd">npx turkeycode run "a habit tracker with streaks and reminders"</code>
@@ -259,6 +254,20 @@
         <li><span class="n">04</span><h3>Prove</h3><p>Fresh agents test it. Blockers get fixed and retested. Then it merges.</p></li>
       </ol>
       <p class="gate">Nothing merges past a gate it did not clear. The gates are plain code, so the model cannot talk its way through.</p>
+    </div>
+  </section>
+
+  <section id="unattended">
+    <div class="wrap">
+      <h2>Built to run while you are away</h2>
+      <p class="intro">A chat session needs you in the chair. TurkeyCode does not. Once the spec is agreed, nothing in the run waits for you.</p>
+      <div class="facts">
+        <div class="fact"><h3>It does not stop to ask</h3><p>When something is left open, it picks a default, writes down what it chose, and keeps going.</p></div>
+        <div class="fact"><h3>It checks its own work</h3><p>Fresh agents that never saw the build test it and review it. What they find gets fixed and retested.</p></div>
+        <div class="fact"><h3>It picks up where it stopped</h3><p>State is saved after every step. If a run is interrupted, <code>turkeycode resume</code> carries on from there.</p></div>
+      </div>
+      <p class="pipe"><strong>The best way to use it: have your agent run it.</strong> Ask Claude Code, or whatever you use, to run TurkeyCode for you. It scopes the work with you in chat, starts the run, keeps an eye on it and reports back. The repo ships <a href="https://github.com/TurkeyCode-ai/turkeycode/tree/main/skills">skills</a> for exactly this.</p>
+      <p class="gate">It has worked a development backlog of 86 tickets this way: plan, build, review and push a branch for each, with a person only at the merge.</p>
     </div>
   </section>
 
@@ -293,15 +302,6 @@
       <p class="pipe"><strong>Then the full pipeline.</strong> TurkeyCode's own run from that prompt took 1 h 47 min and left 226 passing tests. Its QA found 4 blockers along the way and had them fixed before anything merged.</p>
       <p class="gate">The spec is what made the build work. The gates caught what the spec could not.</p>
       <p class="fine">One prompt and one run each, so read it as a case study and not a benchmark. The full run took about three times as long as the session with the spec, and TurkeyCode does not yet record what a run costs.</p>
-
-      <h3 class="sub">Where it earns its keep: a backlog, unattended</h3>
-      <p class="intro">The calculator is the easy case for a single session. Tickets are not. On one production codebase, TurkeyCode worked a backlog over 24 days: plan, build, review and push a branch for each ticket, without stopping to ask.</p>
-      <div class="nums">
-        <div class="num"><b>86</b><span>tickets attempted, in 42 hours of run time</span></div>
-        <div class="num"><b>78</b><span>finished as branches ready for a person to review</span></div>
-        <div class="num"><b>38 <small>of 62</small></b><span>reviewed tickets where its own review found something to fix</span></div>
-      </div>
-      <p class="fine">Where a ticket left a question open, it wrote down the default it chose and kept going. Fix sessions turned down 5 review findings as out of scope or needing a person. It is not a rubber stamp and it is not perfect either: 9 tickets finished with findings still open, 6 failed outright, and a later independent review found blockers in 4 of the 53 it had passed clean. It pushes branches. A person still merges them.</p>
     </div>
   </section>
 
