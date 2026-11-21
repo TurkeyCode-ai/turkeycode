@@ -25,21 +25,47 @@ const PAGES = {
 
 // Page A's file on disk stays byte-identical to the reference site; its
 // tracker is injected here, at serve time only. Page B carries the script
-// tag in its own file, so it is served as-is.
+// tag in its own file; only the data-via marker is injected into that tag.
 const TRACKER = load('t.js');
 
-function withTracker(html, page) {
-  const tag = Buffer.from('<script src="/t.js" data-page="' + page + '"></script>\n');
+// How the page was reached is decided by the server at serve time: pages
+// served at / are 'split', pages served at /a/ and /b/ are 'direct'. The
+// marker rides on the tracker script tag as data-via, so the visitor can
+// never get it wrong, and the four variants are prebuilt at startup.
+function withTracker(html, page, via) {
+  const tag = Buffer.from(
+    '<script src="/t.js" data-page="' + page + '" data-via="' + via + '"></script>\n'
+  );
   const marker = Buffer.from('</body>');
   const idx = html.lastIndexOf(marker);
   if (idx === -1) return Buffer.concat([html, tag]);
   return Buffer.concat([html.subarray(0, idx), tag, html.subarray(idx)]);
 }
 
+// Page B carries '<script src="/t.js"></script>' in its own file; rewrite
+// that one tag to carry data-via. No visible wording changes.
+function withVia(html, via) {
+  const plain = Buffer.from('<script src="/t.js"></script>');
+  const tagged = Buffer.from('<script src="/t.js" data-via="' + via + '"></script>');
+  const idx = html.indexOf(plain);
+  if (idx === -1) return html;
+  return Buffer.concat([html.subarray(0, idx), tagged, html.subarray(idx + plain.length)]);
+}
+
 const SERVED = {
-  a: withTracker(PAGES.a, 'a'),
-  b: PAGES.b,
+  split: {
+    a: withTracker(PAGES.a, 'a', 'split'),
+    b: withVia(PAGES.b, 'split'),
+  },
+  direct: {
+    a: withTracker(PAGES.a, 'a', 'direct'),
+    b: withVia(PAGES.b, 'direct'),
+  },
 };
+
+// The write-up is outside the test: served identically to every visitor,
+// with no tracker injected, no cookie and no event log line.
+const WRITEUP = load('how-it-was-tested/index.html');
 
 const VIDEO = { a: load('a/turkey.mp4'), b: load('b/turkey.mp4') };
 const POSTER = { a: load('a/turkey-poster.jpg'), b: load('b/turkey-poster.jpg') };
@@ -76,10 +102,12 @@ try {
   // If the directory cannot be created, views go uncounted; serving continues.
 }
 
-// page and event are always validated literals ('a'/'b', 'view'/'copy'/
-// 'outbound') before this is called; no client-supplied text reaches the log.
-function logEvent(page, event) {
-  const line = new Date().toISOString() + ' ' + page + ' ' + event + '\n';
+// page, event and via are always validated literals ('a'/'b', 'view'/'copy'/
+// 'outbound', 'split'/'direct') before this is called; no client-supplied
+// text reaches the log.
+function logEvent(page, event, via) {
+  const line =
+    new Date().toISOString() + ' ' + page + ' ' + event + ' ' + via + '\n';
   fs.appendFile(LOG_FILE, line, () => {});
 }
 
@@ -108,8 +136,8 @@ function splitCookie(page) {
 }
 
 // --- Responses --------------------------------------------------------------
-function serveHtml(req, res, page, setCookie) {
-  const body = SERVED[page];
+function serveHtml(req, res, page, setCookie, via) {
+  const body = SERVED[via][page];
   const headers = {
     'Content-Type': 'text/html; charset=utf-8',
     'Content-Length': body.length,
@@ -125,16 +153,33 @@ function serveHtml(req, res, page, setCookie) {
     return;
   }
   res.end(body);
-  if (!req.headers.range) logEvent(page, 'view');
+  if (!req.headers.range) logEvent(page, 'view', via);
+}
+
+// The response never varies (no Vary: Cookie) and nothing is logged.
+function serveWriteup(req, res) {
+  res.writeHead(200, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Content-Length': WRITEUP.length,
+    'X-Content-Type-Options': 'nosniff',
+    'Cache-Control': 'no-store',
+    'Content-Security-Policy': CSP,
+  });
+  if (req.method === 'HEAD') return res.end();
+  res.end(WRITEUP);
 }
 
 // --- Event endpoint ----------------------------------------------------------
-// POST /e?page=<a|b>&event=<copy|outbound>, or the same pair in a small body
-// (urlencoded or JSON). Anything else is rejected and never logged. The
+// POST /e?page=<a|b>&event=<copy|outbound>&via=<split|direct>, or the same
+// fields in a small body (urlencoded or JSON). A missing via defaults to
+// 'split' (lines from trackers that predate the marker belong to the split,
+// matching how legacy three-field log lines are read); a present but invalid
+// via is rejected. Anything else invalid is rejected and never logged. The
 // response is always cookie-free.
 const EVENT_BODY_LIMIT = 256;
 const EVENT_PAGES = new Set(['a', 'b']);
 const EVENT_KINDS = new Set(['copy', 'outbound']);
+const EVENT_VIAS = new Set(['split', 'direct']);
 
 function endEvent(res, status) {
   const headers = {
@@ -153,7 +198,7 @@ function parseEventBody(body) {
     try {
       const obj = JSON.parse(text);
       if (obj && typeof obj === 'object') {
-        return { page: obj.page, event: obj.event };
+        return { page: obj.page, event: obj.event, via: obj.via };
       }
     } catch (err) {
       return {};
@@ -162,7 +207,11 @@ function parseEventBody(body) {
   }
   try {
     const params = new URLSearchParams(text);
-    return { page: params.get('page'), event: params.get('event') };
+    return {
+      page: params.get('page'),
+      event: params.get('event'),
+      via: params.get('via'),
+    };
   } catch (err) {
     return {};
   }
@@ -198,11 +247,17 @@ function handleEvent(req, res, query) {
     const fromBody = parseEventBody(Buffer.concat(chunks));
     const page = query.get('page') !== null ? query.get('page') : fromBody.page;
     const event = query.get('event') !== null ? query.get('event') : fromBody.event;
-    if (!EVENT_PAGES.has(page) || !EVENT_KINDS.has(event)) {
+    const rawVia = query.get('via') !== null ? query.get('via') : fromBody.via;
+    const via = rawVia === null || rawVia === undefined ? 'split' : rawVia;
+    if (!EVENT_PAGES.has(page) || !EVENT_KINDS.has(event) || !EVENT_VIAS.has(via)) {
       return endEvent(res, 400);
     }
     // Log the canonical literals, never the raw input.
-    logEvent(page === 'a' ? 'a' : 'b', event === 'copy' ? 'copy' : 'outbound');
+    logEvent(
+      page === 'a' ? 'a' : 'b',
+      event === 'copy' ? 'copy' : 'outbound',
+      via === 'direct' ? 'direct' : 'split'
+    );
     endEvent(res, 204);
   });
 }
@@ -305,7 +360,7 @@ const server = http.createServer((req, res) => {
       page = crypto.randomInt(2) === 0 ? 'a' : 'b';
       setCookie = true;
     }
-    return serveHtml(req, res, page, setCookie);
+    return serveHtml(req, res, page, setCookie, 'split');
   }
 
   if (pathname === '/a' || pathname === '/b') {
@@ -313,8 +368,14 @@ const server = http.createServer((req, res) => {
     return res.end();
   }
 
-  if (pathname === '/a/') return serveHtml(req, res, 'a', false);
-  if (pathname === '/b/') return serveHtml(req, res, 'b', false);
+  if (pathname === '/a/') return serveHtml(req, res, 'a', false, 'direct');
+  if (pathname === '/b/') return serveHtml(req, res, 'b', false, 'direct');
+
+  if (pathname === '/how-it-was-tested') {
+    res.writeHead(301, { Location: '/how-it-was-tested/', 'Content-Length': 0 });
+    return res.end();
+  }
+  if (pathname === '/how-it-was-tested/') return serveWriteup(req, res);
 
   const asset = ASSETS[pathname];
   if (asset) return serveAsset(req, res, asset);

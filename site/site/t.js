@@ -17,8 +17,22 @@
   }
   if (page !== 'a' && page !== 'b') return;
 
+  /* How the page was reached ('split' for /, 'direct' for /a/ and /b/) is
+     decided by the server and injected on this script tag as data-via. If
+     the marker is somehow missing, the event is sent without it and the
+     server counts it as split. */
+  var via = null;
+  if (doc.currentScript && doc.currentScript.getAttribute('data-via')) {
+    via = doc.currentScript.getAttribute('data-via');
+  }
+  if (!via) {
+    var tags = doc.querySelectorAll('script[data-via]');
+    if (tags.length) via = tags[0].getAttribute('data-via');
+  }
+  if (via !== 'split' && via !== 'direct') via = null;
+
   function send(event) {
-    var url = '/e?page=' + page + '&event=' + event;
+    var url = '/e?page=' + page + '&event=' + event + (via ? '&via=' + via : '');
     try {
       if (navigator.sendBeacon && navigator.sendBeacon(url)) return;
     } catch (err) { /* fall through to fetch */ }

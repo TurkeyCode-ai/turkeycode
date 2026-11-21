@@ -126,7 +126,7 @@ test('GET / with no cookie: 200, a known page, exactly one 30-day cookie, one vi
   assert.ok(res.headers['content-security-policy'].includes("default-src 'self'"));
   const after = await waitForLogCount(before + 1);
   assert.equal(after.length, before + 1, 'one view line appended');
-  assert.match(after[after.length - 1], new RegExp('^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z ' + page + ' view$'));
+  assert.match(after[after.length - 1], new RegExp('^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z ' + page + ' view split$'));
 });
 
 test('10 repeat GET / with a cookie: same page, no new cookie, one view line each', async () => {
@@ -209,7 +209,7 @@ test('/a/ serves site/a/index.html plus exactly one injected tracker tag', async
   const res = await request('/a/');
   const onDisk = fs.readFileSync(path.join(ROOT, 'site', 'a', 'index.html'), 'utf8');
   const served = res.body.toString('utf8');
-  const tag = '<script src="/t.js" data-page="a"></script>\n';
+  const tag = '<script src="/t.js" data-page="a" data-via="direct"></script>\n';
   assert.ok(!onDisk.includes('/t.js'), 'file on disk carries no tracker');
   const first = served.indexOf(tag);
   assert.ok(first !== -1, 'served page A contains the tracker tag');
@@ -255,11 +255,11 @@ test('HEAD requests and favicon never log views', async () => {
   assert.equal(logLines().length, before, 'no view lines from HEAD or favicon');
 });
 
-test('log lines carry only time, page and event', () => {
+test('log lines carry only time, page, event and split/direct', () => {
   const lines = logLines();
   assert.ok(lines.length > 0);
   for (const line of lines) {
-    assert.match(line, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z [ab] view$/, line);
+    assert.match(line, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z [ab] view (split|direct)$/, line);
   }
 });
 
@@ -315,6 +315,7 @@ test('page B contains design wording in order, allowed links only, no em dash', 
   for (const href of hrefs) {
     const ok =
       href.startsWith('#') ||
+      href === '/how-it-was-tested/' ||
       href.startsWith('data:image/svg+xml') ||
       href.startsWith('https://turkeycode.ai') ||
       href.startsWith('https://github.com/TurkeyCode-ai') ||

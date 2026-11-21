@@ -126,6 +126,16 @@ test('tracker uses sendBeacon with fetch keepalive fallback, capture-phase click
   assert.ok(src.includes("'/e?page='"), 'posts to /e');
 });
 
+test('tracker reads the server-provided data-via marker and sends only canonical values', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'site', 't.js'), 'utf8');
+  assert.ok(src.includes("getAttribute('data-via')"), 'reads data-via');
+  assert.ok(src.includes("'&via=' + via"), 'sends via with events');
+  assert.ok(
+    src.includes("via !== 'split' && via !== 'direct'"),
+    'anything but the canonical literals is dropped'
+  );
+});
+
 test('tracker counts the repo and npm package links, not the org link or turkeycode.ai', () => {
   // Evaluate the URL matcher in isolation with the same logic as t.js.
   const src = fs.readFileSync(path.join(ROOT, 'site', 't.js'), 'utf8');
@@ -168,7 +178,15 @@ test('flow 7: page B Copy button carries exactly the todo-app command and page B
   const before = logLines().length;
   const res = await request('/b/');
   const html = res.body.toString('utf8');
-  assert.ok(html.includes('<script src="/t.js"></script>'), 'page B loads the tracker');
+  assert.ok(
+    html.includes('<script src="/t.js" data-via="direct"></script>'),
+    'page B loads the tracker with the direct marker'
+  );
+  const onDiskB = fs.readFileSync(path.join(ROOT, 'site', 'b', 'index.html'), 'utf8');
+  assert.ok(
+    onDiskB.includes('<script src="/t.js"></script>') && !onDiskB.includes('data-via'),
+    'page B on disk carries the plain tag; data-via is injected at serve time'
+  );
   const btn = /<button type="button" data-copy="([^"]+)"/.exec(html);
   assert.ok(btn, 'a data-copy button exists');
   assert.equal(
@@ -191,13 +209,18 @@ test('flow 8: page B links to the GitHub repo', async () => {
   await waitForLogCount(before + 1);
 });
 
-test('served / and /a/ carry the injected tracker tag; disk file does not', async () => {
+test('served / and /a/ carry the injected tracker tag with the right marker; disk file does not', async () => {
   const before = logLines().length;
-  const tag = '<script src="/t.js" data-page="a"></script>';
   const a = await request('/a/');
-  assert.ok(a.body.toString('utf8').includes(tag), '/a/ carries the tag');
+  assert.ok(
+    a.body.toString('utf8').includes('<script src="/t.js" data-page="a" data-via="direct"></script>'),
+    '/a/ carries the direct-marked tag'
+  );
   const root = await request('/', { headers: { Cookie: 'tc_ab=a' } });
-  assert.ok(root.body.toString('utf8').includes(tag), '/ (variant a) carries the tag');
+  assert.ok(
+    root.body.toString('utf8').includes('<script src="/t.js" data-page="a" data-via="split"></script>'),
+    '/ (variant a) carries the split-marked tag'
+  );
   const onDisk = fs.readFileSync(path.join(ROOT, 'site', 'a', 'index.html'), 'utf8');
   assert.ok(!onDisk.includes('/t.js'), 'site/a/index.html untouched');
   await waitForLogCount(before + 2);
@@ -217,9 +240,9 @@ test('CSP on pages includes connect-src self', async () => {
 
 // --- POST /e -------------------------------------------------------------------
 
-test('flow 7: POST /e page=b event=copy returns 204 cookie-free and appends exactly one b copy line', async () => {
+test('flow 7: POST /e page=b event=copy via=split returns 204 cookie-free and appends exactly one b copy split line', async () => {
   const before = logLines().length;
-  const res = await request('/e?page=b&event=copy', { method: 'POST' });
+  const res = await request('/e?page=b&event=copy&via=split', { method: 'POST' });
   assert.equal(res.status, 204);
   assert.equal(res.headers['set-cookie'], undefined, 'no Set-Cookie');
   assert.equal(res.body.length, 0, 'empty body');
@@ -227,47 +250,50 @@ test('flow 7: POST /e page=b event=copy returns 204 cookie-free and appends exac
   assert.equal(after.length, before + 1, 'exactly one line appended');
   assert.match(
     after[after.length - 1],
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z b copy$/
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z b copy split$/
   );
 });
 
-test('flow 8: POST /e page=b event=outbound appends exactly one b outbound line', async () => {
+test('flow 8: POST /e page=b event=outbound via=direct appends exactly one b outbound direct line', async () => {
   const before = logLines().length;
-  const res = await request('/e?page=b&event=outbound', { method: 'POST' });
+  const res = await request('/e?page=b&event=outbound&via=direct', { method: 'POST' });
   assert.equal(res.status, 204);
   const after = await waitForLogCount(before + 1);
   assert.equal(after.length, before + 1);
   assert.match(
     after[after.length - 1],
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z b outbound$/
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z b outbound direct$/
   );
 });
 
-test('page A copy and outbound events log a copy and a outbound lines', async () => {
+test('page A copy and outbound events with no via default to split', async () => {
   const before = logLines().length;
   assert.equal((await request('/e?page=a&event=copy', { method: 'POST' })).status, 204);
   assert.equal((await request('/e?page=a&event=outbound', { method: 'POST' })).status, 204);
   const after = await waitForLogCount(before + 2);
   assert.equal(after.length, before + 2);
-  assert.match(after[after.length - 2], / a copy$/);
-  assert.match(after[after.length - 1], / a outbound$/);
+  assert.match(after[after.length - 2], / a copy split$/);
+  assert.match(after[after.length - 1], / a outbound split$/);
 });
 
-test('POST /e accepts urlencoded and JSON bodies', async () => {
+test('POST /e accepts urlencoded and JSON bodies, including via', async () => {
   const before = logLines().length;
   const form = await request('/e', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: 'page=a&event=copy',
+    body: 'page=a&event=copy&via=direct',
   });
   assert.equal(form.status, 204);
   const json = await request('/e', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ page: 'b', event: 'outbound' }),
+    body: JSON.stringify({ page: 'b', event: 'outbound', via: 'split' }),
   });
   assert.equal(json.status, 204);
-  assert.equal((await waitForLogCount(before + 2)).length, before + 2);
+  const after = await waitForLogCount(before + 2);
+  assert.equal(after.length, before + 2);
+  assert.match(after[after.length - 2], / a copy direct$/);
+  assert.match(after[after.length - 1], / b outbound split$/);
 });
 
 test('invalid events are rejected and never logged', async () => {
@@ -280,13 +306,24 @@ test('invalid events are rejected and never logged', async () => {
     '/e?page=a&event=copy%0Ab%20outbound',
     '/e?page=&event=',
     '/e',
+    '/e?page=a&event=copy&via=bogus',
+    '/e?page=a&event=copy&via=',
+    '/e?page=a&event=copy&via=split%0Adirect',
+    '/e?page=a&event=copy&via=SPLIT',
   ];
   for (const p of cases) {
     const res = await request(p, { method: 'POST' });
     assert.equal(res.status, 400, p + ' rejected');
     assert.equal(res.headers['set-cookie'], undefined);
   }
-  const bodyCases = ['page=c&event=copy', 'page=a\n&event=copy', '{"page":"a","event":"view"}', 'garbage'];
+  const bodyCases = [
+    'page=c&event=copy',
+    'page=a\n&event=copy',
+    '{"page":"a","event":"view"}',
+    'garbage',
+    'page=a&event=copy&via=nope',
+    '{"page":"a","event":"copy","via":"Direct"}',
+  ];
   for (const b of bodyCases) {
     const res = await request('/e', { method: 'POST', body: b });
     assert.equal(res.status, 400, JSON.stringify(b) + ' rejected');
@@ -303,14 +340,14 @@ test('oversized body returns 413 and logs nothing', async () => {
 
 test('query parameters win and client text never reaches the log', async () => {
   const before = logLines().length;
-  const res = await request('/e?page=b&event=copy', {
+  const res = await request('/e?page=b&event=copy&via=direct', {
     method: 'POST',
-    body: 'page=evil\ninjected&event=copy',
+    body: 'page=evil\ninjected&event=copy&via=evil',
   });
   assert.equal(res.status, 204);
   const after = await waitForLogCount(before + 1);
   assert.equal(after.length, before + 1);
-  assert.match(after[after.length - 1], / b copy$/);
+  assert.match(after[after.length - 1], / b copy direct$/);
   const raw = fs.readFileSync(logFile, 'utf8');
   assert.ok(!raw.includes('evil'), 'no client text in the log');
   assert.ok(!raw.includes('injected'), 'no injected line in the log');
@@ -322,11 +359,11 @@ test('GET /e is not allowed', async () => {
   assert.equal(res.headers.allow, 'POST');
 });
 
-test('every log line stays in the fixed three-field format', () => {
+test('every log line stays in the fixed four-field format', () => {
   for (const line of logLines()) {
     assert.match(
       line,
-      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z [ab] (view|copy|outbound)$/,
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z [ab] (view|copy|outbound) (split|direct)$/,
       line
     );
   }
@@ -341,21 +378,33 @@ function runStats(args, env) {
   });
 }
 
-test('flow 10: stats.sh summarises a known log with one-decimal engagement', () => {
+test('flow 10: stats.sh summarises a known log with one-decimal engagement, split lines only', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-stats-'));
   const log = path.join(dir, 'events.log');
   const lines = [];
   const t = '2026-11-21T12:00:00.000Z';
-  for (let i = 0; i < 12; i++) lines.push(t + ' a view');
-  for (let i = 0; i < 3; i++) lines.push(t + ' a copy');
-  for (let i = 0; i < 2; i++) lines.push(t + ' a outbound');
-  for (let i = 0; i < 14; i++) lines.push(t + ' b view');
-  for (let i = 0; i < 5; i++) lines.push(t + ' b copy');
-  lines.push(t + ' b outbound');
+  // Legacy three-field lines count as split:
+  for (let i = 0; i < 6; i++) lines.push(t + ' a view');
+  for (let i = 0; i < 2; i++) lines.push(t + ' a copy');
+  lines.push(t + ' a outbound');
+  // Four-field split lines join the comparison:
+  for (let i = 0; i < 6; i++) lines.push(t + ' a view split');
+  lines.push(t + ' a copy split');
+  lines.push(t + ' a outbound split');
+  for (let i = 0; i < 14; i++) lines.push(t + ' b view split');
+  for (let i = 0; i < 5; i++) lines.push(t + ' b copy split');
+  lines.push(t + ' b outbound split');
+  // Direct lines stay out of the comparison; direct views are reported:
+  for (let i = 0; i < 4; i++) lines.push(t + ' a view direct');
+  for (let i = 0; i < 7; i++) lines.push(t + ' b view direct');
+  lines.push(t + ' b copy direct');
+  lines.push(t + ' b outbound direct');
   // Malformed lines that must be ignored:
   lines.push('not a log line');
   lines.push(t + ' c view');
   lines.push(t + ' a clicked');
+  lines.push(t + ' a view sideways');
+  lines.push(t + ' a view split extra');
   lines.push('');
   fs.writeFileSync(log, lines.join('\n') + '\n');
 
@@ -365,22 +414,25 @@ test('flow 10: stats.sh summarises a known log with one-decimal engagement', () 
   assert.equal(
     out.stdout,
     'page a: views=12 copies=3 outbound=2 engagement=41.7%\n' +
-      'page b: views=14 copies=5 outbound=1 engagement=42.9%\n'
+      'page b: views=14 copies=5 outbound=1 engagement=42.9%\n' +
+      'page a: direct views=4 (not part of the comparison)\n' +
+      'page b: direct views=7 (not part of the comparison)\n'
   );
 });
 
 test('flow 10: stats.sh matches the live test log', () => {
   const counts = {};
   for (const line of logLines()) {
-    const [, page, event] = line.split(' ');
-    counts[page + ' ' + event] = (counts[page + ' ' + event] || 0) + 1;
+    const [, page, event, via] = line.split(' ');
+    const key = (via || 'split') + ' ' + page + ' ' + event;
+    counts[key] = (counts[key] || 0) + 1;
   }
   const out = runStats([logFile]);
   assert.equal(out.status, 0, out.stderr);
   for (const p of ['a', 'b']) {
-    const v = counts[p + ' view'] || 0;
-    const c = counts[p + ' copy'] || 0;
-    const o = counts[p + ' outbound'] || 0;
+    const v = counts['split ' + p + ' view'] || 0;
+    const c = counts['split ' + p + ' copy'] || 0;
+    const o = counts['split ' + p + ' outbound'] || 0;
     const share = v > 0 ? ((c + o) * 100 / v).toFixed(1) + '%' : '0.0%';
     assert.ok(
       out.stdout.includes(
@@ -388,13 +440,20 @@ test('flow 10: stats.sh matches the live test log', () => {
       ),
       'stats for page ' + p + ' match the log:\n' + out.stdout
     );
+    const d = counts['direct ' + p + ' view'] || 0;
+    assert.ok(
+      out.stdout.includes('page ' + p + ': direct views=' + d + ' (not part of the comparison)'),
+      'direct views for page ' + p + ' match the log:\n' + out.stdout
+    );
   }
 });
 
 test('stats.sh handles missing and empty logs and the LOG_FILE variable', () => {
   const zero =
     'page a: views=0 copies=0 outbound=0 engagement=0.0%\n' +
-    'page b: views=0 copies=0 outbound=0 engagement=0.0%\n';
+    'page b: views=0 copies=0 outbound=0 engagement=0.0%\n' +
+    'page a: direct views=0 (not part of the comparison)\n' +
+    'page b: direct views=0 (not part of the comparison)\n';
 
   const missing = runStats([path.join(os.tmpdir(), 'tc-definitely-missing.log')]);
   assert.equal(missing.status, 0, missing.stderr);
