@@ -81,6 +81,50 @@ const ASSETS = {
   '/turkey-poster.jpg': { body: POSTER.b, type: 'image/jpeg' },
 };
 
+// --- Crawler detection --------------------------------------------------------
+// The one place crawler detection lives: a request counts as a crawler when
+// its User-Agent is missing or empty, or contains any of these tokens. All
+// matching is case-insensitive; the generic 'bot', 'crawler' and 'spider'
+// entries catch whole families. Extend by adding a token to this list.
+// The User-Agent value itself is never logged or printed anywhere.
+const CRAWLER_TOKENS = [
+  'googlebot',
+  'bingbot',
+  'duckduckbot',
+  'yandexbot',
+  'baiduspider',
+  'ahrefsbot',
+  'semrushbot',
+  'gptbot',
+  'claudebot',
+  'perplexitybot',
+  'bytespider',
+  'facebookexternalhit',
+  'twitterbot',
+  'slackbot',
+  'discordbot',
+  'linkedinbot',
+  'uptimerobot',
+  'curl',
+  'wget',
+  'python-requests',
+  'go-http-client',
+  'headlesschrome',
+  'bot',
+  'crawler',
+  'spider',
+];
+
+function isCrawler(req) {
+  const ua = req.headers['user-agent'];
+  if (!ua || !ua.trim()) return true;
+  const lower = ua.toLowerCase();
+  for (const token of CRAWLER_TOKENS) {
+    if (lower.includes(token)) return true;
+  }
+  return false;
+}
+
 const CSP = [
   "default-src 'self'",
   "style-src 'self' 'unsafe-inline'",
@@ -102,17 +146,26 @@ try {
   // If the directory cannot be created, views go uncounted; serving continues.
 }
 
-// page, event and via are always validated literals ('a'/'b', 'view'/'copy'/
-// 'outbound', 'split'/'direct') before this is called; no client-supplied
-// text reaches the log.
-function logEvent(page, event, via) {
+// page, event, via and novelty are always validated literals ('a'/'b',
+// 'view'/'copy'/'outbound', 'split'/'direct'/'bot', 'first'/'repeat') before
+// this is called; no client-supplied text reaches the log.
+// Appends are chained on a promise so lines land in call order; independent
+// fs.appendFile calls can complete out of order in the threadpool.
+let logChain = Promise.resolve();
+function logEvent(page, event, via, novelty) {
   const line =
-    new Date().toISOString() + ' ' + page + ' ' + event + ' ' + via + '\n';
-  fs.appendFile(LOG_FILE, line, () => {});
+    new Date().toISOString() + ' ' + page + ' ' + event + ' ' + via + ' ' +
+    novelty + '\n';
+  logChain = logChain
+    .then(() => fs.promises.appendFile(LOG_FILE, line))
+    .catch(() => {});
 }
 
 // --- Cookie handling --------------------------------------------------------
-function assignedPage(req) {
+// The single tc_ab cookie holds exactly one of: a, b (assigned, no copy or
+// outbound event logged yet) or a1, b1 (assigned, first event already
+// logged). Anything else is treated as no cookie at all.
+function cookieState(req) {
   const header = req.headers.cookie;
   if (!header) return null;
   for (const part of header.split(';')) {
@@ -120,24 +173,30 @@ function assignedPage(req) {
     if (eq === -1) continue;
     if (part.slice(0, eq).trim() === COOKIE_NAME) {
       const value = part.slice(eq + 1).trim();
-      if (value === 'a' || value === 'b') return value;
+      if (value === 'a' || value === 'b') return { page: value, acted: false };
+      if (value === 'a1') return { page: 'a', acted: true };
+      if (value === 'b1') return { page: 'b', acted: true };
       return null; // invalid value: treat as unassigned
     }
   }
   return null;
 }
 
-function splitCookie(page) {
+function splitCookie(value) {
   return (
-    COOKIE_NAME + '=' + page +
+    COOKIE_NAME + '=' + value +
     '; Max-Age=' + COOKIE_MAX_AGE +
     '; Path=/; SameSite=Lax; HttpOnly'
   );
 }
 
 // --- Responses --------------------------------------------------------------
-function serveHtml(req, res, page, setCookie, via) {
-  const body = SERVED[via][page];
+// variant picks the prebuilt markup (the data-via marker on the tracker tag);
+// reach is what the view line records ('split', 'direct' or 'bot') and
+// novelty its fifth field. A crawler at / gets the split markup but a 'bot'
+// line and never a cookie.
+function serveHtml(req, res, page, setCookie, variant, reach, novelty) {
+  const body = SERVED[variant][page];
   const headers = {
     'Content-Type': 'text/html; charset=utf-8',
     'Content-Length': body.length,
@@ -153,7 +212,7 @@ function serveHtml(req, res, page, setCookie, via) {
     return;
   }
   res.end(body);
-  if (!req.headers.range) logEvent(page, 'view', via);
+  if (!req.headers.range) logEvent(page, 'view', reach, novelty);
 }
 
 // The response never varies (no Vary: Cookie) and nothing is logged.
@@ -174,19 +233,25 @@ function serveWriteup(req, res) {
 // fields in a small body (urlencoded or JSON). A missing via defaults to
 // 'split' (lines from trackers that predate the marker belong to the split,
 // matching how legacy three-field log lines are read); a present but invalid
-// via is rejected. Anything else invalid is rejected and never logged. The
-// response is always cookie-free.
+// via is rejected. Anything else invalid is rejected and never logged.
+// A split event from a visitor whose cookie is a or b is that visitor's first
+// action: it is logged 'first' and the response moves the cookie to a1 or b1.
+// Every other event (cookie a1/b1, no valid cookie, or a direct event) is
+// logged 'repeat' and the response is cookie-free. Nothing here ever blocks
+// the visitor: the response is written immediately after validation and the
+// log append stays fire-and-forget, so sendBeacon/keepalive sends still work.
 const EVENT_BODY_LIMIT = 256;
 const EVENT_PAGES = new Set(['a', 'b']);
 const EVENT_KINDS = new Set(['copy', 'outbound']);
 const EVENT_VIAS = new Set(['split', 'direct']);
 
-function endEvent(res, status) {
+function endEvent(res, status, setCookie) {
   const headers = {
     'Cache-Control': 'no-store',
     'X-Content-Type-Options': 'nosniff',
   };
   if (status !== 204) headers['Content-Length'] = 0;
+  if (setCookie) headers['Set-Cookie'] = setCookie;
   res.writeHead(status, headers);
   res.end();
 }
@@ -252,13 +317,24 @@ function handleEvent(req, res, query) {
     if (!EVENT_PAGES.has(page) || !EVENT_KINDS.has(event) || !EVENT_VIAS.has(via)) {
       return endEvent(res, 400);
     }
+    // First or repeat is decided by the cookie alone: a split event from a
+    // visitor still on a/b is their first action, and the response advances
+    // the cookie to a1/b1. Direct events never touch the cookie.
+    const state = cookieState(req);
+    let novelty = 'repeat';
+    let setCookie = null;
+    if (via !== 'direct' && state && !state.acted) {
+      novelty = 'first';
+      setCookie = splitCookie(state.page + '1');
+    }
     // Log the canonical literals, never the raw input.
     logEvent(
       page === 'a' ? 'a' : 'b',
       event === 'copy' ? 'copy' : 'outbound',
-      via === 'direct' ? 'direct' : 'split'
+      via === 'direct' ? 'direct' : 'split',
+      novelty === 'first' ? 'first' : 'repeat'
     );
-    endEvent(res, 204);
+    endEvent(res, 204, setCookie);
   });
 }
 
@@ -353,14 +429,21 @@ const server = http.createServer((req, res) => {
     return methodNotAllowed(req, res, 'GET, HEAD');
   }
 
+  // Crawlers are left out of the comparison: still served a page (A or B at
+  // random at /), never given a cookie, and logged with reach 'bot'.
+  const crawler = isCrawler(req);
+
   if (pathname === '/') {
-    let page = assignedPage(req);
-    let setCookie = false;
-    if (!page) {
-      page = crypto.randomInt(2) === 0 ? 'a' : 'b';
-      setCookie = true;
+    if (crawler) {
+      const page = crypto.randomInt(2) === 0 ? 'a' : 'b';
+      return serveHtml(req, res, page, false, 'split', 'bot', 'repeat');
     }
-    return serveHtml(req, res, page, setCookie, 'split');
+    const state = cookieState(req);
+    if (state) {
+      return serveHtml(req, res, state.page, false, 'split', 'split', 'repeat');
+    }
+    const page = crypto.randomInt(2) === 0 ? 'a' : 'b';
+    return serveHtml(req, res, page, true, 'split', 'split', 'first');
   }
 
   if (pathname === '/a' || pathname === '/b') {
@@ -368,8 +451,11 @@ const server = http.createServer((req, res) => {
     return res.end();
   }
 
-  if (pathname === '/a/') return serveHtml(req, res, 'a', false, 'direct');
-  if (pathname === '/b/') return serveHtml(req, res, 'b', false, 'direct');
+  if (pathname === '/a/' || pathname === '/b/') {
+    const page = pathname === '/a/' ? 'a' : 'b';
+    const reach = crawler ? 'bot' : 'direct';
+    return serveHtml(req, res, page, false, 'direct', reach, 'repeat');
+  }
 
   if (pathname === '/how-it-was-tested') {
     res.writeHead(301, { Location: '/how-it-was-tested/', 'Content-Length': 0 });

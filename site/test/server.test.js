@@ -14,6 +14,12 @@ const ROOT = path.join(__dirname, '..');
 const PAGE_A_MARKER = 'One prompt in.';
 const PAGE_B_MARKER = 'Hand a whole build to Claude Code. Come back to';
 
+// A request with no User-Agent counts as a crawler, so every test that
+// expects browser behaviour (cookies, split/direct lines) sends one.
+const BROWSER_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
 let server;
 let port;
 let logFile;
@@ -34,7 +40,13 @@ function freePort() {
 function request(reqPath, { method = 'GET', headers = {} } = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request(
-      { host: '127.0.0.1', port, path: reqPath, method, headers },
+      {
+        host: '127.0.0.1',
+        port,
+        path: reqPath,
+        method,
+        headers: { 'User-Agent': BROWSER_UA, ...headers },
+      },
       (res) => {
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
@@ -77,11 +89,16 @@ function waitForLogCount(n, ms = 2000) {
   });
 }
 
+// Readiness is polled on /t.js, which never writes a log line. Polling a
+// page URL here ('/a/') once made the first test flaky: the warm-up view
+// line is appended asynchronously after the response, so the test could
+// read its 'before' count too early and then see two new lines (the late
+// warm-up line plus its own) instead of one.
 function waitForServer(deadlineMs) {
   const deadline = Date.now() + deadlineMs;
   return new Promise((resolve, reject) => {
     (function poll() {
-      request('/a/')
+      request('/t.js')
         .then(resolve)
         .catch(() => {
           if (Date.now() > deadline) return reject(new Error('server did not start'));
@@ -126,22 +143,30 @@ test('GET / with no cookie: 200, a known page, exactly one 30-day cookie, one vi
   assert.ok(res.headers['content-security-policy'].includes("default-src 'self'"));
   const after = await waitForLogCount(before + 1);
   assert.equal(after.length, before + 1, 'one view line appended');
-  assert.match(after[after.length - 1], new RegExp('^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z ' + page + ' view split$'));
+  assert.match(after[after.length - 1], new RegExp('^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z ' + page + ' view split first$'));
 });
 
 test('10 repeat GET / with a cookie: same page, no new cookie, one view line each', async () => {
+  // 'before' is counted ahead of the assigning request: its view line is
+  // appended asynchronously, so counting after it could miss the line and
+  // then see eleven new lines instead of ten (the same race the readiness
+  // poll had; see waitForServer above).
+  const before = logLines().length;
   const first = await request('/');
   const cookie = setCookies(first)[0].split(';')[0];
   const page = cookie.split('=')[1];
   const marker = page === 'a' ? PAGE_A_MARKER : PAGE_B_MARKER;
-  const before = logLines().length;
   for (let i = 0; i < 10; i++) {
     const res = await request('/', { headers: { Cookie: cookie } });
     assert.equal(res.status, 200);
     assert.ok(res.body.toString('utf8').includes(marker), 'same page every time');
     assert.equal(setCookies(res).length, 0, 'no new cookie');
   }
-  assert.equal((await waitForLogCount(before + 10)).length, before + 10, 'ten view lines');
+  assert.equal(
+    (await waitForLogCount(before + 11)).length,
+    before + 11,
+    'one assigning view line plus ten repeat view lines'
+  );
 });
 
 test('40 cookie-less GET /: both pages appear at least 10 times', async () => {
@@ -255,11 +280,11 @@ test('HEAD requests and favicon never log views', async () => {
   assert.equal(logLines().length, before, 'no view lines from HEAD or favicon');
 });
 
-test('log lines carry only time, page, event and split/direct', () => {
+test('log lines carry only time, page, event, reach and first/repeat', () => {
   const lines = logLines();
   assert.ok(lines.length > 0);
   for (const line of lines) {
-    assert.match(line, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z [ab] view (split|direct)$/, line);
+    assert.match(line, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z [ab] view (split|direct|bot) (first|repeat)$/, line);
   }
 });
 

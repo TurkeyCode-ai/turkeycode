@@ -14,6 +14,12 @@ const net = require('node:net');
 
 const ROOT = path.join(__dirname, '..');
 
+// A request with no User-Agent counts as a crawler, so every test that
+// expects browser behaviour sends one.
+const BROWSER_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
 let server;
 let port;
 let logFile;
@@ -35,7 +41,13 @@ function freePort() {
 function request(reqPath, { method = 'GET', headers = {} } = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request(
-      { host: '127.0.0.1', port, path: reqPath, method, headers },
+      {
+        host: '127.0.0.1',
+        port,
+        path: reqPath,
+        method,
+        headers: { 'User-Agent': BROWSER_UA, ...headers },
+      },
       (res) => {
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
@@ -131,7 +143,7 @@ test('flow 1: with an empty log, GET / once yields exactly one view split line',
   assert.equal(lines.length, 1, 'exactly one line');
   assert.match(
     lines[0],
-    new RegExp('^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z ' + assigned + ' view split$')
+    new RegExp('^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z ' + assigned + ' view split first$')
   );
 });
 
@@ -146,8 +158,11 @@ test('flow 2: a Copy click and a GitHub repo follow on that page append copy and
 
   const lines = await waitForLogCount(4);
   assert.equal(lines.length, 4);
-  assert.match(lines[2], new RegExp(' ' + assigned + ' copy split$'));
-  assert.match(lines[3], new RegExp(' ' + assigned + ' outbound split$'));
+  // Events posted without the cookie (as from a visitor whose first action
+  // was already logged) are split repeat.
+  assert.match(lines[1], new RegExp(' ' + assigned + ' view split repeat$'));
+  assert.match(lines[2], new RegExp(' ' + assigned + ' copy split repeat$'));
+  assert.match(lines[3], new RegExp(' ' + assigned + ' outbound split repeat$'));
 });
 
 test('flow 3: opening /b/ directly, Copy and the npm link append view, copy and outbound lines for b ending in direct', async () => {
@@ -161,42 +176,57 @@ test('flow 3: opening /b/ directly, Copy and the npm link append view, copy and 
 
   const lines = await waitForLogCount(7);
   assert.equal(lines.length, 7);
-  assert.match(lines[4], / b view direct$/);
-  assert.match(lines[5], / b copy direct$/);
-  assert.match(lines[6], / b outbound direct$/);
+  assert.match(lines[4], / b view direct repeat$/);
+  assert.match(lines[5], / b copy direct repeat$/);
+  assert.match(lines[6], / b outbound direct repeat$/);
 });
 
-test('flow 4: stats.sh compares split lines only and reports the direct views separately', () => {
+test('flow 4: stats.sh counts visitors from split first lines only and reports direct views separately', () => {
   const out = runStats([logFile]);
   assert.equal(out.status, 0, out.stderr);
   const other = assigned === 'a' ? 'b' : 'a';
-  // The flow-1 page: 2 split views (flows 1 and 2), 1 copy, 1 outbound.
+  const pad = (v, w) => String(v).padStart(w);
+  // The flow-1 page: 1 'view split first' visitor; the events here were
+  // posted cookie-free, so they are split repeat and nobody has acted.
   assert.ok(
-    out.stdout.includes('page ' + assigned + ': views=2 copies=1 outbound=1 engagement=100.0%'),
-    'comparison for the assigned page:\n' + out.stdout
+    out.stdout.includes(
+      'page ' + assigned + ':  visitors=' + pad(1, 7) + '  acted=' + pad(0, 7) +
+        '  conversion=' + pad('0.0%', 7)
+    ),
+    'visitor figures for the assigned page:\n' + out.stdout
+  );
+  assert.ok(
+    out.stdout.includes(
+      'page ' + assigned + ':  copies=' + pad(1, 9) + '  outbound=' + pad(1, 4) +
+        '  (split event totals, for reference)'
+    ),
+    'split event totals for the assigned page:\n' + out.stdout
   );
   // Nothing from flow 3 reaches the comparison:
   assert.ok(
-    out.stdout.includes('page ' + other + ': views=0 copies=0 outbound=0 engagement=0.0%'),
+    out.stdout.includes(
+      'page ' + other + ':  visitors=' + pad(0, 7) + '  acted=' + pad(0, 7) +
+        '  conversion=' + pad('0.0%', 7)
+    ),
     'the other page stays at zero in the comparison:\n' + out.stdout
   );
   // Flow 3's direct view is reported separately, labelled:
   assert.ok(
-    out.stdout.includes('page b: direct views=1 (not part of the comparison)'),
+    out.stdout.includes('page b:  direct views=' + pad(1, 3) + '  (not part of the comparison)'),
     'direct views for page b:\n' + out.stdout
   );
   assert.ok(
-    out.stdout.includes('page a: direct views=0 (not part of the comparison)'),
+    out.stdout.includes('page a:  direct views=' + pad(0, 3) + '  (not part of the comparison)'),
     'direct views for page a:\n' + out.stdout
   );
   // The comparison lines come before the direct-views lines:
   assert.ok(
-    out.stdout.indexOf('engagement=') < out.stdout.indexOf('direct views='),
+    out.stdout.indexOf('conversion=') < out.stdout.indexOf('direct views='),
     'comparison first, direct views after'
   );
 });
 
-test('flow 5: stats.sh counts old three-field lines as split', () => {
+test('flow 5: stats.sh reports old three- and four-field lines only on the legacy line', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-legacy-stats-'));
   const log = path.join(dir, 'events.log');
   const t = '2026-11-20T12:00:00.000Z';
@@ -213,12 +243,19 @@ test('flow 5: stats.sh counts old three-field lines as split', () => {
   );
   const out = runStats([log]);
   assert.equal(out.status, 0, out.stderr);
+  // Four legacy views (two a, one b, one b direct); nothing else counted.
   assert.equal(
     out.stdout,
-    'page a: views=2 copies=1 outbound=0 engagement=50.0%\n' +
-      'page b: views=1 copies=0 outbound=1 engagement=100.0%\n' +
-      'page a: direct views=0 (not part of the comparison)\n' +
-      'page b: direct views=1 (not part of the comparison)\n'
+    'Visitors per page from split lines; acted = first copy or outbound; conversion = acted / visitors\n' +
+      'page a:  visitors=      0  acted=      0  conversion=   0.0%\n' +
+      'page b:  visitors=      0  acted=      0  conversion=   0.0%\n' +
+      'page a:  copies=        0  outbound=   0  (split event totals, for reference)\n' +
+      'page b:  copies=        0  outbound=   0  (split event totals, for reference)\n' +
+      'page a:  direct views=  0  (not part of the comparison)\n' +
+      'page b:  direct views=  0  (not part of the comparison)\n' +
+      'page a:  bot views=     0  (not part of the comparison)\n' +
+      'page b:  bot views=     0  (not part of the comparison)\n' +
+      'views logged before visitor counting began: 4\n'
   );
 });
 

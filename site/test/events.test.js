@@ -12,6 +12,12 @@ const net = require('node:net');
 const ROOT = path.join(__dirname, '..');
 const EM_DASH = String.fromCharCode(0x2014);
 
+// A request with no User-Agent counts as a crawler, so every test that
+// expects browser behaviour sends one.
+const BROWSER_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
 let server;
 let port;
 let logFile;
@@ -30,7 +36,13 @@ function freePort() {
 function request(reqPath, { method = 'GET', headers = {}, body = null } = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request(
-      { host: '127.0.0.1', port, path: reqPath, method, headers },
+      {
+        host: '127.0.0.1',
+        port,
+        path: reqPath,
+        method,
+        headers: { 'User-Agent': BROWSER_UA, ...headers },
+      },
       (res) => {
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
@@ -67,11 +79,13 @@ function waitForLogCount(n, ms = 2000) {
   });
 }
 
+// Readiness is polled on /t.js, which never writes a log line, so no
+// warm-up view line can race a test's log counting (see server.test.js).
 function waitForServer(deadlineMs) {
   const deadline = Date.now() + deadlineMs;
   return new Promise((resolve, reject) => {
     (function poll() {
-      request('/b/')
+      request('/t.js')
         .then(resolve)
         .catch(() => {
           if (Date.now() > deadline) return reject(new Error('server did not start'));
@@ -250,7 +264,7 @@ test('flow 7: POST /e page=b event=copy via=split returns 204 cookie-free and ap
   assert.equal(after.length, before + 1, 'exactly one line appended');
   assert.match(
     after[after.length - 1],
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z b copy split$/
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z b copy split repeat$/
   );
 });
 
@@ -262,7 +276,7 @@ test('flow 8: POST /e page=b event=outbound via=direct appends exactly one b out
   assert.equal(after.length, before + 1);
   assert.match(
     after[after.length - 1],
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z b outbound direct$/
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z b outbound direct repeat$/
   );
 });
 
@@ -272,8 +286,8 @@ test('page A copy and outbound events with no via default to split', async () =>
   assert.equal((await request('/e?page=a&event=outbound', { method: 'POST' })).status, 204);
   const after = await waitForLogCount(before + 2);
   assert.equal(after.length, before + 2);
-  assert.match(after[after.length - 2], / a copy split$/);
-  assert.match(after[after.length - 1], / a outbound split$/);
+  assert.match(after[after.length - 2], / a copy split repeat$/);
+  assert.match(after[after.length - 1], / a outbound split repeat$/);
 });
 
 test('POST /e accepts urlencoded and JSON bodies, including via', async () => {
@@ -292,8 +306,8 @@ test('POST /e accepts urlencoded and JSON bodies, including via', async () => {
   assert.equal(json.status, 204);
   const after = await waitForLogCount(before + 2);
   assert.equal(after.length, before + 2);
-  assert.match(after[after.length - 2], / a copy direct$/);
-  assert.match(after[after.length - 1], / b outbound split$/);
+  assert.match(after[after.length - 2], / a copy direct repeat$/);
+  assert.match(after[after.length - 1], / b outbound split repeat$/);
 });
 
 test('invalid events are rejected and never logged', async () => {
@@ -347,7 +361,7 @@ test('query parameters win and client text never reaches the log', async () => {
   assert.equal(res.status, 204);
   const after = await waitForLogCount(before + 1);
   assert.equal(after.length, before + 1);
-  assert.match(after[after.length - 1], / b copy direct$/);
+  assert.match(after[after.length - 1], / b copy direct repeat$/);
   const raw = fs.readFileSync(logFile, 'utf8');
   assert.ok(!raw.includes('evil'), 'no client text in the log');
   assert.ok(!raw.includes('injected'), 'no injected line in the log');
@@ -359,11 +373,11 @@ test('GET /e is not allowed', async () => {
   assert.equal(res.headers.allow, 'POST');
 });
 
-test('every log line stays in the fixed four-field format', () => {
+test('every log line stays in the fixed five-field format', () => {
   for (const line of logLines()) {
     assert.match(
       line,
-      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z [ab] (view|copy|outbound) (split|direct)$/,
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z [ab] (view|copy|outbound) (split|direct|bot) (first|repeat)$/,
       line
     );
   }
@@ -378,7 +392,21 @@ function runStats(args, env) {
   });
 }
 
-test('flow 10: stats.sh summarises a known log with one-decimal engagement, split lines only', () => {
+// Mirrors the printf widths in stats.sh.
+function pad(v, w) {
+  return String(v).padStart(w);
+}
+
+function visitorLine(p, v, a) {
+  const conv = v > 0 ? ((a * 100) / v).toFixed(1) + '%' : '0.0%';
+  return 'page ' + p + ':  visitors=' + pad(v, 7) + '  acted=' + pad(a, 7) +
+    '  conversion=' + pad(conv, 7);
+}
+
+const STATS_HEADER =
+  'Visitors per page from split lines; acted = first copy or outbound; conversion = acted / visitors';
+
+test('flow 10: stats.sh reports legacy three- and four-field lines only on the legacy line', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-stats-'));
   const log = path.join(dir, 'events.log');
   const lines = [];
@@ -411,49 +439,79 @@ test('flow 10: stats.sh summarises a known log with one-decimal engagement, spli
   const out = runStats([log]);
   assert.equal(out.status, 0, out.stderr);
   assert.equal(out.stderr, '');
+  // Every well-formed line above predates visitor counting (no fifth
+  // field): 37 legacy views in all (6 + 6 + 14 three/four-field split
+  // views, 4 + 7 direct views), and zeros everywhere else.
   assert.equal(
     out.stdout,
-    'page a: views=12 copies=3 outbound=2 engagement=41.7%\n' +
-      'page b: views=14 copies=5 outbound=1 engagement=42.9%\n' +
-      'page a: direct views=4 (not part of the comparison)\n' +
-      'page b: direct views=7 (not part of the comparison)\n'
+    STATS_HEADER + '\n' +
+      visitorLine('a', 0, 0) + '\n' +
+      visitorLine('b', 0, 0) + '\n' +
+      'page a:  copies=        0  outbound=   0  (split event totals, for reference)\n' +
+      'page b:  copies=        0  outbound=   0  (split event totals, for reference)\n' +
+      'page a:  direct views=  0  (not part of the comparison)\n' +
+      'page b:  direct views=  0  (not part of the comparison)\n' +
+      'page a:  bot views=     0  (not part of the comparison)\n' +
+      'page b:  bot views=     0  (not part of the comparison)\n' +
+      'views logged before visitor counting began: 37\n'
   );
 });
 
 test('flow 10: stats.sh matches the live test log', () => {
   const counts = {};
   for (const line of logLines()) {
-    const [, page, event, via] = line.split(' ');
-    const key = (via || 'split') + ' ' + page + ' ' + event;
+    const [, page, event, via, novelty] = line.split(' ');
+    const key = via + ' ' + page + ' ' + event + ' ' + novelty;
     counts[key] = (counts[key] || 0) + 1;
   }
+  const at = (key) => counts[key] || 0;
   const out = runStats([logFile]);
   assert.equal(out.status, 0, out.stderr);
   for (const p of ['a', 'b']) {
-    const v = counts['split ' + p + ' view'] || 0;
-    const c = counts['split ' + p + ' copy'] || 0;
-    const o = counts['split ' + p + ' outbound'] || 0;
-    const share = v > 0 ? ((c + o) * 100 / v).toFixed(1) + '%' : '0.0%';
+    const v = at('split ' + p + ' view first');
+    const a = at('split ' + p + ' copy first') + at('split ' + p + ' outbound first');
+    const c = at('split ' + p + ' copy first') + at('split ' + p + ' copy repeat');
+    const o = at('split ' + p + ' outbound first') + at('split ' + p + ' outbound repeat');
+    assert.ok(
+      out.stdout.includes(visitorLine(p, v, a)),
+      'visitor figures for page ' + p + ' match the log:\n' + out.stdout
+    );
     assert.ok(
       out.stdout.includes(
-        'page ' + p + ': views=' + v + ' copies=' + c + ' outbound=' + o + ' engagement=' + share
+        'page ' + p + ':  copies=' + pad(c, 9) + '  outbound=' + pad(o, 4) +
+          '  (split event totals, for reference)'
       ),
-      'stats for page ' + p + ' match the log:\n' + out.stdout
+      'split event totals for page ' + p + ' match the log:\n' + out.stdout
     );
-    const d = counts['direct ' + p + ' view'] || 0;
+    const d = at('direct ' + p + ' view repeat') + at('direct ' + p + ' view first');
     assert.ok(
-      out.stdout.includes('page ' + p + ': direct views=' + d + ' (not part of the comparison)'),
+      out.stdout.includes('page ' + p + ':  direct views=' + pad(d, 3) + '  (not part of the comparison)'),
       'direct views for page ' + p + ' match the log:\n' + out.stdout
     );
+    const bot = at('bot ' + p + ' view repeat') + at('bot ' + p + ' view first');
+    assert.ok(
+      out.stdout.includes('page ' + p + ':  bot views=' + pad(bot, 6) + '  (not part of the comparison)'),
+      'bot views for page ' + p + ' match the log:\n' + out.stdout
+    );
   }
+  assert.ok(
+    out.stdout.includes('views logged before visitor counting began: 0'),
+    'a live log has no legacy lines:\n' + out.stdout
+  );
 });
 
 test('stats.sh handles missing and empty logs and the LOG_FILE variable', () => {
   const zero =
-    'page a: views=0 copies=0 outbound=0 engagement=0.0%\n' +
-    'page b: views=0 copies=0 outbound=0 engagement=0.0%\n' +
-    'page a: direct views=0 (not part of the comparison)\n' +
-    'page b: direct views=0 (not part of the comparison)\n';
+    STATS_HEADER + '\n' +
+    visitorLine('a', 0, 0) + '\n' +
+    visitorLine('b', 0, 0) + '\n' +
+    'page a:  copies=        0  outbound=   0  (split event totals, for reference)\n' +
+    'page b:  copies=        0  outbound=   0  (split event totals, for reference)\n' +
+    'page a:  direct views=  0  (not part of the comparison)\n' +
+    'page b:  direct views=  0  (not part of the comparison)\n' +
+    'page a:  bot views=     0  (not part of the comparison)\n' +
+    'page b:  bot views=     0  (not part of the comparison)\n' +
+    'views logged before visitor counting began: 0\n';
 
   const missing = runStats([path.join(os.tmpdir(), 'tc-definitely-missing.log')]);
   assert.equal(missing.status, 0, missing.stderr);
@@ -466,10 +524,10 @@ test('stats.sh handles missing and empty logs and the LOG_FILE variable', () => 
   assert.equal(emptyRun.status, 0, emptyRun.stderr);
   assert.equal(emptyRun.stdout, zero);
 
-  fs.writeFileSync(empty, '2026-11-21T12:00:00.000Z a view\n');
+  fs.writeFileSync(empty, '2026-11-21T12:00:00.000Z a view split first\n');
   const viaEnv = runStats([], { LOG_FILE: empty });
   assert.equal(viaEnv.status, 0, viaEnv.stderr);
-  assert.ok(viaEnv.stdout.includes('page a: views=1'), 'LOG_FILE is honoured');
+  assert.ok(viaEnv.stdout.includes(visitorLine('a', 1, 0)), 'LOG_FILE is honoured');
 });
 
 // --- Hygiene --------------------------------------------------------------------
