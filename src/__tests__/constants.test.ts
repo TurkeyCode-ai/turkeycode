@@ -124,7 +124,7 @@ describe('preflight model coverage', () => {
     delete process.env.TURKEYCODE_MODEL;
     delete process.env.TURKEYCODE_MODEL_BUILD;
     expect(preflightModels().has('opus')).to.equal(true);
-    expect(preflightModels(new Set(['scope', 'plan', 'ticket-review'])).has('opus')).to.equal(false);
+    expect(preflightModels(new Set(['scope', 'plan', 'ticket-review', 'simulate-spec', 'simulate-fix'])).has('opus')).to.equal(false);
   });
 
   it('probes the backend default when a phase has no model', () => {
