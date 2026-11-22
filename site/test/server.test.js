@@ -327,7 +327,7 @@ test('page B contains design wording in order, allowed links only, no em dash', 
     'npm install -g turkeycode',
     'After the build',
     'What TurkeyCode is not',
-    'version 4.0.0 on npm',
+    'version 4.1.0 on npm',
   ];
   let idx = 0;
   for (const needle of inOrder) {
