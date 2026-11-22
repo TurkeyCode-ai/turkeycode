@@ -92,6 +92,8 @@ export interface BuildPhase {
   buildTime?: string;
   /** QA duration */
   qaTime?: string;
+  /** Warnings the passing QA verdict still listed; undefined = not recorded */
+  qaWarnings?: number;
   /** Total duration */
   totalTime?: string;
   /** When phase started */

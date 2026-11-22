@@ -163,6 +163,7 @@ export class Spawner {
       mcpConfig = process.env.TURKEYCODE_MCP_CONFIG,
       blind = false,
       stage,
+      probe = false,
     } = options;
     const backend = this.backend;
 
@@ -234,7 +235,7 @@ export class Spawner {
         }
       }
 
-      const args = buildAgentArgs(backend, { model, mcpConfig: usableMcpConfig, prompt, blind });
+      const args = buildAgentArgs(backend, { model, mcpConfig: usableMcpConfig, prompt, blind, probe });
 
       const proc: ChildProcess = spawn(backend.binary, args, {
         cwd,
