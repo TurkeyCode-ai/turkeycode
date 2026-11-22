@@ -183,6 +183,13 @@
   footer a { text-underline-offset: 3px; }
   footer a:hover, footer a:focus-visible { color: var(--gold); }
 
+  .services-cta { border-top: var(--edge); background: var(--paper); padding: 26px 0; }
+  .services-cta h2 { margin: 0 0 4px; font-size: 18px; letter-spacing: 0.04em; }
+  .services-cta p { margin: 0; font-size: 16px; max-width: 640px; }
+  .services-cta p + p { margin-top: 10px; }
+  .services-cta a { font-weight: 700; text-underline-offset: 3px; }
+  .services-cta a:hover, .services-cta a:focus-visible { color: var(--rust); }
+
   :focus-visible { outline: 3px solid var(--gold); outline-offset: 3px; }
 
   @media (max-width: 760px) {
@@ -317,10 +324,18 @@
   </section>
 </main>
 
+<section class="services-cta">
+  <div class="wrap">
+    <h2>Want it built for you?</h2>
+    <p>TurkeyCode's maker takes on client builds.</p>
+    <p><a href="/contact/">Get in touch</a></p>
+  </div>
+</section>
+
 <footer>
   <div class="wrap">
     <span>TurkeyCode. MIT licensed.</span>
-    <span><a href="https://github.com/TurkeyCode-ai/turkeycode">GitHub</a> &nbsp;/&nbsp; <a href="https://www.npmjs.com/package/turkeycode">npm</a> &nbsp;/&nbsp; <a href="https://github.com/TurkeyCode-ai/turkeycode/issues">Issues</a></span>
+    <span><a href="https://github.com/TurkeyCode-ai/turkeycode">GitHub</a> &nbsp;/&nbsp; <a href="https://www.npmjs.com/package/turkeycode">npm</a> &nbsp;/&nbsp; <a href="https://github.com/TurkeyCode-ai/turkeycode/issues">Issues</a> &nbsp;/&nbsp; <a href="/contact/">Professional services</a></span>
   </div>
 </footer>
 

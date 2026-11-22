@@ -208,6 +208,13 @@
   footer a { text-underline-offset: 3px; }
   footer a:hover, footer a:focus-visible { color: var(--gold); }
 
+  .services-cta { border-top: var(--edge); background: var(--paper); padding: 26px 0; }
+  .services-cta h2 { margin: 0 0 4px; font-size: 18px; letter-spacing: 0.04em; }
+  .services-cta p { margin: 0; font-size: 16px; max-width: 640px; }
+  .services-cta p + p { margin-top: 10px; }
+  .services-cta a { font-weight: 700; text-underline-offset: 3px; }
+  .services-cta a:hover, .services-cta a:focus-visible { color: var(--rust); }
+
   :focus-visible { outline: 3px solid var(--gold); outline-offset: 3px; }
 
   @media (max-width: 760px) {
@@ -406,11 +413,20 @@
 
 </main>
 
+<section class="services-cta">
+  <div class="wrap">
+    <h2>Want it built for you?</h2>
+    <p>TurkeyCode's maker takes on client builds.</p>
+    <p><a href="/contact/">Get in touch</a></p>
+  </div>
+</section>
+
 <footer>
   <div class="wrap">
     <p>TurkeyCode &middot; MIT licensed &middot; version 4.0.0 on npm &middot; CI tests on Node 20 and 22.</p>
     <p><a href="https://github.com/TurkeyCode-ai/turkeycode">github.com/TurkeyCode-ai/turkeycode</a> &middot; <a href="https://www.npmjs.com/package/turkeycode">npmjs.com/package/turkeycode</a> &middot; <a href="https://github.com/TurkeyCode-ai">github.com/TurkeyCode-ai</a> &middot; <a href="https://turkeycode.ai">turkeycode.ai</a></p>
     <p><a href="/how-it-was-tested/">How this site was tested</a></p>
+    <p><a href="/contact/">Professional services</a></p>
   </div>
 </footer>
 

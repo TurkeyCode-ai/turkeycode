@@ -20,6 +20,12 @@
 # reported separately and are not part of the comparison. Legacy three- and
 # four-field lines, written before visitor counting began, are left out of
 # the visitor figures; their views are reported on one labelled line.
+#
+# After those figures the plain report appends, labelled as not part of the
+# conversion rate: services link clicks per page (split lines only) and
+# enquiries per page (page '-' means no split cookie). services and enquiry
+# lines never count toward visitors, acted, copies or outbound, and --daily
+# ignores them entirely, so its output is unchanged by them.
 
 DAILY=0
 LOG=""
@@ -45,6 +51,16 @@ awk -v daily="$DAILY" '
   }
   # Every counted line starts with a timestamp, a page and an event.
   $1 !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T/ { next }
+  # services and enquiry lines are counted on their own lines only: they
+  # never touch the visitor, acted, copy, outbound or daily figures.
+  $3 == "services" {
+    if (NF == 5 && ($2 == "a" || $2 == "b") && $4 == "split" && ($5 == "first" || $5 == "repeat")) svc[$2]++
+    next
+  }
+  $3 == "enquiry" {
+    if (NF == 5 && ($2 == "a" || $2 == "b" || $2 == "-")) enq[$2]++
+    next
+  }
   $2 != "a" && $2 != "b" { next }
   $3 != "view" && $3 != "copy" && $3 != "outbound" { next }
   # Legacy lines from before visitor counting began: three fields, or four
@@ -111,6 +127,15 @@ awk -v daily="$DAILY" '
         printf "page %s:  bot views=%6d  (not part of the comparison)\n", p, bots[p] + 0
       }
       printf "views logged before visitor counting began: %d\n", legacy + 0
+      for (i = 1; i <= n; i++) {
+        p = pages[i]
+        printf "page %s:  services clicks=%4d  (split lines, not part of the conversion rate)\n", p, svc[p] + 0
+      }
+      for (i = 1; i <= n; i++) {
+        p = pages[i]
+        printf "page %s:  enquiries=%7d  (not part of the conversion rate)\n", p, enq[p] + 0
+      }
+      printf "page -:  enquiries=%7d  (no split cookie, not part of the conversion rate)\n", enq["-"] + 0
     }
   }
 ' "$INPUT"

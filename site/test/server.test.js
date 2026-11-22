@@ -341,6 +341,7 @@ test('page B contains design wording in order, allowed links only, no em dash', 
     const ok =
       href.startsWith('#') ||
       href === '/how-it-was-tested/' ||
+      href === '/contact/' ||
       href.startsWith('data:image/svg+xml') ||
       href.startsWith('https://turkeycode.ai') ||
       href.startsWith('https://github.com/TurkeyCode-ai') ||
@@ -355,16 +356,29 @@ test('page B contains design wording in order, allowed links only, no em dash', 
   assert.ok(!/src="https?:\/\//.test(html) && !/@import|url\(https?:/.test(html), 'no external resources');
 });
 
-test('server.js has no em dash and site/a is byte-identical to its source of truth', () => {
+test('server.js has no em dash and site/a is its source of truth plus only the services additions', () => {
   const srv = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
   assert.ok(!srv.includes(String.fromCharCode(0x2014)), 'no U+2014 in server.js');
   // reference/ may be deleted in production; only compare when present.
   const ref = path.join(ROOT, 'reference', 'current-site');
   if (fs.existsSync(ref)) {
-    for (const f of ['index.html', 'turkey.mp4', 'turkey-poster.jpg']) {
+    for (const f of ['turkey.mp4', 'turkey-poster.jpg']) {
       const a = fs.readFileSync(path.join(ROOT, 'site', 'a', f));
       const b = fs.readFileSync(path.join(ref, f));
       assert.ok(a.equals(b), 'site/a/' + f + ' byte-identical to reference');
     }
+    // Page A is the reference plus exactly the services block, its CSS and
+    // the Professional services footer link (see test/fixtures/additions.js).
+    const additions = require('./fixtures/additions.js');
+    const a = fs.readFileSync(path.join(ROOT, 'site', 'a', 'index.html'), 'utf8');
+    assert.equal(
+      additions.strip(a, [
+        additions.SERVICES_CSS,
+        additions.SERVICES_BLOCK,
+        additions.FOOTER_LINK_A,
+      ]),
+      fs.readFileSync(path.join(ref, 'index.html'), 'utf8'),
+      'site/a/index.html is the reference plus only the services additions'
+    );
   }
 });

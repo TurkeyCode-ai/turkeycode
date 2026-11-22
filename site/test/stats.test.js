@@ -73,10 +73,26 @@ function legacyLine(n) {
   return 'views logged before visitor counting began: ' + n;
 }
 
-// counts: { a: {v, a, c, o, d, b}, b: {...}, legacy }, all defaulting to 0.
+function servicesLine(p, n) {
+  return 'page ' + p + ':  services clicks=' + pad(n, 4) +
+    '  (split lines, not part of the conversion rate)';
+}
+
+function enquiriesLine(p, n) {
+  return 'page ' + p + ':  enquiries=' + pad(n, 7) +
+    '  (not part of the conversion rate)';
+}
+
+function enquiriesNoCookieLine(n) {
+  return 'page -:  enquiries=' + pad(n, 7) +
+    '  (no split cookie, not part of the conversion rate)';
+}
+
+// counts: { a: {v, a, c, o, d, b, s, e}, b: {...}, legacy, noCookieEnq },
+// all defaulting to 0 (s = services split clicks, e = enquiries).
 function plainReport(counts) {
   const page = (p) => {
-    const z = { v: 0, a: 0, c: 0, o: 0, d: 0, b: 0, ...(counts[p] || {}) };
+    const z = { v: 0, a: 0, c: 0, o: 0, d: 0, b: 0, s: 0, e: 0, ...(counts[p] || {}) };
     return z;
   };
   const A = page('a');
@@ -92,6 +108,11 @@ function plainReport(counts) {
     botLine('a', A.b),
     botLine('b', B.b),
     legacyLine(counts.legacy || 0),
+    servicesLine('a', A.s),
+    servicesLine('b', B.s),
+    enquiriesLine('a', A.e),
+    enquiriesLine('b', B.e),
+    enquiriesNoCookieLine(counts.noCookieEnq || 0),
   ].join('\n') + '\n';
 }
 
@@ -275,7 +296,7 @@ test('output is aligned plain text with a header line and no em dash', () => {
   }
   // Rows of the same kind are the same length, so columns line up.
   const plain = runStats([log]).stdout.split('\n');
-  for (const prefix of ['page a:  visitors=', 'page a:  copies=', 'page a:  direct views=', 'page a:  bot views=']) {
+  for (const prefix of ['page a:  visitors=', 'page a:  copies=', 'page a:  direct views=', 'page a:  bot views=', 'page a:  services clicks=', 'page a:  enquiries=']) {
     const twin = prefix.replace('page a', 'page b');
     const rowA = plain.find((l) => l.startsWith(prefix));
     const rowB = plain.find((l) => l.startsWith(twin));

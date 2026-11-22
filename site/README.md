@@ -2,8 +2,8 @@
 
 A zero-dependency Node.js server that serves two variants of the turkeycode.ai
 landing page, splits first-time visitors 50/50 with a single cookie, and counts
-views, Copy-button clicks and outbound link follows in a plain text log. No
-analytics service, no database, no client storage.
+views, Copy-button clicks, outbound link follows and contact link follows in a
+plain text log. No analytics service, no database, no client storage.
 
 ## Routes
 
@@ -13,8 +13,11 @@ analytics service, no database, no client storage.
 | `/a/` | Page A directly (no cookie read or set) |
 | `/b/` | Page B directly (no cookie read or set) |
 | `/t.js` | The tracker script |
-| `POST /e` | The event endpoint (copy and outbound beacons) |
+| `POST /e` | The event endpoint (copy, outbound and services beacons) |
 | `/how-it-was-tested/` | The testing write-up, served to everyone the same; visits are not counted (no cookie, no event log line) |
+| `/contact/` | The contact form, served to everyone the same (no cookie set, no view counted) |
+| `POST /contact` | The form handler: validate, save, try to email, redirect to the thanks page |
+| `/contact/thanks/` | The confirmation page |
 
 Video and poster assets are served under `/a/`, `/b/` and at the root, with
 HTTP Range support.
@@ -61,7 +64,7 @@ Events are appended to `$LOG_FILE` (default `/data/events.log`), one line per
 event, built only from server-side whitelisted values:
 
 ```
-<ISO-8601 UTC timestamp> <a|b> <view|copy|outbound> <split|direct|bot> <first|repeat>
+<ISO-8601 UTC timestamp> <a|b> <view|copy|outbound|services> <split|direct|bot> <first|repeat>
 ```
 
 For example:
@@ -78,6 +81,9 @@ For example:
   (`#copy` on page A, the `data-copy` buttons on page B).
 - `outbound` is sent by the tracker when a counted outbound link is followed
   (left or middle click).
+- `services` is sent by the tracker when a same-origin link to `/contact/` is
+  followed (left or middle click) on page A or page B: the 'Get in touch'
+  link in the services block or the 'Professional services' footer link.
 
 The fourth field records how the page was reached: `split` for a page served
 at `/` (the A/B split), `direct` for a page served at `/a/` or `/b/`, and
@@ -100,6 +106,24 @@ means assigned with no event logged yet, `a1` or `b1` means the first event
 has been logged (the server advances the cookie on the response that logs
 it). Any other cookie value is treated as no cookie at all. Direct and bot
 lines are always `repeat`.
+
+`services` is the one exception to the cookie advance: its `first|repeat` is
+judged from the cookie exactly as for `copy` and `outbound` (a split event
+with cookie `a` or `b` logs `first`, everything else logs `repeat`), but the
+response never sets or advances `tc_ab`. Following a contact link must not
+use up the visitor's first action, so a later `copy` or `outbound` is still
+logged as that visitor's first. A `services` event also never counts as the
+visitor having acted in `stats.sh`.
+
+### The services block and the contact links
+
+Pages A and B carry the same block directly above the footer: the heading
+'Want it built for you?', the sentence 'TurkeyCode's maker takes on client
+builds.' and a 'Get in touch' link to `/contact/`. The footers of page A,
+page B and the write-up each carry one 'Professional services' link to
+`/contact/`. Following either link on page A or page B sends the `services`
+event; the write-up stays tracker-free and cookie-free, so its link sends
+nothing.
 
 ### Crawlers
 
@@ -162,7 +186,14 @@ there but only once in acted. Then one line per page reports `direct` views
 (pages opened at `/a/` or `/b/`) and one line per page reports `bot` views,
 each labelled as not part of the comparison. Legacy three- and four-field
 lines, written before visitor counting began, are left out of all of the
-figures above; their views are reported on the final labelled line:
+figures above; their views are reported on one labelled line.
+
+After all of that the plain report appends lines labelled as not part of the
+conversion rate: `services` link clicks per page, counted from split lines
+only (a `services direct` line is not counted anywhere), and enquiries per
+page, where page `-` means the submission arrived with no split cookie.
+These lines never move the visitor, acted, conversion, copies or outbound
+figures, and `--daily` ignores `services` and `enquiry` lines entirely:
 
 ```
 Visitors per page from split lines; acted = first copy or outbound; conversion = acted / visitors
@@ -175,6 +206,11 @@ page b:  direct views=  1  (not part of the comparison)
 page a:  bot views=     1  (not part of the comparison)
 page b:  bot views=     1  (not part of the comparison)
 views logged before visitor counting began: 3
+page a:  services clicks=   1  (split lines, not part of the conversion rate)
+page b:  services clicks=   0  (split lines, not part of the conversion rate)
+page a:  enquiries=      1  (not part of the conversion rate)
+page b:  enquiries=      0  (not part of the conversion rate)
+page -:  enquiries=      1  (no split cookie, not part of the conversion rate)
 ```
 
 `--daily` prints one row per UTC calendar day (taken from the timestamp date)
@@ -195,11 +231,101 @@ The counting rests on one cookie and on the User-Agent header, so two things
 must be said plainly: a visitor who blocks cookies is counted as new on every
 visit, and a crawler that pretends to be a browser is counted as a visitor.
 
+## Contact page
+
+`/contact/` is a server-rendered form that works with JavaScript off. A valid
+submission is saved, an email send is attempted, and the visitor is redirected
+to `/contact/thanks/`. An invalid submission re-renders the form with the
+entries kept and a plain message beside each offending field. The contact
+pages never set a cookie and never log a view.
+
+### Email via SendGrid
+
+An email is sent only when all three of these are set and non-empty:
+
+- `SENDGRID_API_KEY`: a SendGrid API key with mail send permission.
+- `CONTACT_TO`: the address enquiries are delivered to.
+- `CONTACT_FROM`: a sender address verified in SendGrid.
+
+If any of the three is missing, nothing is sent and submissions are still
+saved (with `emailSent: false`). The values are read only from the
+environment at send time; they are never written to disk, baked into the
+image, or logged. When a send fails, the visitor is still thanked, the saved
+line records `emailSent: false`, and the server prints exactly one line like
+`contact: email failed, status 500` with no key, address or submission text.
+
+`SENDGRID_API_URL` (default `https://api.sendgrid.com/v3/mail/send`) exists
+for local testing against a stand-in, so nothing ever has to touch the real
+SendGrid. For example:
+
+```sh
+# A stand-in that accepts everything:
+node -e 'require("http").createServer((q,s)=>{s.writeHead(202);s.end()}).listen(8125)' &
+
+SENDGRID_API_URL=http://127.0.0.1:8125/v3/mail/send \
+SENDGRID_API_KEY=test CONTACT_TO=to@example.com CONTACT_FROM=from@example.com \
+PORT=3000 LOG_FILE=./events.log CONTACT_FILE=./contact.jsonl node server.js
+```
+
+### Where enquiries are stored
+
+Each valid submission is appended to `$CONTACT_FILE` (default
+`/data/contact.jsonl`, beside the event log in the mounted `/data` volume) as
+one JSON object per line with the fields `time`, `name`, `email`, `company`,
+`description`, `timeline` and `emailSent`. The file is created with mode
+`0600` (owner read/write only) and is tightened back to `0600` on every
+append if something created it wider.
+
+### Reading enquiries
+
+`contact.sh` prints the saved enquiries oldest first / newest last, one
+readable block per enquiry. The file is the first argument, else
+`$CONTACT_FILE`, else `/data/contact.jsonl`. A missing or empty file prints a
+clear "no enquiries" line and malformed lines are skipped.
+
+```sh
+# Locally:
+sh contact.sh ./contact.jsonl
+
+# Inside the running container:
+docker exec turkeycode-site sh /app/contact.sh
+```
+
+### Abuse protection
+
+- A visually hidden honeypot field people never see: if it is filled, the
+  request is answered like a success and nothing is saved, emailed or logged.
+- In-memory rate limits over a sliding 10 minute window: at most 3 accepted
+  submissions per remote address and at most 20 overall. Over the limit the
+  visitor gets a 429 page asking them to try again later and nothing is
+  saved. Only valid, non-honeypot submissions count toward the limits, so a
+  visitor fixing form errors is never locked out by their own retries. The
+  address map lives only in server memory, is pruned as entries expire, and
+  is never written to disk or logged. `X-Forwarded-For` is not trusted.
+- Bodies over 20 KB are refused with 413 and nothing is saved.
+
+### The enquiry event line
+
+Each saved enquiry appends one line to the event log, for counting only:
+
+```
+<ISO-8601 UTC timestamp> <a|b|-> enquiry - -
+```
+
+The second field is the page from the visitor's `tc_ab` cookie (`a`/`a1` give
+`a`, `b`/`b1` give `b`) or `-` when there is none; the last two fields are
+fixed literals so the line keeps five space-separated fields. Nothing from
+the form ever reaches the event log. Enquiry lines never touch the visitor,
+acted, conversion, copies or outbound figures and are ignored by
+`stats.sh --daily`; the plain report counts them only on the per-page
+enquiries lines, labelled as not part of the conversion rate (see Stats).
+
 ## How page A is instrumented
 
-`site/a/index.html` must stay byte-identical to the original site
-(`reference/current-site/index.html`), so the tracker is injected at serve
-time only: the server inserts one tag,
+`site/a/index.html` is the original site (`reference/current-site/index.html`)
+plus exactly the services block, its CSS and the 'Professional services'
+footer link; it must carry no tracker wiring of its own, so the tracker is
+injected at serve time only: the server inserts one tag,
 `<script src="/t.js" data-page="a" data-via="split|direct"></script>`, just
 before `</body>` when it serves `/` (variant A) and `/a/`. The file on disk
 is never modified. Page B includes `<script src="/t.js"></script>` in its own

@@ -233,11 +233,20 @@ test('flow 7: reference/writeup.html and site/how-it-was-tested/index.html are b
   assert.ok(site.toString('utf8').includes(NEW_SENTENCE), 'the write-up carries the sentence');
 });
 
-test('flow 8: pages A and B are unchanged on disk: page A byte-identical to the reference, page B free of the marker and the sentence', () => {
+test('flow 8: pages A and B carry no write-up wording: page A is the reference plus only the services additions, page B free of the marker and the sentence', () => {
   const ref = path.join(ROOT, 'reference', 'current-site', 'index.html');
   if (fs.existsSync(ref)) {
-    const a = fs.readFileSync(path.join(ROOT, 'site', 'a', 'index.html'));
-    assert.ok(a.equals(fs.readFileSync(ref)), 'site/a/index.html byte-identical to the reference');
+    const additions = require('./fixtures/additions.js');
+    const a = fs.readFileSync(path.join(ROOT, 'site', 'a', 'index.html'), 'utf8');
+    assert.equal(
+      additions.strip(a, [
+        additions.SERVICES_CSS,
+        additions.SERVICES_BLOCK,
+        additions.FOOTER_LINK_A,
+      ]),
+      fs.readFileSync(ref, 'utf8'),
+      'site/a/index.html is the reference plus only the services additions'
+    );
   }
   const b = fs.readFileSync(path.join(ROOT, 'site', 'b', 'index.html'), 'utf8');
   assert.ok(!b.includes('data-via'), 'page B on disk carries no data-via marker');

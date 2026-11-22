@@ -255,7 +255,12 @@ test('flow 5: stats.sh reports old three- and four-field lines only on the legac
       'page b:  direct views=  0  (not part of the comparison)\n' +
       'page a:  bot views=     0  (not part of the comparison)\n' +
       'page b:  bot views=     0  (not part of the comparison)\n' +
-      'views logged before visitor counting began: 4\n'
+      'views logged before visitor counting began: 4\n' +
+      'page a:  services clicks=   0  (split lines, not part of the conversion rate)\n' +
+      'page b:  services clicks=   0  (split lines, not part of the conversion rate)\n' +
+      'page a:  enquiries=      0  (not part of the conversion rate)\n' +
+      'page b:  enquiries=      0  (not part of the conversion rate)\n' +
+      'page -:  enquiries=      0  (no split cookie, not part of the conversion rate)\n'
   );
 });
 

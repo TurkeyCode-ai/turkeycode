@@ -377,7 +377,7 @@ test('every log line stays in the fixed five-field format', () => {
   for (const line of logLines()) {
     assert.match(
       line,
-      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z [ab] (view|copy|outbound) (split|direct|bot) (first|repeat)$/,
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z [ab] (view|copy|outbound|services) (split|direct|bot) (first|repeat)$/,
       line
     );
   }
@@ -405,6 +405,14 @@ function visitorLine(p, v, a) {
 
 const STATS_HEADER =
   'Visitors per page from split lines; acted = first copy or outbound; conversion = acted / visitors';
+
+// The phase-2 services/enquiry lines, all zero when the log has none.
+const STATS_ZERO_TAIL =
+  'page a:  services clicks=   0  (split lines, not part of the conversion rate)\n' +
+  'page b:  services clicks=   0  (split lines, not part of the conversion rate)\n' +
+  'page a:  enquiries=      0  (not part of the conversion rate)\n' +
+  'page b:  enquiries=      0  (not part of the conversion rate)\n' +
+  'page -:  enquiries=      0  (no split cookie, not part of the conversion rate)\n';
 
 test('flow 10: stats.sh reports legacy three- and four-field lines only on the legacy line', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tc-stats-'));
@@ -453,7 +461,8 @@ test('flow 10: stats.sh reports legacy three- and four-field lines only on the l
       'page b:  direct views=  0  (not part of the comparison)\n' +
       'page a:  bot views=     0  (not part of the comparison)\n' +
       'page b:  bot views=     0  (not part of the comparison)\n' +
-      'views logged before visitor counting began: 37\n'
+      'views logged before visitor counting began: 37\n' +
+      STATS_ZERO_TAIL
   );
 });
 
@@ -511,7 +520,8 @@ test('stats.sh handles missing and empty logs and the LOG_FILE variable', () => 
     'page b:  direct views=  0  (not part of the comparison)\n' +
     'page a:  bot views=     0  (not part of the comparison)\n' +
     'page b:  bot views=     0  (not part of the comparison)\n' +
-    'views logged before visitor counting began: 0\n';
+    'views logged before visitor counting began: 0\n' +
+    STATS_ZERO_TAIL;
 
   const missing = runStats([path.join(os.tmpdir(), 'tc-definitely-missing.log')]);
   assert.equal(missing.status, 0, missing.stderr);
