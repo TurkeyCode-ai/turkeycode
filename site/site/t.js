@@ -1,4 +1,5 @@
-/* turkeycode site tracker: counts Copy clicks and outbound link follows.
+/* turkeycode site tracker: counts Copy clicks, outbound link follows and
+   contact link follows (the 'services' event).
    No cookies, no storage, never blocks or cancels the user's action. */
 (function () {
   'use strict';
@@ -88,6 +89,19 @@
     return false;
   }
 
+  /* A same-origin link to the contact page counts as a 'services' event.
+     Only '/contact' and '/contact/' on this origin match; nothing else. */
+  function isContactLink(href) {
+    var u;
+    try {
+      u = new URL(href, doc.baseURI);
+    } catch (err) {
+      return false;
+    }
+    if (u.origin !== new URL(doc.baseURI).origin) return false;
+    return u.pathname === '/contact' || u.pathname === '/contact/';
+  }
+
   function handle(e) {
     /* One physical activation fires either click (primary button, keyboard)
        or auxclick (middle button), never both, so nothing double counts. */
@@ -99,7 +113,12 @@
       return;
     }
     var href = anchorHref(e.target);
-    if (href && isCountedOutbound(href)) send('outbound');
+    if (!href) return;
+    if (isContactLink(href)) {
+      send('services');
+      return;
+    }
+    if (isCountedOutbound(href)) send('outbound');
   }
 
   doc.addEventListener('click', handle, true);

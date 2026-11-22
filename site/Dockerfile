@@ -3,15 +3,16 @@ FROM node:alpine
 
 ENV NODE_ENV=production \
     PORT=3000 \
-    LOG_FILE=/data/events.log
+    LOG_FILE=/data/events.log \
+    CONTACT_FILE=/data/contact.jsonl
 
 WORKDIR /app
 
-COPY server.js stats.sh README.md ./
+COPY server.js stats.sh contact.sh README.md ./
 COPY site ./site
 
 # The node image ships a non-root "node" user; give it the data volume.
-RUN mkdir -p /data && chown node:node /data && chmod +x /app/stats.sh
+RUN mkdir -p /data && chown node:node /data && chmod +x /app/stats.sh /app/contact.sh
 
 USER node
 

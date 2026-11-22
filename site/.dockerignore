@@ -7,3 +7,5 @@ test/
 Dockerfile
 .dockerignore
 *.log
+*.jsonl
+data/

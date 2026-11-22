@@ -31,5 +31,9 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Run the landing site's tests
+        run: npm test
+        working-directory: site
+
       - name: Build
         run: npm run build

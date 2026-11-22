@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How this site was tested before it was built | TurkeyCode</title>
+<meta name="description" content="We wrote one sentence, let simulated developers and AI agents test page designs against it, then had TurkeyCode build the winner and measured the real build the same way. The numbers, what it found, and what it cannot tell us.">
+<style>
+  :root {
+    --cream: #f6ecd9; --paper: #fffaf0; --stone: #2a221c; --rust: #b4441c; --gold: #d9952b; --muted: #6b5d50;
+    --edge: 3px solid var(--stone); --drop: 6px 6px 0 var(--rust);
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: "Helvetica Neue", Helvetica, Arial, system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--cream); color: var(--stone); font-family: var(--sans); font-size: 18px; line-height: 1.55; }
+  a { color: inherit; }
+  .wrap { max-width: 860px; margin: 0 auto; padding: 0 20px; }
+  .hero { background: #000; color: var(--cream); padding: 44px 0 52px; }
+  .tag { display: inline-block; background: var(--gold); color: var(--stone); font-family: var(--mono); font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; padding: 6px 12px; }
+  h1 { font-size: clamp(34px, 7vw, 68px); line-height: 0.98; text-transform: uppercase; letter-spacing: -0.02em; margin: 20px 0 20px; font-weight: 900; }
+  h1 em { font-style: normal; color: #e2602c; }
+  .lede { font-size: 20px; max-width: 34em; margin: 0; }
+  main { padding: 40px 0 72px; }
+  section { margin-top: 52px; }
+  h2 { font-size: clamp(24px, 4.4vw, 34px); line-height: 1.1; text-transform: uppercase; letter-spacing: -0.01em; margin: 0 0 16px; padding-top: 14px; border-top: var(--edge); font-weight: 900; }
+  h3 { font-size: 19px; margin: 26px 0 6px; }
+  p { margin: 0 0 14px; max-width: 38em; }
+  ul, ol { margin: 0 0 14px; padding-left: 1.2em; max-width: 38em; }
+  li { margin-bottom: 8px; }
+  code { font-family: var(--mono); font-size: 0.9em; background: #eadfc8; padding: 1px 5px; }
+  .quote { background: var(--paper); border: var(--edge); box-shadow: var(--drop); padding: 18px 20px; font-size: 21px; font-weight: 700; max-width: 34em; margin: 0 0 22px; }
+  .box { background: var(--paper); border: var(--edge); padding: 16px 20px; max-width: 40em; margin: 0 0 16px; }
+  .box p:last-child, .box ul:last-child { margin-bottom: 0; }
+  .scroll { overflow-x: auto; margin: 0 0 12px; border: var(--edge); background: var(--paper); }
+  table { border-collapse: collapse; width: 100%; min-width: 620px; font-size: 16px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #d8cbb2; vertical-align: top; }
+  thead th { font-family: var(--mono); font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; background: var(--stone); color: var(--cream); border-bottom: 0; }
+  td.n, th.n { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.up { color: #1f6b3a; font-weight: 700; } td.down { color: var(--rust); font-weight: 700; }
+  tbody tr:last-child td { border-bottom: 0; }
+  .small { font-size: 15px; color: var(--muted); }
+  .steps { counter-reset: s; list-style: none; padding: 0; max-width: 40em; }
+  .steps li { counter-increment: s; position: relative; padding: 0 0 0 46px; margin-bottom: 14px; }
+  .steps li::before { content: counter(s); position: absolute; left: 0; top: 0; width: 32px; height: 32px; background: var(--rust); color: var(--paper); font-family: var(--mono); font-weight: 700; display: grid; place-items: center; }
+  footer { border-top: var(--edge); padding: 22px 0 40px; font-family: var(--mono); font-size: 14px; }
+  @media (max-width: 520px) { body { font-size: 17px; } .lede { font-size: 18px; } .quote { font-size: 18px; } }
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="wrap">
+    <span class="tag">Write-up · November 2026</span>
+    <h1>We <em>tested</em> this site before we built it</h1>
+    <p class="lede">We wrote one sentence about what the site had to do. Simulated developers and AI agents tested page designs against it. TurkeyCode built the winner in 27 minutes, and we measured the real build the same way. The new page clears 10 of 13 pass marks set in advance. The old one cleared 4.</p>
+  </div>
+</header>
+
+<main class="wrap">
+
+<section>
+  <h2>The sentence</h2>
+  <p>Everything started from one line, with nothing else specified:</p>
+  <p class="quote">I need a website that gets developers who use Claude Code every day to try turkeycode for one unattended build.</p>
+  <p>From that line and the TurkeyCode repository, one AI session wrote the test: who would arrive, what they would need to understand, what counts as acting, and a list of statements about TurkeyCode that are true, each cited to a file and line. A person read that test and approved it before anything was designed.</p>
+</section>
+
+<section>
+  <h2>How it works</h2>
+  <ol class="steps">
+    <li><strong>Result.</strong> One sentence from the owner.</li>
+    <li><strong>Derive the test.</strong> Seven kinds of visitor, four questions with pass marks set in advance, and the list of true statements. Three of the seven visitors are held back: whoever designs the page never sees them.</li>
+    <li><strong>Approve.</strong> The owner reads the test in plain language and approves it. Any change after that needs a new approval.</li>
+    <li><strong>Simulate on cheap test pages.</strong> A designer writes a plain page. Visitors skim it for 60 seconds and answer from memory. Others decide on their own whether to act. A developer on a clean machine follows only what the page says. An AI agent, asked by its developer for a tool, reads the page and replies. The scores go back to the designer, who revises.</li>
+    <li><strong>Hand off.</strong> The winning design, the requirements and the evidence become a build request.</li>
+    <li><strong>TurkeyCode builds it.</strong> Unattended, from that request.</li>
+    <li><strong>Verify.</strong> The same test runs against the real build, and each score is set beside the test page's score.</li>
+  </ol>
+  <div class="box">
+    <p><strong>The rules it ran under.</strong></p>
+    <ul>
+      <li>True claims only. Every statement about TurkeyCode comes from its repository.</li>
+      <li>The session that writes the test never designs. The designer never sees the held-back visitors or the marking.</li>
+      <li>Visitors only ever see local copies, with requests to anywhere else blocked.</li>
+      <li>If something was not run, it says "not run".</li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <h2>The numbers</h2>
+  <p>Share of visits that succeeded, for the visitors the designer could see. The old site was scored at a smaller size (32 visits per row) than the test page and the real build (80 per row).</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>After a 60 second skim, or on their own</th><th class="n">Old site</th><th class="n">Test page</th><th class="n">Real build</th><th class="n">Needed</th></tr></thead>
+    <tbody>
+      <tr><td>Can say what it is</td><td class="n">72%</td><td class="n">90%</td><td class="n">80%</td><td class="n">80%</td></tr>
+      <tr><td>Can say what you need in place</td><td class="n">38%</td><td class="n">96%</td><td class="n up">99%</td><td class="n">70%</td></tr>
+      <tr><td>Can say how to start, and what must happen before it runs on its own</td><td class="n">38%</td><td class="n">60%</td><td class="n up">70%</td><td class="n">65%</td></tr>
+      <tr><td>Can say what checked the work</td><td class="n">72%</td><td class="n">72%</td><td class="n">65%</td><td class="n">60%</td></tr>
+      <tr><td>Acts without being asked: copies the command, or goes to GitHub or npm</td><td class="n">41%</td><td class="n">65%</td><td class="n up">65%</td><td class="n">30%</td></tr>
+      <tr><td>An AI agent, asked by its developer, recommends it correctly</td><td class="n">40%</td><td class="n">92%</td><td class="n up">86%</td><td class="n">80%</td></tr>
+      <tr><td>A developer on a clean machine, following only the page, gets TurkeyCode running</td><td class="n">5 of 5</td><td class="n">20 of 20</td><td class="n">20 of 20</td><td class="n">80%</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="small">The clean machine has no coding agent on it, so "running" means TurkeyCode starts and stops at its own check for one. No test visit ever touched the live site.</p>
+
+  <h3>Ten of thirteen marks cleared, three still open</h3>
+  <p>Every measure above is at or over its mark. The harder check is the visitors the designer never saw. They clear three of their six marks, and the other three are the open work:</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Held-back visitors</th><th class="n">Old site</th><th class="n">Test page</th><th class="n">Real build</th><th class="n">Needed</th></tr></thead>
+    <tbody>
+      <tr><td>Can say what it is</td><td class="n">63%</td><td class="n">85%</td><td class="n">80%</td><td class="n">80%</td></tr>
+      <tr><td>Can say what you need in place</td><td class="n">42%</td><td class="n">100%</td><td class="n">100%</td><td class="n">70%</td></tr>
+      <tr><td>Can say how to start, and what must happen first</td><td class="n">29%</td><td class="n">53%</td><td class="n up">70%</td><td class="n">65%</td></tr>
+      <tr><td>Can say what checked the work</td><td class="n">83%</td><td class="n">68%</td><td class="n down">57%</td><td class="n">60%</td></tr>
+      <tr><td>Acts without being asked</td><td class="n">0%</td><td class="n">23%</td><td class="n down">15%</td><td class="n">30%</td></tr>
+      <tr><td>An AI agent recommends it correctly</td><td class="n">33%</td><td class="n">67%</td><td class="n">70%</td><td class="n">80%</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>Visitors the designer never saw now act 15% of the time. On the old site, none of them did in 24 visits. That is a real gain and it is still under the 30% mark, so by the test's own strict rule the page has not fully passed. We are publishing it with that known, because it is clearly better than what it replaces.</p>
+</section>
+
+<section>
+  <h2>What the real build changed</h2>
+  <p>The test page was plain: no brand, no turkey. The real build has both. Measuring it again showed what that cost and what it bought.</p>
+  <ul>
+    <li><strong>Better:</strong> "what must happen before it runs on its own" rose from 60% to 70%. It was the weakest point on the test page, the build request said so, and the builder made those two lines stand out.</li>
+    <li><strong>Worse:</strong> "what it is" fell from 90% to 80%, and "what checked the work" from 72% to 65%. The large headline takes the space where the plain page put its explanation.</li>
+    <li><strong>Unchanged:</strong> visitors act just as often, and every developer on a clean machine still got it running.</li>
+  </ul>
+  <h3>We guessed at the cause, and the guess was wrong</h3>
+  <p>The obvious suspect was the large headline, which filled the first screen where the plain page had its explanation and first command. So we asked TurkeyCode for one more build: a smaller hero, with the explanation, the three boxes and the first command all visible without scrolling, and not a word changed. It delivered exactly that in 6 minutes. We measured again. Nothing improved. "What it is" came back at 75% and "what checked the work" at 64%.</p>
+  <p>We kept the first build. The rule throughout was to keep a change only if the numbers got better, and they did not.</p>
+  <h3>How much of this is noise</h3>
+  <p>That second build gave us a measurement we had not planned. The AI agent stage reads only the page's text, and the text was identical in both builds. It scored 86% and then 80%. So at these sizes a difference of about six points means nothing, and several of the differences above are inside that. The large gaps against the old site are well outside it. The small differences between the test page and the real build mostly are not.</p>
+</section>
+
+<section>
+  <h2>What it found that we did not expect</h2>
+
+  <h3>The page was missing facts, not better wording</h3>
+  <p>Our first attempt aimed at a broader audience. Ten designs in a row traded one answer for another and never improved overall. Then we let the page say things that were true and had not been on the approved list, and one measure went from 23 of 40 to 35 of 40 in a single design. The visitors were not asking for nicer sentences. They were asking for facts the page had no licence to state.</p>
+
+  <h3>It told us who the page is for</h3>
+  <p>With a broad audience, one kind of visitor acted on every design and two kinds never did, 0 of 48 visits between them. Narrowing the sentence to developers who use Claude Code every day is what moved held-back visitors from never acting to sometimes acting.</p>
+
+  <h3>It found instructions that do not work</h3>
+  <p>Before any visitor was simulated, the session writing the test ran our own instructions on a clean machine and compared the docs with the code:</p>
+  <ul>
+    <li><code>npm install -g turkeycode</code> fails with a permissions error for an ordinary user on a stock Linux machine. <code>npx</code> works. The page now leads with <code>npx</code>.</li>
+    <li>The README said an API key alone was enough. It is not: the Claude Code CLI must be installed and one more setting is needed.</li>
+    <li>The README's background-run recipe used a command that does not exist on macOS.</li>
+    <li>The README described a Docker setup that the repository does not contain.</li>
+  </ul>
+
+  <h3>AI agents are visitors too</h3>
+  <p>A developer who asks their coding agent to find a tool never sees the page. The agent does. So one stage of the test hands the page's text to an agent along with a request such as "kick off a whole small app build tonight on top of Claude Code and come back to something tested". Three of the eight requests are ones TurkeyCode does not fit, and for those the right answer is not to recommend it, so a page that oversells scores worse. The old site got the right reply 40% of the time. The real build gets it 86% of the time.</p>
+</section>
+
+<section>
+  <h2>What we corrected along the way</h2>
+  <p>This is a new method. It made mistakes, and catching them during the run is why we trust the final numbers.</p>
+  <ul>
+    <li><strong>The marking was too strict, twice.</strong> Visitors gave correct, useful answers and failed for leaving out one of three required points. We loosened it to one or two essential points per question, with the owner's approval each time.</li>
+    <li><strong>The first held-back group was the wrong kind of check.</strong> It was the two most unusual visitors, so a low score from them could not tell a narrowly tuned page from a page that was simply not meant for them. Held-back visitors now mirror the main audience.</li>
+    <li><strong>A citation is not the same as the truth.</strong> The approved list said "up to 5 QA attempts per phase" and pointed at a real line of code. A normal run takes a different path that stops at 3. The quote was real and the claim was wrong. It was caught in review before the build, not by the checker.</li>
+    <li><strong>Our own test rig hid a real failure.</strong> The first clean machine had been set up in a way that made the global install succeed, which concealed the permissions error above.</li>
+    <li><strong>A confident explanation was wrong.</strong> We were sure the headline was hiding the explanation. Fixing it changed nothing. Without the second measurement we would have shipped the fix and believed it worked.</li>
+    <li><strong>Extra rules threw out good pages.</strong> Checks we had added beyond the owner's rules rejected several early designs for harmless reasons, such as a link to the site's own address. We removed them.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>What this cannot tell you</h2>
+  <ul>
+    <li><strong>The visitors are AI models, not people.</strong> A simulated developer copying a command is a prediction. It is not a download.</li>
+    <li><strong>It is not calibrated.</strong> Nobody has yet compared these predictions with what real developers do. Until that happens, trust the direction more than the size.</li>
+    <li><strong>It only knows the visitors someone wrote down.</strong> An audience nobody thought of cannot show up in the results.</li>
+    <li><strong>Every model in the test is from one family.</strong> Agents built on other models may read the page differently. That is not run.</li>
+    <li><strong>Three assumptions were not run:</strong> the share of visitors already logged in to Claude Code, the share on a Mac, and the share on a Pro plan.</li>
+  </ul>
+  <p>The AI agent stage is the exception to the first point. There the visitor really is a model, so the test measures the thing itself.</p>
+</section>
+
+<section>
+  <h2>The build</h2>
+  <p>TurkeyCode built the site from the hand-off in 27 minutes with nobody at the keyboard. It planned two phases. Each passed QA on the first attempt, was reviewed and was merged. The result is a small server with no dependencies, both pages, and 36 automated tests.</p>
+  <p>The second build, the smaller hero, ran on that existing code. TurkeyCode saw the code was already there, skipped research, planned one phase and finished in 6 minutes.</p>
+  <p>We then checked it against the rules by hand: every line of the tested wording is present and in order, nothing loads from another host, and the links stay on our own pages.</p>
+</section>
+
+<section>
+  <h2>What happens next</h2>
+  <p>The site you are on serves two pages. Visitors are split between the old page and the new one at random, and the same visitor keeps seeing the same page. For each page the server counts views, presses of a Copy button, and clicks out to GitHub or npm. It stores the time, the page, the event, how the page was reached and whether it was that visitor's first, and nothing else: no IP address, no user agent and no identifier. Known crawlers are left out of the comparison.</p>
+  <p>You do not know which page you were given, and neither do we. It was picked at random when you first arrived, and you will keep getting the same one.</p>
+  <p>That is the real test. It will tell us whether the new page wins with people, and how far the simulation's predictions were from what people did. We will add the result here.</p>
+</section>
+
+<section>
+  <h2>Cost</h2>
+  <p>The simulations cost $88.49 at list prices across both attempts: $50.08 for the broad audience, which never passed, and $38.41 for the narrower one, including both measurements of the real build. They ran on a subscription, so that figure is what the same work would cost through the API. TurkeyCode does not record what a build costs, so the cost of the two builds is not known.</p>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">TurkeyCode is open source and MIT licensed · <a href="https://github.com/TurkeyCode-ai/turkeycode">github.com/TurkeyCode-ai/turkeycode</a> · <a href="https://turkeycode.ai">turkeycode.ai</a></div>
+</footer>
+</body>
+</html>

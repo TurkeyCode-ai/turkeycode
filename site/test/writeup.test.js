@@ -13,6 +13,12 @@ const ROOT = path.join(__dirname, '..');
 // Renders as 'We tested this site before we built it'.
 const HEADING = 'We <em>tested</em> this site before we built it';
 
+// A request with no User-Agent counts as a crawler, so every test that
+// expects browser behaviour sends one.
+const BROWSER_UA =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
 let server;
 let port;
 let logFile;
@@ -31,7 +37,13 @@ function freePort() {
 function request(reqPath, { method = 'GET', headers = {} } = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request(
-      { host: '127.0.0.1', port, path: reqPath, method, headers },
+      {
+        host: '127.0.0.1',
+        port,
+        path: reqPath,
+        method,
+        headers: { 'User-Agent': BROWSER_UA, ...headers },
+      },
       (res) => {
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
@@ -65,11 +77,13 @@ function waitForLogCount(n, ms = 2000) {
   });
 }
 
+// Readiness is polled on /t.js, which never writes a log line, so no
+// warm-up view line can race a test's log counting (see server.test.js).
 function waitForServer(deadlineMs) {
   const deadline = Date.now() + deadlineMs;
   return new Promise((resolve, reject) => {
     (function poll() {
-      request('/a/')
+      request('/t.js')
         .then(resolve)
         .catch(() => {
           if (Date.now() > deadline) return reject(new Error('server did not start'));
@@ -188,6 +202,28 @@ test('flow 6: the new sentence is the second paragraph under What happens next, 
   assert.equal(body.split(NEW_SENTENCE).length, 2, 'the sentence appears exactly once');
 });
 
+const PRIVACY_SENTENCE =
+  'It stores the time, the page, the event, how the page was reached and ' +
+  "whether it was that visitor's first, and nothing else: no IP address, " +
+  'no user agent and no identifier. Known crawlers are left out of the ' +
+  'comparison.';
+
+test('flow 11: the write-up carries the new privacy sentence verbatim, exactly once, and the old sentence is gone', async () => {
+  const res = await request('/how-it-was-tested/');
+  assert.equal(res.status, 200);
+  const body = res.body.toString('utf8');
+  assert.equal(body.split(PRIVACY_SENTENCE).length, 2, 'the new sentence appears exactly once');
+  assert.ok(
+    !body.includes('It stores the time, the page and the event'),
+    'the old sentence is gone'
+  );
+  const onDisk = fs.readFileSync(
+    path.join(ROOT, 'site', 'how-it-was-tested', 'index.html'),
+    'utf8'
+  );
+  assert.ok(onDisk.includes(PRIVACY_SENTENCE), 'the file on disk carries the sentence');
+});
+
 test('flow 7: reference/writeup.html and site/how-it-was-tested/index.html are byte-identical', () => {
   const site = fs.readFileSync(path.join(ROOT, 'site', 'how-it-was-tested', 'index.html'));
   const ref = path.join(ROOT, 'reference', 'writeup.html');
@@ -197,11 +233,21 @@ test('flow 7: reference/writeup.html and site/how-it-was-tested/index.html are b
   assert.ok(site.toString('utf8').includes(NEW_SENTENCE), 'the write-up carries the sentence');
 });
 
-test('flow 8: pages A and B are unchanged on disk: page A byte-identical to the reference, page B free of the marker and the sentence', () => {
+test('flow 8: pages A and B carry no write-up wording: page A is the reference plus only the services additions, page B free of the marker and the sentence', () => {
   const ref = path.join(ROOT, 'reference', 'current-site', 'index.html');
   if (fs.existsSync(ref)) {
-    const a = fs.readFileSync(path.join(ROOT, 'site', 'a', 'index.html'));
-    assert.ok(a.equals(fs.readFileSync(ref)), 'site/a/index.html byte-identical to the reference');
+    const additions = require('./fixtures/additions.js');
+    const a = fs.readFileSync(path.join(ROOT, 'site', 'a', 'index.html'), 'utf8');
+    assert.equal(
+      additions.strip(a, [
+        additions.SERVICES_CSS,
+        additions.SERVICES_BLOCK,
+        additions.FOOTER_LINK_A,
+        additions.FOOTER_LINK_SDD_A,
+      ]),
+      fs.readFileSync(ref, 'utf8'),
+      'site/a/index.html is the reference plus only the services additions'
+    );
   }
   const b = fs.readFileSync(path.join(ROOT, 'site', 'b', 'index.html'), 'utf8');
   assert.ok(!b.includes('data-via'), 'page B on disk carries no data-via marker');
