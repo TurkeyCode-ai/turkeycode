@@ -77,19 +77,24 @@ Events are appended to `$LOG_FILE` (default `/data/events.log`), one line per
 event, built only from server-side whitelisted values:
 
 ```
-<ISO-8601 UTC timestamp> <a|b> <view|copy|outbound|services> <split|direct|bot> <first|repeat>
+<ISO-8601 UTC timestamp> <a|b> <view|seen|copy|outbound|services> <split|direct|bot> <first|repeat>
 ```
 
 For example:
 
 ```
 2026-11-21T20:50:22.609Z a view split first
+2026-11-21T20:50:22.620Z a seen split first
 2026-11-21T20:50:22.634Z b copy direct repeat
 2026-11-21T20:50:22.667Z a outbound split repeat
 2026-11-21T20:50:22.702Z b view bot repeat
 ```
 
 - `view` is logged by the server whenever an HTML page is served.
+- `seen` is sent by the tracker once per page load, when the page is visible
+  in a browser, and only on pages served at `/`. It is what makes a visitor
+  count: a client that is served a page and never runs the script (most
+  crawlers) logs a `view` and nothing else.
 - `copy` is sent by the tracker when any Copy button is pressed
   (`#copy` on page A, the `data-copy` buttons on page B).
 - `outbound` is sent by the tracker when a counted outbound link is followed
@@ -114,15 +119,20 @@ and reports their views on one labelled line (see Stats below).
 The fifth field records whether the line is that visitor's first: a `view` at
 `/` is `first` at the moment of assignment (no valid cookie yet), and a
 `copy` or `outbound` event is `first` only when it is the first action of any
-kind by that visitor. The single `tc_ab` cookie carries the state: `a` or `b`
-means assigned with no event logged yet, `a1` or `b1` means the first event
-has been logged (the server advances the cookie on the response that logs
-it). Any other cookie value is treated as no cookie at all. Direct and bot
-lines are always `repeat`.
+kind by that visitor. A `seen` event is `first` the first time that visitor's
+browser reports that the page script ran. The single `tc_ab` cookie carries
+the state: `a` or `b` means assigned and the page script not yet seen to run,
+`a0` or `b0` means the script ran and no event is logged yet, `a1` or `b1`
+means the first event has been logged (the server advances the cookie on the
+response that logs it). A first `copy` or `outbound` from a visitor still on
+`a` or `b` proves the script ran, so the server logs a `seen split first`
+line ahead of it. Any other cookie value is treated as no cookie at all.
+Direct and bot lines are always `repeat`, and a `seen` sent from a direct
+page is accepted and not logged.
 
 `services` is the one exception to the cookie advance: its `first|repeat` is
 judged from the cookie exactly as for `copy` and `outbound` (a split event
-with cookie `a` or `b` logs `first`, everything else logs `repeat`), but the
+with cookie `a`, `b`, `a0` or `b0` logs `first`, everything else logs `repeat`), but the
 response never sets or advances `tc_ab`. Following a contact link must not
 use up the visitor's first action, so a later `copy` or `outbound` is still
 logged as that visitor's first. A `services` event also never counts as the
@@ -186,16 +196,21 @@ malformed lines are ignored.
 The comparison is computed from five-field `split` lines only, so only
 visitors who were randomly assigned a page at `/` are compared. Per page:
 
-- visitors: the number of `view split first` lines, which is the number of
-  people assigned to that page.
+- visitors: the number of `seen split first` lines, which is the number of
+  people assigned to that page whose browser ran the page script.
 - acted: the number of `first` split `copy` or `outbound` lines, which is
-  the number of those visitors whose first action has been logged.
+  the number of those visitors whose first action has been logged. First
+  actions logged before the first `seen` line in the log predate this check
+  and are reported on one labelled line instead.
 - conversion: acted / visitors as a percentage with one decimal (0.0% when
   there are no visitors).
 
 Under that, per page, the total split `copy` and `outbound` event counts are
 printed for reference; a visitor who copies three times appears three times
-there but only once in acted. Then one line per page reports `direct` views
+there but only once in acted. One line per page then reports pages served
+(`view split first` lines, whether or not a browser ran the script), so the
+gap between pages served and visitors shows how many clients never ran it.
+Then one line per page reports `direct` views
 (pages opened at `/a/` or `/b/`) and one line per page reports `bot` views,
 each labelled as not part of the comparison. Legacy three- and four-field
 lines, written before visitor counting began, are left out of all of the
@@ -209,11 +224,14 @@ These lines never move the visitor, acted, conversion, copies or outbound
 figures, and `--daily` ignores `services` and `enquiry` lines entirely:
 
 ```
-Visitors per page from split lines; acted = first copy or outbound; conversion = acted / visitors
+Visitors per page (split, browser ran the page script); acted = first copy or outbound; conversion = acted / visitors
 page a:  visitors=      2  acted=      1  conversion=  50.0%
 page b:  visitors=      2  acted=      1  conversion=  50.0%
 page a:  copies=        2  outbound=   0  (split event totals, for reference)
 page b:  copies=        0  outbound=   1  (split event totals, for reference)
+page a:  pages served=  3  (first split views, script run or not; not part of the comparison)
+page b:  pages served=  2  (first split views, script run or not; not part of the comparison)
+first actions before the script check began: 0  (not part of the comparison)
 page a:  direct views=  0  (not part of the comparison)
 page b:  direct views=  1  (not part of the comparison)
 page a:  bot views=     1  (not part of the comparison)
@@ -227,11 +245,11 @@ page -:  enquiries=      1  (no split cookie, not part of the conversion rate)
 ```
 
 `--daily` prints one row per UTC calendar day (taken from the timestamp date)
-that has any split line, oldest first, with visitors, acted and conversion
+that has a counted visitor or action, oldest first, with visitors, acted and conversion
 for each page, and a final `total` row that matches the plain report:
 
 ```
-Split visitors per UTC day; acted = first copy or outbound; the total row matches plain stats.sh
+Split visitors per UTC day (browser ran the page script); acted = first copy or outbound; the total row matches plain stats.sh
 day           a visitors  a acted  a conv  b visitors  b acted  b conv
 2026-11-20             1        1  100.0%           1        0    0.0%
 2026-11-21             1        0    0.0%           1        1  100.0%
@@ -240,9 +258,12 @@ total                  2        1   50.0%           2        1   50.0%
 
 ### What the counting cannot do
 
-The counting rests on one cookie and on the User-Agent header, so two things
-must be said plainly: a visitor who blocks cookies is counted as new on every
-visit, and a crawler that pretends to be a browser is counted as a visitor.
+The counting rests on one cookie, on the User-Agent header and on the page
+script running, so three things must be said plainly: a visitor who blocks
+cookies or scripts is never counted as a visitor (their pages show only under
+pages served), a crawler that runs scripts in a real browser engine and keeps
+cookies is counted as a visitor, and the script check says only that a
+browser ran the page, not that a person read it.
 
 ## Contact page
 

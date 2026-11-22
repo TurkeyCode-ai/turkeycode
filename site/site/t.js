@@ -1,5 +1,7 @@
 /* turkeycode site tracker: counts Copy clicks, outbound link follows and
-   contact link follows (the 'services' event).
+   contact link follows (the 'services' event), and tells the server once
+   that this script ran in a visible page (the 'seen' event), which is what
+   makes a visitor count.
    No cookies, no storage, never blocks or cancels the user's action. */
 (function () {
   'use strict';
@@ -41,6 +43,21 @@
       fetch(url, { method: 'POST', keepalive: true, credentials: 'omit' })
         .catch(function () {});
     } catch (err) { /* counting must never break the page */ }
+  }
+
+  /* A visitor reached through the split is counted only once this script
+     has run in a visible page. Sent at most once per page load; a page
+     opened in a background tab reports when it is first shown. */
+  if (via === 'split') {
+    var seenSent = false;
+    var seen = function () {
+      if (seenSent) return;
+      if (doc.visibilityState && doc.visibilityState !== 'visible') return;
+      seenSent = true;
+      send('seen');
+    };
+    seen();
+    doc.addEventListener('visibilitychange', seen);
   }
 
   function copyButton(node) {

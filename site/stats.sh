@@ -10,11 +10,16 @@
 # ignored. The two arguments may appear in either order.
 #
 # Log line format (five fields):
-#   <ISO-8601 UTC timestamp> <a|b> <view|copy|outbound> <split|direct|bot> <first|repeat>
+#   <ISO-8601 UTC timestamp> <a|b> <view|seen|copy|outbound> <split|direct|bot> <first|repeat>
 #
 # The comparison is computed from five-field split lines only (pages served
-# at /). Per page: visitors counts 'view split first' lines, acted counts
-# first split copy or outbound events, and conversion is acted / visitors.
+# at /). A visitor is counted once their browser runs the page script: per
+# page, visitors counts 'seen split first' lines, acted counts first split
+# copy or outbound events, and conversion is acted / visitors. A client that
+# is served a page and never runs the script (most crawlers) is not a
+# visitor; 'view split first' lines are printed as pages served, for
+# reference. First actions logged before the first 'seen' line in the log
+# predate the script check and go on one labelled line instead of acted.
 # Total split copy and outbound events are printed for reference. Direct
 # views (pages served at /a/ or /b/) and bot views (known crawlers) are
 # reported separately and are not part of the comparison. Legacy three- and
@@ -61,6 +66,16 @@ awk -v daily="$DAILY" '
     if (NF == 5 && ($2 == "a" || $2 == "b" || $2 == "-")) enq[$2]++
     next
   }
+  $3 == "seen" {
+    if (NF == 5 && ($2 == "a" || $2 == "b") && $4 == "split" && $5 == "first") {
+      checked = 1
+      vis[$2]++
+      d = substr($1, 1, 10)
+      if (!(d in seen)) { seen[d] = 1; days[++ndays] = d }
+      dvis[d "." $2]++
+    }
+    next
+  }
   $2 != "a" && $2 != "b" { next }
   $3 != "view" && $3 != "copy" && $3 != "outbound" { next }
   # Legacy lines from before visitor counting began: three fields, or four
@@ -71,14 +86,19 @@ awk -v daily="$DAILY" '
   NF != 5 { next }
   $5 != "first" && $5 != "repeat" { next }
   $4 == "split" {
-    if ($3 == "view" && $5 == "first") vis[$2]++
-    if ($3 != "view" && $5 == "first") act[$2]++
+    if ($3 == "view" && $5 == "first") served[$2]++
     if ($3 == "copy") cop[$2]++
     if ($3 == "outbound") outb[$2]++
-    d = substr($1, 1, 10)
-    if (!(d in seen)) { seen[d] = 1; days[++ndays] = d }
-    if ($3 == "view" && $5 == "first") dvis[d "." $2]++
-    if ($3 != "view" && $5 == "first") dact[d "." $2]++
+    if ($3 != "view" && $5 == "first") {
+      if (checked) {
+        act[$2]++
+        d = substr($1, 1, 10)
+        if (!(d in seen)) { seen[d] = 1; days[++ndays] = d }
+        dact[d "." $2]++
+      } else {
+        early++
+      }
+    }
     next
   }
   $4 == "direct" { if ($3 == "view") dir[$2]++; next }
@@ -92,7 +112,7 @@ awk -v daily="$DAILY" '
         while (j >= 1 && days[j] > d) { days[j + 1] = days[j]; j-- }
         days[j + 1] = d
       }
-      printf "Split visitors per UTC day; acted = first copy or outbound; the total row matches plain stats.sh\n"
+      printf "Split visitors per UTC day (browser ran the page script); acted = first copy or outbound; the total row matches plain stats.sh\n"
       printf "%-12s%12s%9s%8s%12s%9s%8s\n", "day", "a visitors", "a acted", "a conv", "b visitors", "b acted", "b conv"
       for (i = 1; i <= ndays; i++) {
         d = days[i]
@@ -106,7 +126,7 @@ awk -v daily="$DAILY" '
       bv = vis["b"] + 0; ba = act["b"] + 0
       printf "%-12s%12d%9d%8s%12d%9d%8s\n", "total", av, aa, conv(aa, av), bv, ba, conv(ba, bv)
     } else {
-      printf "Visitors per page from split lines; acted = first copy or outbound; conversion = acted / visitors\n"
+      printf "Visitors per page (split, browser ran the page script); acted = first copy or outbound; conversion = acted / visitors\n"
       n = split("a b", pages, " ")
       for (i = 1; i <= n; i++) {
         p = pages[i]
@@ -118,6 +138,11 @@ awk -v daily="$DAILY" '
         p = pages[i]
         printf "page %s:  copies=%9d  outbound=%4d  (split event totals, for reference)\n", p, cop[p] + 0, outb[p] + 0
       }
+      for (i = 1; i <= n; i++) {
+        p = pages[i]
+        printf "page %s:  pages served=%3d  (first split views, script run or not; not part of the comparison)\n", p, served[p] + 0
+      }
+      printf "first actions before the script check began: %d  (not part of the comparison)\n", early + 0
       for (i = 1; i <= n; i++) {
         p = pages[i]
         printf "page %s:  direct views=%3d  (not part of the comparison)\n", p, dir[p] + 0

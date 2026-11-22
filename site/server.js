@@ -167,7 +167,7 @@ try {
 }
 
 // page, event, via and novelty are always validated literals ('a'/'b'/'-',
-// 'view'/'copy'/'outbound'/'services'/'enquiry', 'split'/'direct'/'bot'/'-',
+// 'view'/'seen'/'copy'/'outbound'/'services'/'enquiry', 'split'/'direct'/'bot'/'-',
 // 'first'/'repeat'/'-') before this is called; no client-supplied text
 // reaches the log.
 // Appends are chained on a promise so lines land in call order; independent
@@ -183,9 +183,10 @@ function logEvent(page, event, via, novelty) {
 }
 
 // --- Cookie handling --------------------------------------------------------
-// The single tc_ab cookie holds exactly one of: a, b (assigned, no copy or
-// outbound event logged yet) or a1, b1 (assigned, first event already
-// logged). Anything else is treated as no cookie at all.
+// The single tc_ab cookie holds exactly one of: a, b (assigned, page script
+// not yet seen to run), a0, b0 (the page script ran in a browser, no copy or
+// outbound event logged yet) or a1, b1 (first event already logged).
+// Anything else is treated as no cookie at all.
 function cookieState(req) {
   const header = req.headers.cookie;
   if (!header) return null;
@@ -194,9 +195,11 @@ function cookieState(req) {
     if (eq === -1) continue;
     if (part.slice(0, eq).trim() === COOKIE_NAME) {
       const value = part.slice(eq + 1).trim();
-      if (value === 'a' || value === 'b') return { page: value, acted: false };
-      if (value === 'a1') return { page: 'a', acted: true };
-      if (value === 'b1') return { page: 'b', acted: true };
+      if (value === 'a' || value === 'b') return { page: value, seen: false, acted: false };
+      if (value === 'a0') return { page: 'a', seen: true, acted: false };
+      if (value === 'b0') return { page: 'b', seen: true, acted: false };
+      if (value === 'a1') return { page: 'a', seen: true, acted: true };
+      if (value === 'b1') return { page: 'b', seen: true, acted: true };
       return null; // invalid value: treat as unassigned
     }
   }
@@ -251,7 +254,7 @@ function serveUntracked(req, res, body) {
 }
 
 // --- Event endpoint ----------------------------------------------------------
-// POST /e?page=<a|b>&event=<copy|outbound|services>&via=<split|direct>, or the
+// POST /e?page=<a|b>&event=<copy|outbound|services|seen>&via=<split|direct>, or the
 // same fields in a small body (urlencoded or JSON). A missing via defaults to
 // 'split' (lines from trackers that predate the marker belong to the split,
 // matching how legacy three-field log lines are read); a present but invalid
@@ -268,7 +271,7 @@ function serveUntracked(req, res, body) {
 // fire-and-forget, so sendBeacon/keepalive sends still work.
 const EVENT_BODY_LIMIT = 256;
 const EVENT_PAGES = new Set(['a', 'b']);
-const EVENT_KINDS = new Set(['copy', 'outbound', 'services']);
+const EVENT_KINDS = new Set(['copy', 'outbound', 'services', 'seen']);
 const EVENT_VIAS = new Set(['split', 'direct']);
 
 function endEvent(res, status, setCookie) {
@@ -349,16 +352,34 @@ function handleEvent(req, res, query) {
     // services event never does either: it is judged first/repeat like copy
     // and outbound but must not use up the visitor's first action, so the
     // cookie stays on a/b and a later copy or outbound still logs 'first'.
+    //
+    // 'seen' is sent by the page script once, when the page is visible in a
+    // browser. It is what makes a split visitor count: a client that never
+    // runs the script (most crawlers) is served a page but never counted.
+    // The first seen from a visitor on a/b is logged 'first' and moves the
+    // cookie to a0/b0. A first copy or outbound event from a
+    // visitor still on a/b proves the script ran too, so a 'seen first' line
+    // is logged ahead of it (not for services, which never touches the
+    // cookie and so could not record that it had done so). Direct pages are outside the comparison, so a
+    // direct seen is accepted and not logged.
     const state = cookieState(req);
+    const logPage = page === 'a' ? 'a' : 'b';
+    const fresh = via !== 'direct' && state && !state.seen;
+    if (event === 'seen') {
+      if (via === 'direct') return endEvent(res, 204);
+      logEvent(logPage, 'seen', 'split', fresh ? 'first' : 'repeat');
+      return endEvent(res, 204, fresh ? splitCookie(state.page + '0') : null);
+    }
     let novelty = 'repeat';
     let setCookie = null;
+    if (fresh && event !== 'services') logEvent(logPage, 'seen', 'split', 'first');
     if (via !== 'direct' && state && !state.acted) {
       novelty = 'first';
       if (event !== 'services') setCookie = splitCookie(state.page + '1');
     }
     // Log the canonical literals, never the raw input.
     logEvent(
-      page === 'a' ? 'a' : 'b',
+      logPage,
       event === 'copy' ? 'copy' : event === 'outbound' ? 'outbound' : 'services',
       via === 'direct' ? 'direct' : 'split',
       novelty === 'first' ? 'first' : 'repeat'

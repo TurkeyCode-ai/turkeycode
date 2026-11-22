@@ -404,7 +404,7 @@ function visitorLine(p, v, a) {
 }
 
 const STATS_HEADER =
-  'Visitors per page from split lines; acted = first copy or outbound; conversion = acted / visitors';
+  'Visitors per page (split, browser ran the page script); acted = first copy or outbound; conversion = acted / visitors';
 
 // The phase-2 services/enquiry lines, all zero when the log has none.
 const STATS_ZERO_TAIL =
@@ -457,6 +457,9 @@ test('flow 10: stats.sh reports legacy three- and four-field lines only on the l
       visitorLine('b', 0, 0) + '\n' +
       'page a:  copies=        0  outbound=   0  (split event totals, for reference)\n' +
       'page b:  copies=        0  outbound=   0  (split event totals, for reference)\n' +
+      'page a:  pages served=  0  (first split views, script run or not; not part of the comparison)\n' +
+      'page b:  pages served=  0  (first split views, script run or not; not part of the comparison)\n' +
+      'first actions before the script check began: 0  (not part of the comparison)\n' +
       'page a:  direct views=  0  (not part of the comparison)\n' +
       'page b:  direct views=  0  (not part of the comparison)\n' +
       'page a:  bot views=     0  (not part of the comparison)\n' +
@@ -516,6 +519,9 @@ test('stats.sh handles missing and empty logs and the LOG_FILE variable', () => 
     visitorLine('b', 0, 0) + '\n' +
     'page a:  copies=        0  outbound=   0  (split event totals, for reference)\n' +
     'page b:  copies=        0  outbound=   0  (split event totals, for reference)\n' +
+    'page a:  pages served=  0  (first split views, script run or not; not part of the comparison)\n' +
+    'page b:  pages served=  0  (first split views, script run or not; not part of the comparison)\n' +
+    'first actions before the script check began: 0  (not part of the comparison)\n' +
     'page a:  direct views=  0  (not part of the comparison)\n' +
     'page b:  direct views=  0  (not part of the comparison)\n' +
     'page a:  bot views=     0  (not part of the comparison)\n' +
@@ -534,7 +540,7 @@ test('stats.sh handles missing and empty logs and the LOG_FILE variable', () => 
   assert.equal(emptyRun.status, 0, emptyRun.stderr);
   assert.equal(emptyRun.stdout, zero);
 
-  fs.writeFileSync(empty, '2026-11-21T12:00:00.000Z a view split first\n');
+  fs.writeFileSync(empty, '2026-11-21T12:00:00.000Z a seen split first\n');
   const viaEnv = runStats([], { LOG_FILE: empty });
   assert.equal(viaEnv.status, 0, viaEnv.stderr);
   assert.ok(viaEnv.stdout.includes(visitorLine('a', 1, 0)), 'LOG_FILE is honoured');
