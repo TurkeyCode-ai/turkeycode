@@ -170,7 +170,11 @@ export async function runReviseLoop(deps: LoopDeps, options: LoopOptions = {}): 
     const after = workingScore(attempt.report).shortfall;
 
     if (improved(attempt.report, best)) {
-      deps.log(`Kept: the working-set shortfall went from ${before.toFixed(2)} to ${after.toFixed(2)}.`);
+      // A change can also be kept when the pass rates tie and only the margins of error tightened.
+      // Saying the shortfall "went from 0.57 to 0.57" reads as a mistake, so say what happened.
+      deps.log(before.toFixed(2) === after.toFixed(2)
+        ? `Kept: the working-set shortfall is unchanged at ${after.toFixed(2)}, and the margins of error tightened.`
+        : `Kept: the working-set shortfall went from ${before.toFixed(2)} to ${after.toFixed(2)}.`);
       best = attempt.report;
       bestPath = attempt.markdownPath;
       kept++;

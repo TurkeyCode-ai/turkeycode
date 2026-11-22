@@ -141,6 +141,16 @@ describe('simulate/loop: keep or revert', () => {
     expect(h.head()).toBe('c1');
   });
 
+  it('says so plainly when a change is kept on a tie, instead of "from 0.00 to 0.00"', async () => {
+    // Both rates clear the threshold, so the shortfall is 0 before and after; only the interval tightened.
+    const h = harness({ simulations: [done(report({ read: 0.85 })), done(report({ read: 0.92 }), 'tighter.md')] });
+    const lines: string[] = [];
+    const result = await runReviseLoop({ ...h.deps, log: line => { lines.push(line); } }, { maxIterations: 1 });
+    expect(result.kept).toBe(1);
+    const kept = lines.find(l => l.startsWith('Kept:'));
+    expect(kept).toBe('Kept: the working-set shortfall is unchanged at 0.00, and the margins of error tightened.');
+  });
+
   it('reverts a change that did not improve the score, back to the exact commit', async () => {
     const h = harness({ simulations: [done(report({ read: 0.5 }), 'base.md'), done(report({ read: 0.45 })), done(report({ read: 0.5 }))] });
     const result = await runReviseLoop(h.deps);
