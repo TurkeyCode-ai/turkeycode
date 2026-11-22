@@ -53,6 +53,8 @@ scope (interactive) → specs.md
       → merge to main
       → next phase
   → POLISH PASS (default): repo-wide warning cleanup → re-verify build → merge
+  → SIMULATION (opt-in: --simulate): simulated visitors use the app → report
+      [--simulate-loop: revise → re-verify build → simulate again → keep or revert]
 ```
 
 ## Scoping (the prompt is the hard part)
@@ -152,7 +154,16 @@ src/
 │   ├── qa-fix.ts
 │   ├── code-review.ts
 │   ├── aar.ts
-│   └── polish.ts     # Repo-wide warning cleanup (defer-warnings pass)
+│   ├── polish.ts     # Repo-wide warning cleanup (defer-warnings pass)
+│   └── simulate-fix.ts # Revise after simulation (working-set results only)
+├── simulate/         # Simulated visitors (SDD). Runs the external `sdd` engine
+│   ├── index.ts      # runSimulation: skip checks, study, throwaway copy, report
+│   ├── generate.ts   # One session derives the study from specs.md
+│   ├── app.ts        # Throwaway Compose copy of the app (own port, own volumes)
+│   ├── engine.ts     # Finds and runs `sdd`, reads its report
+│   ├── workdir.ts    # Writes the engine's spec and persona files
+│   ├── loop.ts       # Revise loop decisions (keep/revert/stop), no I/O
+│   └── schemas.ts    # Study and report contracts, validators
 ├── github.ts         # GitHub/git integration
 ├── jira.ts           # Jira integration
 ├── audit.ts          # Audit log (phase events)
@@ -186,6 +197,8 @@ src/
 
 7. **Pluggable agent backends**: every session runs on an `AgentBackendSpec` (binary, flags, prompt delivery, env policy, billing classifiers, model tiers, capabilities). One backend per run, pinned in state.json; prompts adapt to capabilities (no Task tool → visual QA's blind review runs as a second fresh session). Phase→tier is shared; tier→model is per backend; `TURKEYCODE_MODEL(_PHASE)` overrides both.
 
+8. **Simulation is a measurement, not a gate**: `--simulate` runs the SDD engine (the separate `sdd-engine` package, found on PATH like an agent CLI) against a throwaway copy of the finished app and writes a report. It never fails a run: a missing engine, Docker or `claude` CLI is a skip. The study (visitors, questions, tasks, thresholds) is derived from `specs.md` by one session and lives in `~/.turkeycode/sim/<project>/`, **outside the repo**, so the held-back visitors are never in reach of a session that builds or revises the app. Only the report is written inside the project, with the held-back set as rates only. `--simulate-loop` adds revise iterations: the fix session sees working-set results only, a change that breaks the build is reverted before it is simulated, and a change is kept only if the working-set score improved. The scores are uncalibrated and every report says so.
+
 ## Environment Variables
 
 ```bash
@@ -196,6 +209,7 @@ TURKEYCODE_MODEL_BUILD=opus       # Per-phase model override (qa-fix -> TURKEYCO
 TURKEYCODE_USE_API_KEY=1          # Keep the vendor API key instead of the CLI login session
 GH_TOKEN=ghp_...                  # For private repos
 DIGITALOCEAN_ACCESS_TOKEN=dop_... # `turkeycode deploy`: your own DigitalOcean account (or `turkeycode login --token`)
+TURKEYCODE_SDD_BIN=/path/to/sdd   # `turkeycode simulate`: an SDD engine that is not on PATH
 GITHUB_OWNER=username-or-org      # For auto-creating repos
 JIRA_HOST=company.atlassian.net   # For Jira integration (REST API)
 JIRA_EMAIL=you@example.com        # Jira account email

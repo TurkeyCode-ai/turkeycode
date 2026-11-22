@@ -24,6 +24,26 @@ import {
 } from './constants';
 import { resolveBackendId, setActiveBackend } from './agents';
 
+/** --simulate and its two numbers, checked once for `run` and `resume`. */
+function simulateOptions(options: { simulate?: boolean; simulateLoop?: boolean; simulateRuns?: string; simulateBudgetUsd?: string }): {
+  simulate: boolean; simulateLoop: boolean; simulateRuns?: number; simulateBudgetUsd?: number;
+} {
+  const simulateRuns = options.simulateRuns === undefined ? undefined : Number(options.simulateRuns);
+  const simulateBudgetUsd = options.simulateBudgetUsd === undefined ? undefined : Number(options.simulateBudgetUsd);
+  if (simulateRuns !== undefined && (!Number.isInteger(simulateRuns) || simulateRuns < 1 || simulateRuns > 40)) {
+    console.error(`❌ --simulate-runs must be a whole number from 1 to 40 (got "${options.simulateRuns}").`);
+    process.exit(1);
+  }
+  if (simulateBudgetUsd !== undefined && !(simulateBudgetUsd > 0)) {
+    console.error(`❌ --simulate-budget-usd must be a number above 0 (got "${options.simulateBudgetUsd}").`);
+    process.exit(1);
+  }
+  // Giving a number means you want the simulation.
+  const simulateLoop = !!options.simulateLoop;
+  const simulate = !!options.simulate || simulateLoop || simulateRuns !== undefined || simulateBudgetUsd !== undefined;
+  return { simulate, simulateLoop, simulateRuns, simulateBudgetUsd };
+}
+
 /**
  * Resolve and activate the agent backend for this command.
  * Precedence: --agent flag > TURKEYCODE_AGENT > state.json pin > claude.
@@ -90,6 +110,10 @@ program
   .option('--no-push', 'Skip git push (use for local-only repos or no_push remotes)')
   .option('--no-pr', 'Skip gh pr create (implied by --no-push)')
   .option('--aar', 'Generate a per-phase After-Action Report (extra LLM session per phase; off by default)')
+  .option('--simulate', 'After the build, simulated visitors use the app and it is scored against the spec (report only; needs the sdd-engine package)')
+  .option('--simulate-loop', 'After simulating, revise the app and simulate again; a change is kept only if the score improved and the build still passes (opt-in)')
+  .option('--simulate-runs <n>', 'Visits per visitor and screen size for --simulate (default 10)')
+  .option('--simulate-budget-usd <n>', 'Spend cap on simulations, at list prices (default 5, or 20 for the whole --simulate-loop)')
   .option('--strict-phases', 'Gate every phase on ZERO warnings (old behavior). Disables the end-of-build polish pass.')
   .option('--type <type>', `Force project type (skips auto-detection): ${PROJECT_TYPES.filter(t => t !== 'unknown').join(', ')}`)
   .option('--base <branch>', 'Base branch override (e.g. develop). Defaults to detected main/master.')
@@ -200,6 +224,7 @@ program
       aar: options.aar,
       polish,
       projectType,
+      ...simulateOptions(options),
       base: options.base,
       feature: options.feature
     });
@@ -457,6 +482,10 @@ program
   .option('-v, --verbose', 'Verbose output')
   .option('-w, --allow-warnings', 'Allow warnings in QA (only blockers must be zero)')
   .option('--aar', 'Generate a per-phase After-Action Report (extra LLM session per phase; off by default)')
+  .option('--simulate', 'After the build, simulated visitors use the app and it is scored against the spec (report only; needs the sdd-engine package)')
+  .option('--simulate-loop', 'After simulating, revise the app and simulate again; a change is kept only if the score improved and the build still passes (opt-in)')
+  .option('--simulate-runs <n>', 'Visits per visitor and screen size for --simulate (default 10)')
+  .option('--simulate-budget-usd <n>', 'Spend cap on simulations, at list prices (default 5, or 20 for the whole --simulate-loop)')
   .option('--strict-phases', 'Gate every phase on ZERO warnings (old behavior). Disables the end-of-build polish pass.')
   .option('--no-push', 'Skip git push (use for local-only repos or no_push remotes)')
   .option('--no-pr', 'Skip gh pr create (implied by --no-push)')
@@ -495,6 +524,7 @@ program
       verbose: options.verbose,
       aar: options.aar,
       polish,
+      ...simulateOptions(options),
       noPush: options.push === false,
       noPr: options.pr === false,
       base: options.base,
@@ -550,6 +580,71 @@ program
     console.log(`  Stack:  ${detection.stack}`);
 
     await runLocal(cwd, detection);
+  });
+
+// ==================== SIMULATE COMMAND ====================
+program
+  .command('simulate')
+  .description('Simulated visitors use the built app and it is scored against the spec (report only; needs the sdd-engine package)')
+  .option('--runs <n>', 'Visits per visitor and screen size', '10')
+  .option('--budget-usd <n>', 'Stop starting new visits once this much is spent, at list prices', '5')
+  .option('--regenerate', 'Design the study again from the spec (new visitors, questions and tasks)')
+  .option('-e, --env <file>', 'Environment for the throwaway copy of the app (it does not get the project .env)')
+  .option('-a, --agent <id>', 'Agent backend for the session that designs the study')
+  .option('--verbose', 'Show agent session output')
+  .action(async (options) => {
+    activateAgent(options.agent, canResume() ? loadState().agent : undefined);
+    const { createSpawner } = await import('./spawner');
+    const { defaultDeps, renderSummary, runSimulation } = await import('./simulate');
+    const { parseEnvFile } = await import('./deploy/droplet');
+    const { existsSync, readFileSync } = await import('fs');
+
+    const runs = Number(options.runs);
+    const budgetUsd = Number(options.budgetUsd);
+    if (!Number.isInteger(runs) || runs < 1 || runs > 40) {
+      console.error(`❌ --runs must be a whole number from 1 to 40 (got "${options.runs}").`);
+      process.exit(1);
+    }
+    if (!(budgetUsd > 0)) {
+      console.error(`❌ --budget-usd must be a number above 0 (got "${options.budgetUsd}").`);
+      process.exit(1);
+    }
+    let env: Record<string, string> | undefined;
+    if (options.env) {
+      if (!existsSync(options.env)) {
+        console.error(`❌ Env file not found: ${options.env}`);
+        process.exit(1);
+      }
+      env = parseEnvFile(readFileSync(options.env, 'utf-8'));
+    }
+
+    console.log('');
+    console.log('╔══════════════════════════════════════════════════════════╗');
+    console.log('║                  TURKEY SIMULATE                         ║');
+    console.log('╚══════════════════════════════════════════════════════════╝');
+    console.log('');
+
+    const outcome = await runSimulation(
+      process.cwd(),
+      { runsPerPersona: runs, budgetUsd, regenerate: options.regenerate, env },
+      defaultDeps(createSpawner({ verbose: options.verbose }))
+    );
+
+    console.log('');
+    if (outcome.status === 'skipped') {
+      console.log(`  Simulation skipped. ${outcome.reason}`);
+      console.log('');
+      return;
+    }
+    if (outcome.status === 'failed') {
+      console.error(`  ❌ Simulation failed. ${outcome.reason}`);
+      console.log('');
+      process.exit(1);
+    }
+    for (const line of renderSummary(outcome.report)) console.log(line);
+    console.log('');
+    console.log(`  Report: ${outcome.markdownPath}`);
+    console.log('');
   });
 
 // ==================== DEPLOY COMMAND ====================
