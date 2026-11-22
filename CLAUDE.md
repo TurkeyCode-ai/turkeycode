@@ -48,7 +48,7 @@ scope (interactive) → specs.md
       → quick check
       → QA (smoke + functional||visual + verdict)   [blockers-only gate by default]
       → fix loop if needed
-      → code review
+      → code review   [critical findings → one fix session → QA again; kept only if QA passes]
       → AAR (opt-in: --aar)
       → merge to main
       → next phase
@@ -170,6 +170,7 @@ src/
 ├── audit.ts          # Audit log (phase events, one session_completed record per session)
 ├── run-summary.ts    # End-of-run table: time, tokens and cost per stage, from the audit log
 ├── run-lock.ts       # One run per project folder (.turkey/run.lock, stale locks taken over)
+├── review-findings.ts # Reads the code review's findings file; decides fix / none / already attempted
 ├── constants.ts      # Timeouts, paths
 ├── godot-capture.ts  # Deterministic game frame capture
 └── quick-check.ts    # Fast pre-QA validation

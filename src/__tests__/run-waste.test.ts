@@ -130,11 +130,15 @@ describe('polish runs only when a phase recorded warnings', () => {
     expect(countFinalVerdictWarnings(dir)).toBeUndefined();
   });
 
-  it('skips only when every phase recorded zero', () => {
-    expect(noWarningsRecorded([{ qaWarnings: 0 }, { qaWarnings: 0 }])).toBe(true);
-    expect(noWarningsRecorded([{ qaWarnings: 0 }, { qaWarnings: 2 }])).toBe(false);
+  it('skips only when every phase recorded zero from both QA and the code review', () => {
+    const clean = { qaWarnings: 0, reviewWarnings: 0 };
+    expect(noWarningsRecorded([clean, clean])).toBe(true);
+    expect(noWarningsRecorded([clean, { qaWarnings: 2, reviewWarnings: 0 }])).toBe(false);
+    // A review warning is a warning: polish runs.
+    expect(noWarningsRecorded([clean, { qaWarnings: 0, reviewWarnings: 1 }])).toBe(false);
     // A phase with no record keeps the polish pass.
-    expect(noWarningsRecorded([{ qaWarnings: 0 }, {}])).toBe(false);
+    expect(noWarningsRecorded([clean, {}])).toBe(false);
+    expect(noWarningsRecorded([clean, { qaWarnings: 0 }])).toBe(false);
     expect(noWarningsRecorded([])).toBe(false);
   });
 });

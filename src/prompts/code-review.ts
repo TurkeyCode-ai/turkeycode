@@ -15,6 +15,7 @@ export function buildCodeReviewPrompt(
   const phaseName = phase?.name || `Phase ${phaseNumber}`;
 
   const reviewPath = `${REVIEWS_DIR}/phase-${phaseNumber}.md`;
+  const findingsPath = `${REVIEWS_DIR}/phase-${phaseNumber}.json`;
 
   // Get deliverables for context
   const deliverablesSummary = phase
@@ -146,6 +147,28 @@ Create this file with your review:
 
 [Reasoning for verdict]
 \`\`\`
+
+---
+
+## OUTPUT: ${findingsPath}
+
+Your findings are acted on, so also write them to this file as JSON. It must agree with the report above: the same verdict, every Critical finding, every Warning. Leave Suggestions out.
+
+\`\`\`json
+{
+  "verdict": "APPROVE",
+  "critical": [
+    { "file": "path/to/file.ts:42", "issue": "what is wrong", "impact": "what goes wrong for a user", "suggestion": "how to fix it" }
+  ],
+  "warnings": [
+    { "file": "path/to/file.ts:10", "issue": "what is wrong", "suggestion": "how to fix it" }
+  ]
+}
+\`\`\`
+
+Use empty arrays when there are none.
+
+**What counts as Critical.** Each Critical finding sends this phase back for a fix session and a full QA pass, so reserve it for a defect you can point to in the diff that would give a user wrong behaviour, lose or corrupt data, open a security hole, or break a flow this phase was meant to deliver. Style, naming, structure, missing nice-to-have tests and "could be cleaner" are Warnings or Suggestions, never Critical. If you are not sure the defect is real, it is a Warning.
 
 ---
 

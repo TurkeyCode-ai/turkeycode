@@ -94,6 +94,10 @@ export interface BuildPhase {
   qaTime?: string;
   /** Warnings the passing QA verdict still listed; undefined = not recorded */
   qaWarnings?: number;
+  /** Warnings the code review listed; undefined = not recorded */
+  reviewWarnings?: number;
+  /** The review's critical findings were sent to a fix session (once per phase) */
+  reviewFixAttempted?: boolean;
   /** Total duration */
   totalTime?: string;
   /** When phase started */
