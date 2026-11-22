@@ -27,6 +27,11 @@ export function buildAgentArgs(
 ): string[] {
   const args = [...spec.baseArgs];
 
+  // Only when the spawner can also read the format these switch on.
+  if (spec.usageArgs?.length && spec.outputFormat) {
+    args.push(...spec.usageArgs);
+  }
+
   if (options.model && spec.modelFlag) {
     args.push(spec.modelFlag, options.model);
   }

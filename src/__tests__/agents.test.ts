@@ -43,12 +43,23 @@ describe('buildAgentArgs', () => {
     expect(buildAgentArgs(spec, { blind: true })).not.toContain('--strict-mcp-config');
   });
 
-  it('claude arg vector is exactly what the spawner always passed (regression lock)', () => {
+  it('usage args are passed only when the backend also declares the format they switch on', () => {
+    const base = { ...CLAUDE_BACKEND, baseArgs: ['--print'] };
+    expect(buildAgentArgs({ ...base, usageArgs: ['--usage'], outputFormat: 'claude-stream-json' }, {}))
+      .toEqual(['--print', '--usage']);
+    expect(buildAgentArgs({ ...base, usageArgs: ['--usage'], outputFormat: undefined }, {}))
+      .toEqual(['--print']);
+    expect(buildAgentArgs({ ...base, usageArgs: undefined, outputFormat: undefined }, {}))
+      .toEqual(['--print']);
+  });
+
+  it('claude arg vector: print mode, full autonomy, and the usage-reporting output format (regression lock)', () => {
     expect(buildAgentArgs(CLAUDE_BACKEND, { model: 'sonnet' })).toEqual([
       '--print',
       '--dangerously-skip-permissions',
       '--verbose',
       '--input-format', 'text',
+      '--output-format', 'stream-json',
       '--model', 'sonnet',
     ]);
   });
@@ -59,6 +70,7 @@ describe('buildAgentArgs', () => {
       '--dangerously-skip-permissions',
       '--verbose',
       '--input-format', 'text',
+      '--output-format', 'stream-json',
       '--mcp-config', '/tmp/mcp.json',
     ]);
   });

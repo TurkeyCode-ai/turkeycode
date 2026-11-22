@@ -19,7 +19,9 @@ import {
   detectAgentSignals,
   getActiveBackend,
   CLAUDE_BACKEND,
+  createUsageCollector,
 } from './agents';
+import { auditSession, stageOfSession } from './audit';
 
 const DEFAULT_MAX_CONCURRENT = 3;
 
@@ -160,6 +162,7 @@ export class Spawner {
       model,
       mcpConfig = process.env.TURKEYCODE_MCP_CONFIG,
       blind = false,
+      stage,
     } = options;
     const backend = this.backend;
 
@@ -179,6 +182,13 @@ export class Spawner {
       let doneFileDetected = false;
       let rateLimited = false;
       let creditExhausted = false;
+      let timedOut = false;
+      // A backend that reports usage writes events, not plain text, to stdout:
+      // the collector turns them back into the reply text plus what was used.
+      const collector = createUsageCollector(
+        backend.usageArgs?.length ? backend.outputFormat : undefined
+      );
+      let pendingLine = '';
 
       // Scan a chunk of output for rate-limit / credit-exhaustion signals.
       const scanForLimits = (text: string) => {
@@ -275,12 +285,14 @@ export class Spawner {
 
       // Primary timeout
       const timeoutHandle = setTimeout(() => {
+        timedOut = true;
         killProcess('Timeout reached');
       }, timeoutMs);
 
       // Watchdog: check elapsed time every 30s in case setTimeout drifts under load
       const watchdog = setInterval(() => {
         if (Date.now() - startTime > timeoutMs + 30000) {
+          timedOut = true;
           killProcess('Watchdog timeout reached');
         }
       }, 30000);
@@ -309,12 +321,24 @@ export class Spawner {
       // Collect stdout
       proc.stdout?.on('data', (data: Buffer) => {
         const text = data.toString();
-        stdout += text;
-
-        scanForLimits(text);
-
-        if (this.verbose) {
-          process.stdout.write(text);
+        if (!collector) {
+          stdout += text;
+          scanForLimits(text);
+          if (this.verbose) {
+            process.stdout.write(text);
+          }
+          return;
+        }
+        // Event stream: handle whole lines only. Limits are scanned on what a
+        // plain run would have printed (non-event lines here, the reply text
+        // at the end), never on tool output, which is the app's own content.
+        pendingLine += text;
+        const lines = pendingLine.split('\n');
+        pendingLine = lines.pop() ?? '';
+        for (const line of lines) {
+          const shown = collector.push(line);
+          if (shown === line) scanForLimits(line);
+          if (shown !== null && this.verbose) process.stdout.write(shown + '\n');
         }
       });
 
@@ -346,6 +370,18 @@ export class Spawner {
         if (shuttingDown) return;
         const durationMs = Date.now() - startTime;
 
+        let usage: SpawnResult['usage'];
+        if (collector) {
+          if (pendingLine) {
+            const shown = collector.push(pendingLine);
+            if (shown === pendingLine) scanForLimits(pendingLine);
+          }
+          const collected = collector.finish();
+          stdout = collected.text;
+          usage = collected.usage;
+          scanForLimits(stdout);
+        }
+
         // Exit code: 0 if done file was detected (task succeeded), 124 for timeout, otherwise actual code
         const exitCode = doneFileDetected ? 0 : killed ? 124 : (code ?? 1);
 
@@ -363,6 +399,23 @@ export class Spawner {
           }
         }
 
+        // A session killed for time after its done file appeared did finish.
+        const ranOutOfTime = timedOut && !doneFileDetected;
+        auditSession(
+          {
+            session: sessionName,
+            stage: stage ?? stageOfSession(sessionName),
+            backend: backend.id,
+            model: backend.modelFlag ? model : undefined,
+            exitCode,
+            timedOut: ranOutOfTime,
+            rateLimited: rateLimited && !doneFileDetected,
+            creditExhausted,
+            usage,
+          },
+          durationMs
+        );
+
         resolve({
           exitCode,
           stdout,
@@ -370,7 +423,9 @@ export class Spawner {
           durationMs,
           // A done file means the work finished. Retrying would only discard it.
           rateLimited: rateLimited && !doneFileDetected,
-          creditExhausted
+          creditExhausted,
+          timedOut: ranOutOfTime,
+          usage
         });
       });
 

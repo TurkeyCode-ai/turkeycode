@@ -164,6 +164,8 @@ export function advancePhase(state: ProjectState): boolean {
       name: currentPhase.name,
       completedAt: new Date().toISOString(),
       buildTime: currentPhase.buildTime || '',
+      qaTime: currentPhase.qaTime,
+      totalTime: currentPhase.totalTime,
       prNumber: currentPhase.prNumber,
       aarPath: `docs/aar/phase-${currentPhase.number}.md`
     });
