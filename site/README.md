@@ -18,9 +18,22 @@ plain text log. No analytics service, no database, no client storage.
 | `/contact/` | The contact form, served to everyone the same (no cookie set, no view counted) |
 | `POST /contact` | The form handler: validate, save, try to email, redirect to the thanks page |
 | `/contact/thanks/` | The confirmation page |
+| `/sdd/` | The Simulation Driven Development page, served to everyone the same |
+| `/sdd/whitepaper/` | The SDD white paper |
+| `/sdd/turkeyman.mp4` | The Turkeyman video (video/mp4, HTTP Range supported) |
+| `/sdd/turkeyman-poster.jpg` | The video's poster image |
 
 Video and poster assets are served under `/a/`, `/b/` and at the root, with
 HTTP Range support.
+
+### The SDD pages
+
+`/sdd/`, `/sdd/whitepaper/`, `/sdd/turkeyman.mp4` and
+`/sdd/turkeyman-poster.jpg` are outside the split test and are not counted:
+serving them never sets or reads the `tc_ab` cookie, carries no tracker and
+writes nothing to the event log, so `stats.sh` output does not change however
+often they are visited. The bare forms `/sdd` and `/sdd/whitepaper` redirect
+301 to the trailing-slash forms.
 
 ## Build and run with Docker
 

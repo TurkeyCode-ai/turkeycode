@@ -33,6 +33,15 @@ const FOOTER_LINK_B =
 const FOOTER_LINK_WRITEUP =
   ' · <a href="/contact/">Professional services</a>';
 
+// The SDD-phase additions: one About SDD footer link per page, after the
+// Professional services link, with the anchor itself identical everywhere.
+const FOOTER_LINK_SDD_A =
+  ' &nbsp;/&nbsp; <a href="/sdd/">About SDD</a>';
+const FOOTER_LINK_SDD_B =
+  '    <p><a href="/sdd/">About SDD</a></p>\n';
+const FOOTER_LINK_SDD_WRITEUP =
+  ' · <a href="/sdd/">About SDD</a>';
+
 // Remove each chunk from html, throwing unless it appears exactly once.
 function strip(html, chunks) {
   for (const chunk of chunks) {
@@ -54,5 +63,8 @@ module.exports = {
   FOOTER_LINK_A,
   FOOTER_LINK_B,
   FOOTER_LINK_WRITEUP,
+  FOOTER_LINK_SDD_A,
+  FOOTER_LINK_SDD_B,
+  FOOTER_LINK_SDD_WRITEUP,
   strip,
 };

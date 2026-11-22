@@ -342,6 +342,7 @@ test('page B contains design wording in order, allowed links only, no em dash', 
       href.startsWith('#') ||
       href === '/how-it-was-tested/' ||
       href === '/contact/' ||
+      href === '/sdd/' ||
       href.startsWith('data:image/svg+xml') ||
       href.startsWith('https://turkeycode.ai') ||
       href.startsWith('https://github.com/TurkeyCode-ai') ||
@@ -376,6 +377,7 @@ test('server.js has no em dash and site/a is its source of truth plus only the s
         additions.SERVICES_CSS,
         additions.SERVICES_BLOCK,
         additions.FOOTER_LINK_A,
+        additions.FOOTER_LINK_SDD_A,
       ]),
       fs.readFileSync(path.join(ref, 'index.html'), 'utf8'),
       'site/a/index.html is the reference plus only the services additions'

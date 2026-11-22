@@ -69,6 +69,11 @@ const SERVED = {
 // with no tracker injected, no cookie and no event log line.
 const WRITEUP = load('how-it-was-tested/index.html');
 
+// The SDD page and the white paper are outside the test in exactly the same
+// way: no tracker, no cookie, no Vary: Cookie and no event log line.
+const SDD_PAGE = load('sdd/index.html');
+const SDD_WHITEPAPER = load('sdd/whitepaper/index.html');
+
 // The contact pages are served the same to every visitor: no cookie is ever
 // set or advanced, no Vary: Cookie, and no view line is logged.
 const CONTACT_TEMPLATE = load('contact/index.html').toString('utf8');
@@ -87,6 +92,8 @@ const ASSETS = {
   '/b/turkey-poster.jpg': { body: POSTER.b, type: 'image/jpeg' },
   '/turkey.mp4': { body: VIDEO.b, type: 'video/mp4' },
   '/turkey-poster.jpg': { body: POSTER.b, type: 'image/jpeg' },
+  '/sdd/turkeyman.mp4': { body: load('sdd/turkeyman.mp4'), type: 'video/mp4' },
+  '/sdd/turkeyman-poster.jpg': { body: load('sdd/turkeyman-poster.jpg'), type: 'image/jpeg' },
 };
 
 // --- Crawler detection --------------------------------------------------------
@@ -229,17 +236,18 @@ function serveHtml(req, res, page, setCookie, variant, reach, novelty) {
   if (!req.headers.range) logEvent(page, 'view', reach, novelty);
 }
 
-// The response never varies (no Vary: Cookie) and nothing is logged.
-function serveWriteup(req, res) {
+// Pages outside the split test (the write-up, the SDD page and the white
+// paper): the response never varies (no Vary: Cookie) and nothing is logged.
+function serveUntracked(req, res, body) {
   res.writeHead(200, {
     'Content-Type': 'text/html; charset=utf-8',
-    'Content-Length': WRITEUP.length,
+    'Content-Length': body.length,
     'X-Content-Type-Options': 'nosniff',
     'Cache-Control': 'no-store',
     'Content-Security-Policy': CSP,
   });
   if (req.method === 'HEAD') return res.end();
-  res.end(WRITEUP);
+  res.end(body);
 }
 
 // --- Event endpoint ----------------------------------------------------------
@@ -800,7 +808,14 @@ const server = http.createServer((req, res) => {
     res.writeHead(301, { Location: '/how-it-was-tested/', 'Content-Length': 0 });
     return res.end();
   }
-  if (pathname === '/how-it-was-tested/') return serveWriteup(req, res);
+  if (pathname === '/how-it-was-tested/') return serveUntracked(req, res, WRITEUP);
+
+  if (pathname === '/sdd' || pathname === '/sdd/whitepaper') {
+    res.writeHead(301, { Location: pathname + '/', 'Content-Length': 0 });
+    return res.end();
+  }
+  if (pathname === '/sdd/') return serveUntracked(req, res, SDD_PAGE);
+  if (pathname === '/sdd/whitepaper/') return serveUntracked(req, res, SDD_WHITEPAPER);
 
   const asset = ASSETS[pathname];
   if (asset) return serveAsset(req, res, asset);

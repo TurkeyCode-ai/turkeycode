@@ -9,6 +9,6 @@
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/server.test.js test/events.test.js test/writeup.test.js test/split.test.js test/reach.test.js test/stats.test.js test/contact.test.js test/services.test.js"
+    "test": "node --test test/server.test.js test/events.test.js test/writeup.test.js test/split.test.js test/reach.test.js test/stats.test.js test/contact.test.js test/services.test.js test/sdd.test.js"
   }
 }

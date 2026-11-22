@@ -243,6 +243,7 @@ test('flow 8: pages A and B carry no write-up wording: page A is the reference p
         additions.SERVICES_CSS,
         additions.SERVICES_BLOCK,
         additions.FOOTER_LINK_A,
+        additions.FOOTER_LINK_SDD_A,
       ]),
       fs.readFileSync(ref, 'utf8'),
       'site/a/index.html is the reference plus only the services additions'

@@ -166,6 +166,7 @@ test('the pages differ from their pre-phase fixtures only by the block, its CSS 
         additions.SERVICES_CSS,
         additions.SERVICES_BLOCK,
         additions.FOOTER_LINK_A,
+        additions.FOOTER_LINK_SDD_A,
       ]),
       fs.readFileSync(refA, 'utf8'),
       'page A minus the additions is the reference site'
@@ -176,13 +177,14 @@ test('the pages differ from their pre-phase fixtures only by the block, its CSS 
       additions.SERVICES_CSS,
       additions.SERVICES_BLOCK,
       additions.FOOTER_LINK_B,
+      additions.FOOTER_LINK_SDD_B,
     ]),
     fs.readFileSync(path.join(__dirname, 'fixtures', 'b-before-services.html'), 'utf8'),
     'page B minus the additions is the stored fixture'
   );
   const writeup = readSite('how-it-was-tested/index.html');
   assert.equal(
-    additions.strip(writeup, [additions.FOOTER_LINK_WRITEUP]),
+    additions.strip(writeup, [additions.FOOTER_LINK_WRITEUP, additions.FOOTER_LINK_SDD_WRITEUP]),
     fs.readFileSync(path.join(__dirname, 'fixtures', 'writeup-before-services.html'), 'utf8'),
     'the write-up minus the footer link is the stored fixture'
   );
