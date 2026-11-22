@@ -1,3 +1,5 @@
+import type { SessionUsage } from './agents/usage';
+
 /**
  * Type definitions for turkeycode
  * Phase-based orchestrator model
@@ -225,6 +227,10 @@ export interface CompletedPhase {
   name: string;
   completedAt: string;
   buildTime: string;
+  /** QA attempts plus the fix sessions between them. */
+  qaTime?: string;
+  /** Whole phase, in the process that finished it. */
+  totalTime?: string;
   prNumber?: number;
   aarPath?: string;
 }
@@ -283,4 +289,8 @@ export interface SpawnResult {
    * the caller should fail fast with guidance to enable "extra usage" or wait for reset.
    */
   creditExhausted?: boolean;
+  /** The session was killed for running past its timeout. */
+  timedOut?: boolean;
+  /** Tokens and cost, when the backend reports them. */
+  usage?: SessionUsage;
 }

@@ -12,6 +12,8 @@
  * can run shell commands and write files can hold up that contract.
  */
 
+import type { AgentOutputFormat } from './usage';
+
 /** What a backend's CLI/runtime can do, consulted by prompt builders. */
 export interface AgentCapabilities {
   /** Can spawn subagents from inside a session (Claude Code's Task tool). */
@@ -92,6 +94,14 @@ export interface AgentBackendSpec {
    * so a reviewer that can reach it isn't blind. Omit = no such flag exists.
    */
   blindFlags?: string[];
+  /**
+   * Extra args that make the CLI report what a session used, and the format
+   * its stdout then takes. Both or neither: with them the spawner reads token
+   * counts and cost from the output; without them the backend runs exactly
+   * as before and its sessions record time only.
+   */
+  usageArgs?: string[];
+  outputFormat?: AgentOutputFormat;
   env: AgentEnvPolicy;
   /** Args for the preflight version check (['--version']). */
   versionArgs: string[];
@@ -158,4 +168,9 @@ export interface SpawnSessionOptions {
   mcpConfig?: string;
   /** Reviewer session: no MCP servers at all, so it can't recall how the work was built. */
   blind?: boolean;
+  /**
+   * Stage this session belongs to in the run summary ('build', 'qa', ...).
+   * Defaults to one derived from the session name (see stageOfSession).
+   */
+  stage?: string;
 }

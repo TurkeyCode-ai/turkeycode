@@ -14,6 +14,7 @@ import { join } from 'path';
 import { createOrchestrator } from './orchestrator';
 import { loadState, resetState, canResume } from './state';
 import { createGates } from './gates';
+import { summarizeAuditLog, formatRunSummary } from './run-summary';
 import { runScopeSession } from './scope-session';
 import {
   setStrictQA,
@@ -21,6 +22,7 @@ import {
   SPECS_FILE,
   SCOPE_DONE,
   SCOPE_DECISIONS_FILE,
+  AUDIT_LOG,
 } from './constants';
 import { resolveBackendId, setActiveBackend } from './agents';
 
@@ -299,6 +301,14 @@ program
       console.log(`  Backend: ${state.tech.backend || '(not set)'}`);
       console.log(`  Frontend: ${state.tech.frontend || '(not set)'}`);
       console.log(`  Database: ${state.tech.database || '(not set)'}`);
+    }
+
+    // Where the most recent run spent its time, tokens and money so far.
+    // Useful mid-run and after a failed run, which never prints its own.
+    const summary = summarizeAuditLog(AUDIT_LOG);
+    if (summary.total.sessions > 0) {
+      console.log('');
+      for (const line of formatRunSummary(summary)) console.log(line);
     }
 
     console.log('');

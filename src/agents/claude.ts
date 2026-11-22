@@ -19,6 +19,10 @@ export const CLAUDE_BACKEND: AgentBackendSpec = {
   modelFlag: '--model',
   mcpConfigFlag: '--mcp-config',
   blindFlags: ['--strict-mcp-config'],
+  // One JSON event per line, ending in a result event with the session's
+  // token totals and cost (needs --verbose, which baseArgs already passes).
+  usageArgs: ['--output-format', 'stream-json'],
+  outputFormat: 'claude-stream-json',
   env: {
     apiKeyVar: 'ANTHROPIC_API_KEY',
     // Default to the Max/Pro login session in ~/.claude; TURKEYCODE_USE_API_KEY=1

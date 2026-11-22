@@ -138,6 +138,7 @@ src/
 │   ├── types.ts      # AgentBackendSpec, capabilities, PHASE_TIERS, SpawnSessionOptions
 │   ├── spawn-config.ts # Pure arg/env builders, classifiers, resolveModelForPhase
 │   ├── registry.ts   # Built-ins + ~/.turkeycode/agents.yaml, active-backend global
+│   ├── usage.ts      # Reads tokens and cost from a backend's output (claude: stream-json)
 │   └── claude.ts, codex.ts, gemini.ts, opencode.ts   # Built-in specs
 ├── gates.ts          # Artifact validation (plan, build, QA gates)
 ├── state.ts          # State management (phases, not tickets)
@@ -166,7 +167,8 @@ src/
 │   └── schemas.ts    # Study and report contracts, validators
 ├── github.ts         # GitHub/git integration
 ├── jira.ts           # Jira integration
-├── audit.ts          # Audit log (phase events)
+├── audit.ts          # Audit log (phase events, one session_completed record per session)
+├── run-summary.ts    # End-of-run table: time, tokens and cost per stage, from the audit log
 ├── constants.ts      # Timeouts, paths
 ├── godot-capture.ts  # Deterministic game frame capture
 └── quick-check.ts    # Fast pre-QA validation

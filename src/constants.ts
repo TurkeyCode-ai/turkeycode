@@ -14,6 +14,7 @@ import {
 export const STATE_DIR = '.turkey';
 export const STATE_FILE = `${STATE_DIR}/state.json`;
 export const AUDIT_LOG = `${STATE_DIR}/audit.log`;
+export const RUN_SUMMARY_FILE = `${STATE_DIR}/run-summary.json`;
 
 // Scope artifacts (interactive "How I Scope" correction loop — runs before research)
 export const REFERENCE_DIR = `${STATE_DIR}/reference`;
