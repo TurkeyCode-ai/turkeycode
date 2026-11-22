@@ -105,7 +105,7 @@ Each phase goes through:
 
 The end state is always ZERO warnings — the question is *when* they get fixed.
 
-- **DEFER (default)** — phases gate on **blockers only**, so a functionally-correct phase merges immediately without stalling on lint/style. Warnings accumulate, then a single **polish pass** after the last phase fixes them all coherently across the repo and **re-verifies the build** (deterministic quick-check) before merging. The re-verify is what keeps "perfect" honest — a cleanup that breaks compilation/boot is reverted, never merged. Stubborn warnings never fail the run (the build already passed functional QA per phase); they're logged and the verified-safe cleanup is merged anyway.
+- **DEFER (default)** — phases gate on **blockers only**, so a functionally-correct phase merges immediately without stalling on lint/style. Warnings accumulate, then a single **polish pass** after the last phase fixes them all coherently across the repo and **re-verifies the build** (deterministic quick-check) before merging. The re-verify is what keeps "perfect" honest — a cleanup that breaks compilation/boot is reverted, never merged. Stubborn warnings never fail the run (the build already passed functional QA per phase); they're logged and the verified-safe cleanup is merged anyway. The polish pass is skipped when every phase's passing QA verdict recorded zero warnings.
 - **`--strict-phases`** — old behavior: every phase gated on ZERO warnings (blockers AND warnings), no polish pass.
 - **`--allow-warnings` / `-w`** — blockers only per phase, warnings left as-is, no polish.
 
@@ -169,6 +169,7 @@ src/
 ├── jira.ts           # Jira integration
 ├── audit.ts          # Audit log (phase events, one session_completed record per session)
 ├── run-summary.ts    # End-of-run table: time, tokens and cost per stage, from the audit log
+├── run-lock.ts       # One run per project folder (.turkey/run.lock, stale locks taken over)
 ├── constants.ts      # Timeouts, paths
 ├── godot-capture.ts  # Deterministic game frame capture
 └── quick-check.ts    # Fast pre-QA validation

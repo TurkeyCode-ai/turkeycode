@@ -23,6 +23,15 @@ export const CLAUDE_BACKEND: AgentBackendSpec = {
   // token totals and cost (needs --verbose, which baseArgs already passes).
   usageArgs: ['--output-format', 'stream-json'],
   outputFormat: 'claude-stream-json',
+  // The probe needs no tools, MCP servers, skills or default instructions.
+  // Measured on one model: 727 tokens loaded instead of about 28,000.
+  probeArgs: [
+    '--tools', '',
+    '--system-prompt', 'Reply as asked.',
+    '--strict-mcp-config',
+    '--disable-slash-commands',
+    '--no-session-persistence',
+  ],
   env: {
     apiKeyVar: 'ANTHROPIC_API_KEY',
     // Default to the Max/Pro login session in ~/.claude; TURKEYCODE_USE_API_KEY=1

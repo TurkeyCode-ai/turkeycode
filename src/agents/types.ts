@@ -102,6 +102,13 @@ export interface AgentBackendSpec {
    */
   usageArgs?: string[];
   outputFormat?: AgentOutputFormat;
+  /**
+   * Extra args for the startup probe: a one-word reply that only has to prove
+   * the model answers. A CLI loads tens of thousands of tokens of tools and
+   * instructions into every session, billed at the probed model's rate; these
+   * switch that off for the probe. Omit = probe like any other session.
+   */
+  probeArgs?: string[];
   env: AgentEnvPolicy;
   /** Args for the preflight version check (['--version']). */
   versionArgs: string[];
@@ -168,6 +175,8 @@ export interface SpawnSessionOptions {
   mcpConfig?: string;
   /** Reviewer session: no MCP servers at all, so it can't recall how the work was built. */
   blind?: boolean;
+  /** Startup probe: add the backend's probeArgs (a session that needs no tools). */
+  probe?: boolean;
   /**
    * Stage this session belongs to in the run summary ('build', 'qa', ...).
    * Defaults to one derived from the session name (see stageOfSession).

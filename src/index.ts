@@ -14,6 +14,7 @@ import { join } from 'path';
 import { createOrchestrator } from './orchestrator';
 import { loadState, resetState, canResume } from './state';
 import { createGates } from './gates';
+import { holdRunLockOrExit } from './run-lock';
 import { summarizeAuditLog, formatRunSummary } from './run-summary';
 import { runScopeSession } from './scope-session';
 import {
@@ -215,6 +216,9 @@ program
         console.log('');
       }
     }
+
+    // One run per folder: a second orchestrator here would repeat every session.
+    holdRunLockOrExit(process.cwd(), 'run');
 
     const orchestrator = createOrchestrator({
       verbose: options.verbose,
@@ -529,6 +533,9 @@ program
     console.log(`Resuming from phase: ${state.currentPhase}`);
     console.log(`Build Phase: ${state.currentBuildPhaseNumber}`);
     console.log('');
+
+    // One run per folder: resuming a run that is still alive would double it.
+    holdRunLockOrExit(process.cwd(), 'resume');
 
     const orchestrator = createOrchestrator({
       verbose: options.verbose,
