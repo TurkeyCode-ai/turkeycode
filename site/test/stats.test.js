@@ -37,9 +37,9 @@ const conv = (acted, vis) =>
   vis > 0 ? ((acted * 100) / vis).toFixed(1) + '%' : '0.0%';
 
 const PLAIN_HEADER =
-  'Visitors per page from split lines; acted = first copy or outbound; conversion = acted / visitors';
+  'Visitors per page (split, browser ran the page script); acted = first copy or outbound; conversion = acted / visitors';
 const DAILY_HEADER =
-  'Split visitors per UTC day; acted = first copy or outbound; the total row matches plain stats.sh';
+  'Split visitors per UTC day (browser ran the page script); acted = first copy or outbound; the total row matches plain stats.sh';
 
 function dailyColumnsLine() {
   return (
@@ -57,6 +57,16 @@ function visitorLine(p, v, a) {
 function refLine(p, c, o) {
   return 'page ' + p + ':  copies=' + pad(c, 9) + '  outbound=' + pad(o, 4) +
     '  (split event totals, for reference)';
+}
+
+function servedLine(p, n) {
+  return 'page ' + p + ':  pages served=' + pad(n, 3) +
+    '  (first split views, script run or not; not part of the comparison)';
+}
+
+function earlyLine(n) {
+  return 'first actions before the script check began: ' + n +
+    '  (not part of the comparison)';
 }
 
 function directLine(p, d) {
@@ -88,11 +98,12 @@ function enquiriesNoCookieLine(n) {
     '  (no split cookie, not part of the conversion rate)';
 }
 
-// counts: { a: {v, a, c, o, d, b, s, e}, b: {...}, legacy, noCookieEnq },
-// all defaulting to 0 (s = services split clicks, e = enquiries).
+// counts: { a: {v, a, c, o, p, d, b, s, e}, b: {...}, early, legacy, noCookieEnq },
+// all defaulting to 0 (p = pages served, s = services split clicks,
+// e = enquiries, early = first actions before the script check began).
 function plainReport(counts) {
   const page = (p) => {
-    const z = { v: 0, a: 0, c: 0, o: 0, d: 0, b: 0, s: 0, e: 0, ...(counts[p] || {}) };
+    const z = { v: 0, a: 0, c: 0, o: 0, p: 0, d: 0, b: 0, s: 0, e: 0, ...(counts[p] || {}) };
     return z;
   };
   const A = page('a');
@@ -103,6 +114,9 @@ function plainReport(counts) {
     visitorLine('b', B.v, B.a),
     refLine('a', A.c, A.o),
     refLine('b', B.c, B.o),
+    servedLine('a', A.p),
+    servedLine('b', B.p),
+    earlyLine(counts.early || 0),
     directLine('a', A.d),
     directLine('b', B.d),
     botLine('a', A.b),
@@ -124,10 +138,11 @@ function dailyRow(label, av, aa, bv, ba) {
 
 // --- Flow 5: the log flows 1 to 4 produce ----------------------------------
 
-// Flow 1: view split first; flow 2: view split repeat; flow 3: copy split
-// first; flow 4: outbound and copy, both split repeat. Page a throughout.
+// Flow 1: view split first, then the page script reports seen; flow 2: view
+// split repeat; flow 3: copy split first; flow 4: outbound and copy, both split repeat. Page a throughout.
 const FLOW_1_TO_4 = [
   '2026-11-21T10:00:00.000Z a view split first',
+  '2026-11-21T10:00:01.000Z a seen split first',
   '2026-11-21T10:00:05.000Z a view split repeat',
   '2026-11-21T10:00:10.000Z a copy split first',
   '2026-11-21T10:00:15.000Z a outbound split repeat',
@@ -140,7 +155,7 @@ test('flow 5: the flows 1-4 log shows 1 visitor, 1 acted, 100.0%, copies 2, outb
   assert.equal(out.stderr, '');
   assert.equal(
     out.stdout,
-    plainReport({ a: { v: 1, a: 1, c: 2, o: 1 } })
+    plainReport({ a: { v: 1, a: 1, c: 2, o: 1, p: 1 } })
   );
 });
 
@@ -151,7 +166,7 @@ test('flow 6 (stats): a view bot repeat line leaves the visitor figures unchange
   assert.equal(out.status, 0, out.stderr);
   assert.equal(
     out.stdout,
-    plainReport({ a: { v: 1, a: 1, c: 2, o: 1 }, b: { b: 1 } })
+    plainReport({ a: { v: 1, a: 1, c: 2, o: 1, p: 1 }, b: { b: 1 } })
   );
 });
 
@@ -167,7 +182,7 @@ test('flow 8 (stats): direct repeat lines change only the direct line', () => {
   // The direct copy is not a split event, so only the direct views line moves.
   assert.equal(
     out.stdout,
-    plainReport({ a: { v: 1, a: 1, c: 2, o: 1 }, b: { d: 1 } })
+    plainReport({ a: { v: 1, a: 1, c: 2, o: 1, p: 1 }, b: { d: 1 } })
   );
 });
 
@@ -176,6 +191,8 @@ test('flow 8 (stats): direct repeat lines change only the direct line', () => {
 // Days are deliberately out of order in the file so --daily must sort them.
 const MIXED = [
   '2026-11-20T08:00:00.000Z b view split first',
+  '2026-11-20T08:00:01.000Z b seen split first',
+  '2026-11-20T08:00:02.000Z b seen split repeat',
   '2026-11-20T08:00:05.000Z b copy split first',
   // Legacy three- and four-field lines, from before visitor counting:
   '2026-11-18T09:00:00.000Z a view',
@@ -184,8 +201,10 @@ const MIXED = [
   '2026-11-18T09:00:03.000Z a view direct',
   // Day 2026-11-19, split lines for page a:
   '2026-11-19T10:00:00.000Z a view split first',
+  '2026-11-19T10:00:01.000Z a seen split first',
   '2026-11-19T10:00:05.000Z a view split repeat',
   '2026-11-19T10:00:10.000Z a outbound split first',
+  // Served a page but never ran the script: not a visitor.
   '2026-11-19T10:00:15.000Z a view split first',
   // Bot and direct lines:
   '2026-11-19T11:00:00.000Z a view bot repeat',
@@ -207,8 +226,8 @@ test('flow 10: plain report counts old lines only on the pre-visitor-counting li
   assert.equal(
     out.stdout,
     plainReport({
-      a: { v: 2, a: 1, o: 1, b: 1 },
-      b: { v: 1, a: 1, c: 1, d: 1 },
+      a: { v: 1, a: 1, o: 1, p: 2, b: 1 },
+      b: { v: 1, a: 1, c: 1, p: 1, d: 1 },
       legacy: 3,
     })
   );
@@ -223,9 +242,9 @@ test('flow 10: --daily prints one row per UTC day, oldest first, and a totals ro
     [
       DAILY_HEADER,
       dailyColumnsLine(),
-      dailyRow('2026-11-19', 2, 1, 0, 0),
+      dailyRow('2026-11-19', 1, 1, 0, 0),
       dailyRow('2026-11-20', 0, 0, 1, 1),
-      dailyRow('total', 2, 1, 1, 1),
+      dailyRow('total', 1, 1, 1, 1),
     ].join('\n') + '\n'
   );
   // The legacy day 2026-11-18 has no five-field split line: no row for it.
@@ -254,6 +273,45 @@ test('flow 10: plain and --daily agree on the totals', () => {
   );
 });
 
+test('a page served to a client that never runs the script is not a visitor', () => {
+  const out = runStats([
+    writeLog([
+      '2026-11-22T09:00:00.000Z a view split first',
+      '2026-11-22T09:00:01.000Z b view split first',
+      '2026-11-22T09:00:02.000Z b view split first',
+      '2026-11-22T09:00:03.000Z b seen split first',
+    ]),
+  ]);
+  assert.equal(out.status, 0, out.stderr);
+  assert.equal(out.stdout, plainReport({ a: { p: 1 }, b: { v: 1, p: 2 } }));
+});
+
+test('first actions logged before the first seen line are reported apart, in both modes', () => {
+  const log = writeLog([
+    '2026-11-21T23:00:00.000Z a view split first',
+    '2026-11-21T23:30:00.000Z a outbound split first',
+    '2026-11-22T09:00:00.000Z b view split first',
+    '2026-11-22T09:00:01.000Z b seen split first',
+    '2026-11-22T09:00:09.000Z b copy split first',
+  ]);
+  const out = runStats([log]);
+  assert.equal(out.status, 0, out.stderr);
+  assert.equal(
+    out.stdout,
+    plainReport({ a: { o: 1, p: 1 }, b: { v: 1, a: 1, c: 1, p: 1 }, early: 1 })
+  );
+  const daily = runStats(['--daily', log]);
+  assert.equal(
+    daily.stdout,
+    [
+      DAILY_HEADER,
+      dailyColumnsLine(),
+      dailyRow('2026-11-22', 0, 0, 1, 1),
+      dailyRow('total', 0, 0, 1, 1),
+    ].join('\n') + '\n'
+  );
+});
+
 // --- Arguments, empty logs and alignment ------------------------------------
 
 test('the log path argument works in either position alongside --daily', () => {
@@ -279,7 +337,7 @@ test('a missing or empty log prints zeros in both modes, and LOG_FILE is honoure
       [DAILY_HEADER, dailyColumnsLine(), dailyRow('total', 0, 0, 0, 0)].join('\n') + '\n'
     );
   }
-  const viaEnv = runStats([], { LOG_FILE: writeLog(FLOW_1_TO_4.slice(0, 1)) });
+  const viaEnv = runStats([], { LOG_FILE: writeLog(FLOW_1_TO_4.slice(0, 2)) });
   assert.equal(viaEnv.status, 0, viaEnv.stderr);
   assert.ok(viaEnv.stdout.includes(visitorLine('a', 1, 0)), 'LOG_FILE is honoured');
 });

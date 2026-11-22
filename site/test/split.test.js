@@ -181,19 +181,28 @@ test('flow 3: opening /b/ directly, Copy and the npm link append view, copy and 
   assert.match(lines[6], / b outbound direct repeat$/);
 });
 
-test('flow 4: stats.sh counts visitors from split first lines only and reports direct views separately', () => {
+test('flow 4: stats.sh counts no visitor until the page script reports seen, and reports direct views separately', () => {
   const out = runStats([logFile]);
   assert.equal(out.status, 0, out.stderr);
   const other = assigned === 'a' ? 'b' : 'a';
   const pad = (v, w) => String(v).padStart(w);
-  // The flow-1 page: 1 'view split first' visitor; the events here were
-  // posted cookie-free, so they are split repeat and nobody has acted.
+  // The flow-1 page was served once ('view split first') but no page script
+  // ever reported seen in this run, so nobody counts as a visitor; the
+  // events here were posted cookie-free, so they are split repeat and
+  // nobody has acted.
   assert.ok(
     out.stdout.includes(
-      'page ' + assigned + ':  visitors=' + pad(1, 7) + '  acted=' + pad(0, 7) +
+      'page ' + assigned + ':  visitors=' + pad(0, 7) + '  acted=' + pad(0, 7) +
         '  conversion=' + pad('0.0%', 7)
     ),
     'visitor figures for the assigned page:\n' + out.stdout
+  );
+  assert.ok(
+    out.stdout.includes(
+      'page ' + assigned + ':  pages served=' + pad(1, 3) +
+        '  (first split views, script run or not; not part of the comparison)'
+    ),
+    'pages served for the assigned page:\n' + out.stdout
   );
   assert.ok(
     out.stdout.includes(
@@ -246,11 +255,14 @@ test('flow 5: stats.sh reports old three- and four-field lines only on the legac
   // Four legacy views (two a, one b, one b direct); nothing else counted.
   assert.equal(
     out.stdout,
-    'Visitors per page from split lines; acted = first copy or outbound; conversion = acted / visitors\n' +
+    'Visitors per page (split, browser ran the page script); acted = first copy or outbound; conversion = acted / visitors\n' +
       'page a:  visitors=      0  acted=      0  conversion=   0.0%\n' +
       'page b:  visitors=      0  acted=      0  conversion=   0.0%\n' +
       'page a:  copies=        0  outbound=   0  (split event totals, for reference)\n' +
       'page b:  copies=        0  outbound=   0  (split event totals, for reference)\n' +
+      'page a:  pages served=  0  (first split views, script run or not; not part of the comparison)\n' +
+      'page b:  pages served=  0  (first split views, script run or not; not part of the comparison)\n' +
+      'first actions before the script check began: 0  (not part of the comparison)\n' +
       'page a:  direct views=  0  (not part of the comparison)\n' +
       'page b:  direct views=  0  (not part of the comparison)\n' +
       'page a:  bot views=     0  (not part of the comparison)\n' +

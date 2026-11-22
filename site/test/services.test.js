@@ -246,7 +246,10 @@ test('flow 9: visit /, follow the contact link: a services split line is logged 
     copy.headers['set-cookie'] && copy.headers['set-cookie'][0].startsWith('tc_ab=' + page + '1'),
     'the later copy advances the cookie'
   );
-  lines = await waitForLogCount(before + 3);
+  // The copy came straight from cookie a|b, so the server also records
+  // that the page script ran, ahead of the copy line.
+  lines = await waitForLogCount(before + 4);
+  assert.match(lines[lines.length - 2], new RegExp(' ' + page + ' seen split first$'));
   assert.match(lines[lines.length - 1], new RegExp(' ' + page + ' copy split first$'));
 });
 
@@ -254,6 +257,7 @@ test('services responses are cookie-free for every cookie state, with the right 
   const cases = [
     { cookie: 'tc_ab=a', query: 'page=a&event=services&via=split', tail: ' a services split first' },
     { cookie: 'tc_ab=b', query: 'page=b&event=services&via=split', tail: ' b services split first' },
+    { cookie: 'tc_ab=a0', query: 'page=a&event=services&via=split', tail: ' a services split first' },
     { cookie: 'tc_ab=a1', query: 'page=a&event=services&via=split', tail: ' a services split repeat' },
     { cookie: 'tc_ab=b1', query: 'page=b&event=services&via=split', tail: ' b services split repeat' },
     { cookie: null, query: 'page=a&event=services&via=split', tail: ' a services split repeat' },
@@ -419,6 +423,7 @@ test('flows 9/10: services and enquiry lines move only their own labelled stats 
 test('acceptance: one services split click on page a shows 1', () => {
   const log = writeLog([
     '2026-11-20T10:00:00.000Z a view split first',
+    '2026-11-20T10:00:01.000Z a seen split first',
     '2026-11-20T10:00:20.000Z a services split first',
   ]);
   const out = runStats([log]);
