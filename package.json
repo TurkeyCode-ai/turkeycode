@@ -1,6 +1,6 @@
 {
   "name": "turkeycode",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "description": "Open-source build engine — one prompt to a production-ready, QA-tested app. Any stack, any platform.",
   "main": "dist/index.js",
   "bin": {
@@ -9,16 +9,18 @@
   },
   "files": [
     "dist",
+    "!dist/__tests__",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
+    "prebuild": "node -e \"require('fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "tsc",
     "postbuild": "chmod +x dist/index.js",
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "tsc --noEmit && npm test && npm run build"
   },
   "keywords": [
     "ai",
