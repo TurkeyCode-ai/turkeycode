@@ -76,6 +76,8 @@ import {
 } from './constants';
 import { audit, auditGate, auditPhase, auditBuildPhase, auditQA, setAuditBuildPhase } from './audit';
 import { summarizeAuditLog, formatRunSummary } from './run-summary';
+import { readReviewFindings, reviewAction } from './review-findings';
+import { buildReviewFixPrompt } from './prompts/review-fix';
 import { runQuickChecks } from './quick-check';
 import { captureGodotFrames, GODOT_CAPTURE_TIMELINE } from './godot-capture';
 import { adoptPlannedProjectType, detectProjectTypeStrict, inferProjectTypeFromDescription } from './detect-project-type';
@@ -196,12 +198,15 @@ export function countFinalVerdictWarnings(qaDir: string): number | undefined {
 }
 
 /**
- * True only when every phase has a recorded warning count and all are zero.
- * A phase with no record (an older state file, an unreadable verdict) keeps
- * the polish pass.
+ * True only when every phase has a recorded warning count from both its QA
+ * verdict and its code review, and all are zero. A phase with no record (an
+ * older state file, an unreadable verdict, a review that wrote no findings
+ * file) keeps the polish pass.
  */
-export function noWarningsRecorded(phases: Array<{ qaWarnings?: number }>): boolean {
-  return phases.length > 0 && phases.every((p) => p.qaWarnings === 0);
+export function noWarningsRecorded(
+  phases: Array<{ qaWarnings?: number; reviewWarnings?: number }>
+): boolean {
+  return phases.length > 0 && phases.every((p) => p.qaWarnings === 0 && p.reviewWarnings === 0);
 }
 
 /**
@@ -1146,6 +1151,7 @@ export class Orchestrator {
     // QA → code review → AAR → merge). Unlike AAR this is not opt-in — it's a
     // standard phase gate.
     await this.runCodeReview(phaseNumber);
+    await this.actOnReview(phaseNumber, phase);
 
     // ==================== AAR PHASE (opt-in) ====================
     // Off by default: the report is write-only (no downstream prompt reads it,
@@ -1400,7 +1406,11 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
    * Replaces the 4-agent carousel with 1 QA session + 1 fix session per attempt.
    * Max 3 attempts (vs 5 for the old flow).
    */
-  private async runQAFast(phaseNumber: number): Promise<void> {
+  /**
+   * @param exitOnFail false = return false when QA is exhausted instead of
+   *   stopping the run (the caller has a known-good commit to fall back to).
+   */
+  private async runQAFast(phaseNumber: number, exitOnFail = true): Promise<boolean> {
     this.log('\n=== PHASE: QA (FAST MODE) ===\n');
     auditPhase('qa', 'started', { buildPhase: phaseNumber, mode: 'fast' });
     this.state.currentPhase = 'qa';
@@ -1574,10 +1584,12 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     if (!qaPass) {
       this.log('QA FAILED after maximum attempts');
       auditPhase('qa', 'completed', { passed: false, attempts: this.state.qaAttempts });
+      if (!exitOnFail) return false;
       process.exit(75); // QA exhausted exit code
     }
 
     auditPhase('qa', 'completed', { passed: true, attempts: this.state.qaAttempts });
+    return true;
   }
 
   /**
@@ -1894,6 +1906,78 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
     });
 
     enforceGate(this.gates.checkCodeReview(phaseNumber));
+  }
+
+  /**
+   * Use what the review found. Its warnings are recorded for the polish
+   * decision. Its critical findings get one fix session, and because that
+   * changes code QA already passed, the phase goes through QA again. If QA
+   * cannot pass the fixed code, the fix is thrown away and the commit that
+   * passed QA is what merges: a review must never leave a phase worse off.
+   * Once per phase, with no second review, so this cannot loop.
+   */
+  private async actOnReview(phaseNumber: number, phase: BuildPhase): Promise<void> {
+    const findings = readReviewFindings(join(this.workDir, REVIEWS_DIR, `phase-${phaseNumber}.json`));
+    phase.reviewWarnings = findings ? findings.warnings.length : undefined;
+    const action = reviewAction(findings, phase.reviewFixAttempted === true);
+    if (!findings) {
+      this.log('Code review wrote no findings file: nothing to act on.');
+    } else {
+      this.log(`Code review: ${findings.verdict || 'no verdict'}, ${findings.critical.length} critical, ${findings.warnings.length} warning(s).`);
+    }
+    saveState(this.state);
+    if (action === 'none' || !findings) return;
+    if (action === 'already-attempted') {
+      this.log('Critical review findings remain, but this phase has already had its review fix. Merging as is; see the review report.');
+      return;
+    }
+
+    const qaPassedSha = this.getGitHead();
+    phase.reviewFixAttempted = true;
+    saveState(this.state);
+    audit('fix_started', { buildPhase: phaseNumber, details: { source: 'review', critical: findings.critical.length } });
+    this.log(`\n=== REVIEW FIX: ${findings.critical.length} critical finding(s) ===\n`);
+
+    await this.spawner.run({
+      cwd: this.workDir,
+      prompt: buildReviewFixPrompt(this.state, phaseNumber, findings.critical),
+      timeoutMs: FIX_TIMEOUT_MS,
+      sessionName: `review-fix-${phaseNumber}`,
+      doneFile: `${REVIEWS_DIR}/phase-${phaseNumber}-fix.done`,
+      model: getModelForPhase('qa-fix')
+    });
+    if (this.github.hasUncommittedChanges()) {
+      this.github.commit(`review-fix: phase ${phaseNumber} critical review findings`);
+    }
+
+    if (!qaPassedSha || isNoopFix(this.getGitTree('HEAD'), this.getGitTree(qaPassedSha))) {
+      this.log('Review fix changed no files. QA already passed this code; continuing to merge.');
+      audit('fix_noop', { buildPhase: phaseNumber, details: { source: 'review' } });
+      return;
+    }
+    if (phase.branchName) this.github.push(phase.branchName);
+
+    this.log('Review fix changed code that QA had passed. Running QA again.');
+    phase.status = 'qa';
+    const passed = await this.runQAFast(phaseNumber, false);
+    if (passed) {
+      phase.qaWarnings = countFinalVerdictWarnings(`${QA_DIR}/phase-${phaseNumber}`);
+      audit('fix_completed', { buildPhase: phaseNumber, details: { source: 'review' } });
+      saveState(this.state);
+      return;
+    }
+
+    this.log(`QA did not pass the review fix. Discarding it and merging the code QA passed (${qaPassedSha.slice(0, 8)}).`);
+    try {
+      execSync(`git reset --hard ${qaPassedSha}`, { cwd: this.workDir, stdio: 'pipe' });
+    } catch (err) {
+      this.log(`ERROR: could not return to ${qaPassedSha.slice(0, 8)}: ${(err as Error).message}`);
+      process.exit(75);
+    }
+    if (phase.branchName) this.github.push(phase.branchName);
+    phase.lastQaVerdict = 'CLEAN';
+    audit('fix_reverted', { buildPhase: phaseNumber, details: { source: 'review', sha: qaPassedSha } });
+    saveState(this.state);
   }
 
   /**

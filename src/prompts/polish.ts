@@ -50,6 +50,8 @@ Find and run whatever the project uses, across the WHOLE repo (not a subset). Ch
 
 Capture the COMPLETE list of warnings. Do not sample.
 
+Each phase's code review also recorded warnings. If \`.turkey/reviews/\` has \`phase-N.json\` files, read the \`warnings\` array in each and add those to your list. Check each against the code as it is now: fix the ones that hold, and note in the verdict any that no longer apply.
+
 ### 2. FIX — every warning, to zero
 - Fix the root cause, not the symptom. Prefer the correct fix over suppressing.
 - **Never** blanket-disable lint rules or add \`// eslint-disable\`, \`@ts-ignore\`, \`#[allow(...)]\` etc. just to silence a warning — that is hiding, not fixing. (A narrowly-scoped, commented suppression for a genuine false-positive is acceptable; note it in the verdict.)

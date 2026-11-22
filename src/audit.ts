@@ -80,6 +80,7 @@ const SESSION_STAGES: Array<[prefix: string, stage: string]> = [
   ['merge-fix', 'merge-fix'],
   ['build', 'build'],
   ['code-review', 'review'],
+  ['review-fix', 'fix'],
   ['review', 'review'],
   ['fix', 'fix'],
   ['polish', 'polish'],
