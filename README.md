@@ -434,7 +434,7 @@ QA answers "does it work?". A simulation answers "does it work for the people it
 `turkeycode simulate` sends simulated first-time visitors through the app you built and scores what happened against thresholds taken from your spec. It uses the separate [SDD engine](https://github.com/TurkeyCode-ai/sdd) (Simulation Driven Development):
 
 ```bash
-npm install -g sdd-engine && sdd setup    # once; the engine needs Node 24 or later
+npm install -g sdd-engine && sdd setup    # once
 
 turkeycode simulate                        # the app in this folder, report only
 turkeycode run "..." --simulate            # simulate at the end of a build

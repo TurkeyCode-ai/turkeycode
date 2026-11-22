@@ -9,10 +9,10 @@ import { join } from 'path';
 import { parseSimReport, type SimReport } from './schemas';
 
 /**
- * The engine needs Node 24 or later. turkeycode looks for the `sdd` command on
- * PATH, so it has to be installed, not run through npx.
+ * turkeycode looks for the `sdd` command on PATH, so the engine has to be
+ * installed, not run through npx.
  */
-export const ENGINE_INSTALL_HINT = 'npm install -g sdd-engine && sdd setup (needs Node 24 or later; if the install fails with EACCES, use a Node version manager or sudo)';
+export const ENGINE_INSTALL_HINT = 'npm install -g sdd-engine && sdd setup (if the install fails with EACCES, use a Node version manager or sudo)';
 
 /** Set to use an engine that is not on PATH. */
 export const ENGINE_BIN_ENV = 'TURKEYCODE_SDD_BIN';
