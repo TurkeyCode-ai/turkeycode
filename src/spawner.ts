@@ -20,6 +20,7 @@ import {
   getActiveBackend,
   CLAUDE_BACKEND,
   createUsageCollector,
+  resolveSessionMcp,
 } from './agents';
 import { auditSession, stageOfSession } from './audit';
 
@@ -164,6 +165,7 @@ export class Spawner {
       blind = false,
       stage,
       probe = false,
+      toolSet,
     } = options;
     const backend = this.backend;
 
@@ -235,7 +237,22 @@ export class Spawner {
         }
       }
 
-      const args = buildAgentArgs(backend, { model, mcpConfig: usableMcpConfig, prompt, blind, probe });
+      // A session reaches only the MCP servers turkeycode was given plus the
+      // user-level ones the owner chose to keep, never everything the user
+      // has connected. Blind sessions and probes reach none.
+      let isolateMcp = false;
+      if (!blind && !probe) {
+        const sessionMcp = resolveSessionMcp(backend, usableMcpConfig);
+        isolateMcp = sessionMcp.isolate;
+        usableMcpConfig = sessionMcp.configPath;
+        for (const name of sessionMcp.missing) {
+          this.log(`[${sessionName}] WARNING: kept MCP server '${name}' is not in the user's registry — skipped`);
+        }
+      }
+
+      const args = buildAgentArgs(backend, {
+        model, mcpConfig: usableMcpConfig, prompt, blind, probe, isolateMcp, toolSet,
+      });
 
       const proc: ChildProcess = spawn(backend.binary, args, {
         cwd,

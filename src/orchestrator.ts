@@ -848,6 +848,7 @@ export class Orchestrator {
       prompt,
       timeoutMs: RESEARCH_TIMEOUT_MS,
       sessionName: 'research',
+      toolSet: 'core+web',
       doneFile: RESEARCH_DONE,
       model: getModelForPhase('research')
     });
@@ -895,6 +896,7 @@ export class Orchestrator {
       prompt,
       timeoutMs: PLAN_TIMEOUT_MS,
       sessionName: 'plan',
+      toolSet: 'core',
       doneFile: PLAN_DONE,
       model: getModelForPhase('plan')
     });
@@ -1389,6 +1391,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
         prompt: fixPrompt,
         timeoutMs: FIX_TIMEOUT_MS,
         sessionName: `quick-fix-${attempt}`,
+        toolSet: 'core',
         doneFile: `${qaDir}/quick-fix-${attempt}.done`,
         model: getModelForPhase('quick-fix')
       });
@@ -1465,6 +1468,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
         prompt: buildQaCombinedPrompt(this.state, phaseNumber, attempt, diffStat, baseRef),
         timeoutMs: QA_TIMEOUT_MS,
         sessionName: `qa-combined-${attempt}`,
+        toolSet: 'core',
         doneFile: `${QA_DIR}/phase-${phaseNumber}/verdict-${attempt}.done`,
         model: getModelForPhase('qa-functional') // Sonnet for combined QA
       });
@@ -1555,6 +1559,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
             prompt: buildQaFixPrompt(this.state, phaseNumber, attempt),
             timeoutMs: FIX_TIMEOUT_MS,
             sessionName: `qa-fix-${attempt}`,
+            toolSet: 'core',
             doneFile: `${QA_DIR}/phase-${phaseNumber}/fix-${attempt}.done`,
             model: getModelForPhase('qa-fix') // Opus for fixes
           });
@@ -1901,6 +1906,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       prompt: buildCodeReviewPrompt(this.state, phaseNumber),
       timeoutMs: QA_TIMEOUT_MS,
       sessionName: `code-review-${phaseNumber}`,
+      toolSet: 'core',
       doneFile: `${REVIEWS_DIR}/phase-${phaseNumber}.done`,
       model: getModelForPhase('code-review')
     });
@@ -1943,6 +1949,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       prompt: buildReviewFixPrompt(this.state, phaseNumber, findings.critical),
       timeoutMs: FIX_TIMEOUT_MS,
       sessionName: `review-fix-${phaseNumber}`,
+      toolSet: 'core',
       doneFile: `${REVIEWS_DIR}/phase-${phaseNumber}-fix.done`,
       model: getModelForPhase('qa-fix')
     });
@@ -2067,6 +2074,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       }),
       timeoutMs: FIX_TIMEOUT_MS,
       sessionName: `merge-fix-phase-${contextKey}-${attempt}`,
+      toolSet: 'core',
       doneFile,
       model: getModelForPhase('qa-fix')
     });
@@ -2148,6 +2156,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       prompt: buildQaVisualPrompt(this.state, phaseNumber, attempt, caps),
       timeoutMs: QA_TIMEOUT_MS,
       sessionName: `qa-visual-capture-${attempt}`,
+      toolSet: 'core',
       doneFile: `${qaDir}/capture-${attempt}.done`,
       model: getModelForPhase('qa-visual')
     });
@@ -2162,6 +2171,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       prompt: buildQaVisualReviewPrompt(this.state, phaseNumber, attempt, caps),
       timeoutMs: QA_TIMEOUT_MS / 2,
       sessionName: `qa-visual-review-${attempt}`,
+      toolSet: 'core',
       doneFile: `${qaDir}/visual-${attempt}.done`,
       model: getModelForPhase('qa-visual'),
       blind: true
@@ -2200,6 +2210,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       prompt: buildQaVisualReviewPrompt(this.state, phaseNumber, attempt, { ...backend.capabilities, subagents: false }),
       timeoutMs: QA_TIMEOUT_MS / 2,
       sessionName: `qa-visual-review-${attempt}`,
+      toolSet: 'core',
       doneFile: `${qaDir}/visual-${attempt}.done`,
       model: getModelForPhase('qa-visual'),
       blind: true
@@ -2336,6 +2347,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
         prompt: buildPolishPrompt(this.state, attempt),
         timeoutMs: POLISH_TIMEOUT_MS,
         sessionName: `polish-${attempt}`,
+        toolSet: 'core',
         doneFile: `${POLISH_DIR}/polish-${attempt}.done`,
         model: getModelForPhase('polish')
       });
@@ -2864,6 +2876,7 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       prompt: buildQaFixPrompt(this.state, phaseNumber, attempt),
       timeoutMs: FIX_TIMEOUT_MS,
       sessionName: `qa-fix-${attempt}`,
+      toolSet: 'core',
       doneFile: `${QA_DIR}/phase-${phaseNumber}/fix-${attempt}.done`,
       model: getModelForPhase('qa-fix')
     });

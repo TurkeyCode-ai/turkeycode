@@ -58,6 +58,8 @@ describe('session records', () => {
     mkdirSync(join(TEST_DIR, '.turkey'), { recursive: true });
     cwd = mkdtempSync(join(tmpdir(), 'tc-session-'));
     setAuditBuildPhase(undefined);
+    // Hermetic: never read this machine's keep list or write under the real home.
+    process.env.TURKEYCODE_KEEP_MCP = '';
   });
   afterEach(() => {
     rmSync(TEST_DIR, { recursive: true, force: true });

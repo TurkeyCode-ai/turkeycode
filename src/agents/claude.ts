@@ -19,6 +19,14 @@ export const CLAUDE_BACKEND: AgentBackendSpec = {
   modelFlag: '--model',
   mcpConfigFlag: '--mcp-config',
   blindFlags: ['--strict-mcp-config'],
+  userMcpRegistry: '.claude.json',
+  toolsFlag: '--tools',
+  toolSets: {
+    // Enough to read and change a codebase and run its commands. Measured:
+    // about 9,000 tokens of fixed context per turn instead of about 23,000.
+    'core': ['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep'],
+    'core+web': ['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebSearch', 'WebFetch'],
+  },
   // One JSON event per line, ending in a result event with the session's
   // token totals and cost (needs --verbose, which baseArgs already passes).
   usageArgs: ['--output-format', 'stream-json'],
