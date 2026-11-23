@@ -95,6 +95,20 @@ export interface AgentBackendSpec {
    */
   blindFlags?: string[];
   /**
+   * Where the CLI keeps the user's own MCP servers, relative to the home
+   * directory, as a JSON file with a top-level "mcpServers" object. Read only
+   * to copy the servers the owner chose to keep into a session's config.
+   */
+  userMcpRegistry?: string;
+  /**
+   * Flag that limits a session to the named built-in tools (comma-separated
+   * value). Every tool's definition is re-read on each turn of a session, so
+   * a stage that only edits files and runs commands should not carry the rest.
+   */
+  toolsFlag?: string;
+  /** Named tool sets for toolsFlag. 'core' is required when toolsFlag is set. */
+  toolSets?: Record<string, string[]>;
+  /**
    * Extra args that make the CLI report what a session used, and the format
    * its stdout then takes. Both or neither: with them the spawner reads token
    * counts and cost from the output; without them the backend runs exactly
@@ -175,6 +189,12 @@ export interface SpawnSessionOptions {
   mcpConfig?: string;
   /** Reviewer session: no MCP servers at all, so it can't recall how the work was built. */
   blind?: boolean;
+  /**
+   * Limit the session to one of the backend's named tool sets ('core',
+   * 'core+web'). Omit = every tool the CLI offers. Ignored by a backend
+   * with no toolsFlag or no set of that name.
+   */
+  toolSet?: string;
   /** Startup probe: add the backend's probeArgs (a session that needs no tools). */
   probe?: boolean;
   /**

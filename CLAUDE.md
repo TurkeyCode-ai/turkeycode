@@ -139,6 +139,7 @@ src/
 │   ├── spawn-config.ts # Pure arg/env builders, classifiers, resolveModelForPhase
 │   ├── registry.ts   # Built-ins + ~/.turkeycode/agents.yaml, active-backend global
 │   ├── usage.ts      # Reads tokens and cost from a backend's output (claude: stream-json)
+│   ├── session-mcp.ts # Which user-level MCP servers a session keeps (none by default)
 │   └── claude.ts, codex.ts, gemini.ts, opencode.ts   # Built-in specs
 ├── gates.ts          # Artifact validation (plan, build, QA gates)
 ├── state.ts          # State management (phases, not tickets)
@@ -201,6 +202,8 @@ src/
 
 7. **Pluggable agent backends**: every session runs on an `AgentBackendSpec` (binary, flags, prompt delivery, env policy, billing classifiers, model tiers, capabilities). One backend per run, pinned in state.json; prompts adapt to capabilities (no Task tool → visual QA's blind review runs as a second fresh session). Phase→tier is shared; tier→model is per backend; `TURKEYCODE_MODEL(_PHASE)` overrides both.
 
+7a. **Lean sessions**: sessions run unattended with permission prompts off, so on backends that support it they do not load the user's own MCP servers (mail, files, payments). Servers named in `TURKEYCODE_KEEP_MCP` or `keepMcpServers` in `~/.turkeycode/config.json` are kept, through a generated config under `~/.turkeycode/session-mcp/` that never lives in a project. The blind visual reviewer keeps none. Sessions that only read, test, review or fix also get a short tool list (`toolSet: 'core'`, or `'core+web'` for research); build, scope, simulate and AAR sessions keep every tool. This cuts the context every turn re-reads.
+
 8. **Simulation is a measurement, not a gate**: `--simulate` runs the SDD engine (the separate `sdd-engine` package, found on PATH like an agent CLI) against a throwaway copy of the finished app and writes a report. It never fails a run: a missing engine, Docker or `claude` CLI is a skip. The study (visitors, questions, tasks, thresholds) is derived from `specs.md` by one session and lives in `~/.turkeycode/sim/<project>/`, **outside the repo**, so the held-back visitors are never in reach of a session that builds or revises the app. Only the report is written inside the project, with the held-back set as rates only. `--simulate-loop` adds revise iterations: the fix session sees working-set results only, a change that breaks the build is reverted before it is simulated, and a change is kept only if the working-set score improved. The scores are uncalibrated and every report says so.
 
 ## Environment Variables
@@ -214,6 +217,7 @@ TURKEYCODE_USE_API_KEY=1          # Keep the vendor API key instead of the CLI l
 GH_TOKEN=ghp_...                  # For private repos
 DIGITALOCEAN_ACCESS_TOKEN=dop_... # `turkeycode deploy`: your own DigitalOcean account (or `turkeycode login --token`)
 TURKEYCODE_SDD_BIN=/path/to/sdd   # `turkeycode simulate`: an SDD engine that is not on PATH
+TURKEYCODE_KEEP_MCP=name1,name2   # Your own MCP servers that sessions keep (default: none; `all` keeps every one)
 GITHUB_OWNER=username-or-org      # For auto-creating repos
 JIRA_HOST=company.atlassian.net   # For Jira integration (REST API)
 JIRA_EMAIL=you@example.com        # Jira account email

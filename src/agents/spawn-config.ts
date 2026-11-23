@@ -23,7 +23,16 @@ export const NEVER_PASS_VARS = [
  */
 export function buildAgentArgs(
   spec: AgentBackendSpec,
-  options: { model?: string; mcpConfig?: string; prompt?: string; blind?: boolean; probe?: boolean }
+  options: {
+    model?: string;
+    mcpConfig?: string;
+    prompt?: string;
+    blind?: boolean;
+    probe?: boolean;
+    /** Cut off from the user's own MCP servers but still given mcpConfig, if any. */
+    isolateMcp?: boolean;
+    toolSet?: string;
+  }
 ): string[] {
   const args = [...spec.baseArgs];
 
@@ -42,8 +51,17 @@ export function buildAgentArgs(
 
   if (options.blind) {
     args.push(...(spec.blindFlags ?? []));
-  } else if (options.mcpConfig && spec.mcpConfigFlag) {
-    args.push(spec.mcpConfigFlag, options.mcpConfig);
+  } else {
+    if (options.isolateMcp) args.push(...(spec.blindFlags ?? []));
+    if (options.mcpConfig && spec.mcpConfigFlag) {
+      args.push(spec.mcpConfigFlag, options.mcpConfig);
+    }
+  }
+
+  // A probe sets its own (empty) tool list in probeArgs.
+  const tools = options.toolSet ? spec.toolSets?.[options.toolSet] : undefined;
+  if (tools?.length && spec.toolsFlag && !options.probe) {
+    args.push(spec.toolsFlag, tools.join(','));
   }
 
   if (spec.promptDelivery === 'arg') {
