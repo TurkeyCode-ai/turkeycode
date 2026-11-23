@@ -899,8 +899,14 @@ program
       'use <repoPath>=<ref>[,<repoPath>=<ref>] to pin per repo',
   )
   .option('--no-push', 'Stop after review/fix + rebase: leave the branch local, print branch + SHA per repo, skip push and the Jira transition')
+  .option('--build-timeout <minutes>', 'Build-session time limit in minutes (default 90, or TURKEYCODE_BUILD_TIMEOUT_MIN)')
   .action(async (key: string, options) => {
     activateAgent(options.agent);
+    const buildTimeoutMin = options.buildTimeout != null ? Number(options.buildTimeout) : undefined;
+    if (buildTimeoutMin != null && (!Number.isInteger(buildTimeoutMin) || buildTimeoutMin < 1)) {
+      console.error(`❌ --build-timeout must be a positive whole number of minutes (got "${options.buildTimeout}").`);
+      process.exit(1);
+    }
     const reviewRounds = options.reviewRounds != null ? Number(options.reviewRounds) : undefined;
     if (reviewRounds != null && (!Number.isInteger(reviewRounds) || reviewRounds < 1)) {
       console.error(`❌ --review-rounds must be a positive integer (got "${options.reviewRounds}").`);
@@ -919,6 +925,7 @@ program
         baseLocal: options.baseLocal,
         // commander maps --no-push to `push: false` (default true)
         noPush: options.push === false,
+        buildTimeoutMin,
       });
       await orch.runTicket(key);
       console.log('');

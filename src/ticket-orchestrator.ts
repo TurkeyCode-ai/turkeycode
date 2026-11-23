@@ -83,6 +83,26 @@ export interface TicketRunOptions {
   baseLocal?: string;
   /** Stop after review/fix (+ rebase): leave branches local, print branch + SHA, no push / Jira transition. */
   noPush?: boolean;
+  /**
+   * Build-session time limit in minutes (default 90, or TURKEYCODE_BUILD_TIMEOUT_MIN).
+   * Raise it for repos whose full test suite is slow or whose build machine is shared.
+   */
+  buildTimeoutMin?: number;
+}
+
+/** Build-session limit: option, else TURKEYCODE_BUILD_TIMEOUT_MIN, else PHASE_BUILD_TIMEOUT_MS. */
+export function resolveBuildTimeoutMs(optionMin?: number, env: NodeJS.ProcessEnv = process.env): number {
+  if (optionMin != null) return assertMinutes(optionMin, '--build-timeout') * 60_000;
+  const raw = env.TURKEYCODE_BUILD_TIMEOUT_MIN;
+  if (raw != null && raw.trim() !== '') return assertMinutes(Number(raw), 'TURKEYCODE_BUILD_TIMEOUT_MIN') * 60_000;
+  return PHASE_BUILD_TIMEOUT_MS;
+}
+
+function assertMinutes(n: number, name: string): number {
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
+    throw new Error(`${name} must be a positive whole number of minutes (got "${n}")`);
+  }
+  return n;
 }
 
 export interface ReviewFinding {
@@ -149,6 +169,7 @@ export class TicketOrchestrator {
   /** Repo path -> local ref for the current run (--base-local), handed to the review and fix prompts. */
   private currentLocalBases = new Map<string, string>();
   private noPush: boolean;
+  private buildTimeoutMs: number;
   /** Things the review/fix loop did that the person reading the ticket needs to know (e.g. a fix session that ran out of time). */
   private reviewNotes: string[] = [];
 
@@ -164,6 +185,7 @@ export class TicketOrchestrator {
     // Parse up front so a malformed --base-local fails before any session runs.
     this.baseLocal = options.baseLocal ? parseBaseLocalSpec(options.baseLocal) : undefined;
     this.noPush = options.noPush ?? false;
+    this.buildTimeoutMs = resolveBuildTimeoutMs(options.buildTimeoutMin);
     this.jira = createJiraClient();
     this.spawner = createSpawner({ verbose: this.verbose });
     this.manifest = loadRepoManifest(options.manifestPath ?? DEFAULT_MANIFEST_PATH);
@@ -533,17 +555,13 @@ export class TicketOrchestrator {
     const buildResult = await this.spawner.run({
       cwd: buildCwd,
       prompt: buildPrompt,
-      timeoutMs: PHASE_BUILD_TIMEOUT_MS,
+      timeoutMs: this.buildTimeoutMs,
       sessionName: `build-${ticket.key}`,
       doneFile: buildDoneFile,
       model: buildModel,
       mcpConfig: this.mcpConfig,
     });
     timings.build = Date.now() - buildStart;
-
-    if (buildResult.exitCode !== 0) {
-      throw new Error(`Build session failed for ${ticket.key} (exit ${buildResult.exitCode})`);
-    }
 
     // 4. Detect touched repos — repos with commits beyond their base SHA
     const touched: RepoEntry[] = [];
@@ -552,6 +570,20 @@ export class TicketOrchestrator {
       if (repoHasCommits(repo, branchName, baseSha)) {
         touched.push(repo);
       }
+    }
+
+    // A deep-tier build that ran out of time but committed work still gets its review rounds, so the
+    // person picking it up starts from reviewed code. It is never pushed and the run still fails.
+    const buildTimedOut = buildResult.exitCode !== 0 && buildResult.timedOut === true;
+    if (buildResult.exitCode !== 0 && !(buildTimedOut && this.deep && touched.length > 0)) {
+      throw new Error(`Build session failed for ${ticket.key} (exit ${buildResult.exitCode})`);
+    }
+    if (buildTimedOut) {
+      const mins = Math.round(this.buildTimeoutMs / 60_000);
+      console.warn(`[ticket] Build session ran out of time (${mins} min) after committing work; reviewing what was committed. Nothing will be pushed.`);
+      this.reviewNotes.push(
+        `the build session ran out of time (${mins} min) before it finished; the review rounds ran on what it had committed. Its own final test run may not have happened, so run the full tests before using this branch. Nothing was pushed.`,
+      );
     }
 
     if (touched.length === 0) {
@@ -592,7 +624,7 @@ export class TicketOrchestrator {
 
     for (const repo of touched) {
       const repoStart = Date.now();
-      const step = planFinalizeStep(repo, { localRef: localBases.get(repo.path), noPush: this.noPush });
+      const step = planFinalizeStep(repo, { localRef: localBases.get(repo.path), noPush: this.noPush || buildTimedOut });
       console.log(`[ticket] Rebasing ${repo.path} onto ${step.rebaseOnto}...`);
       const rebase = await this.rebaseWithMergeFix(ticket, repo, branchName, ticketDir, verdict, step.localRef, planPath);
       mergeFixMs += rebase.mergeFixMs;
@@ -676,6 +708,10 @@ export class TicketOrchestrator {
       throw new Error(
         `Ticket ${ticket.key}: ${pushed.length} repo(s) pushed, ${local.length} kept local, ${failed.length} failed. See Jira comment for details.`,
       );
+    }
+
+    if (buildTimedOut) {
+      throw new Error(`Build session for ${ticket.key} ran out of time; its committed work was reviewed and left local. See the Jira comment.`);
     }
 
     // --no-push: nothing is on the remote, so a "ready for review" transition would be a lie.
