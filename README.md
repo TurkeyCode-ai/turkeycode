@@ -347,6 +347,19 @@ Fix sessions get the comprehensive picture: phase deliverables, all blockers, al
 ### 👁️ Visual QA Has Memory
 On attempt 2+, visual QA gets the previous report so it verifies fixes instead of inventing new cosmetic nits. Consistency across attempts.
 
+### 🔐 Visual QA Behind Sign-In
+If your app's pages sit behind sign-in, visual QA needs a way in or it only ever photographs the sign-in screen.
+
+- **App with its own sign-in form:** document test or seed credentials in the README or seed files; the capture signs in with them.
+- **Outside provider (Auth0, Google, Okta, Clerk):** save a signed-in session once and the capture loads it:
+  ```bash
+  npx playwright open --save-storage=.turkey/visual-auth.json http://localhost:5173
+  # sign in with a TEST account, then close the window
+  ```
+  Or keep the file elsewhere and set `TURKEYCODE_VISUAL_AUTH=/path/to/file.json`. The file is a live session: use a test account, and it stays out of git because `.turkey/` is ignored.
+
+If the capture still cannot get in, it says so (`qa/phase-N/sign-in-wall-M.md`), the run logs that those pages were not reviewed, and "not shown" findings become warnings instead of sending fix sessions after a problem that is not in the code. turkeycode never edits your sign-in code to get a screenshot.
+
 ### ⚖️ Blockers vs Warnings
 Blockers = broken functionality, dead elements, failed acceptance criteria. Warnings = cosmetic polish. Zero blockers = pass, regardless of warning count.
 

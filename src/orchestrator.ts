@@ -60,6 +60,7 @@ import {
   RESEARCH_DONE,
   SCOPE_DONE,
   PLAN_DONE,
+  VISUAL_AUTH_FILE,
   PHASES_DIR,
   PHASE_PLAN_FILE,
   REFERENCE_DIR,
@@ -81,6 +82,7 @@ import { audit, auditGate, auditPhase, auditBuildPhase, auditQA, setAuditBuildPh
 import { summarizeAuditLog, formatRunSummary } from './run-summary';
 import { readReviewFindings, reviewAction } from './review-findings';
 import { buildReviewFixPrompt } from './prompts/review-fix';
+import { signInWallFile } from './prompts/qa-visual';
 import { runQuickChecks } from './quick-check';
 import { captureGodotFrames, GODOT_CAPTURE_TIMELINE } from './godot-capture';
 import { adoptPlannedProjectType, detectProjectTypeStrict, inferProjectTypeFromDescription } from './detect-project-type';
@@ -236,6 +238,8 @@ export interface VisualMergeOptions {
   isGame?: boolean;
   /** Every file captured for this review. */
   capturedFiles?: string[];
+  /** The capture could not get past sign-in, so pages behind it were never photographed. */
+  signInWall?: boolean;
 }
 
 /**
@@ -243,7 +247,9 @@ export interface VisualMergeOptions {
  * product. It can't gate when the reviewer skipped captured files, which is how
  * a real Game Over frame got reported as missing. It also can't gate a game whose
  * functional QA passed: tests already covered that state, and frames only prove
- * what a fixed capture happened to reach. A blocker the reviewer saw still gates.
+ * what a fixed capture happened to reach. Nor can it gate when the capture was
+ * stopped at sign-in: the pages were never photographed, and no fix session can
+ * change that from the code. A blocker the reviewer saw still gates.
  */
 export function splitVisualBlockers(
   verdict: Record<string, unknown>,
@@ -256,7 +262,10 @@ export function splitVisualBlockers(
     file => !reviewed.some(path => path === file || path.endsWith(`/${file}`))
   );
   const functionalBlockers = ((verdict.blockers as QaFinding[]) || []).length;
-  const unproven = skippedFiles || (options.isGame === true && functionalBlockers === 0);
+  const unproven =
+    skippedFiles ||
+    options.signInWall === true ||
+    (options.isGame === true && functionalBlockers === 0);
   return {
     gating: blockers.filter(b => !(b.kind === 'not-shown' && unproven)),
     notShown: blockers.filter(b => b.kind === 'not-shown' && unproven),
@@ -2628,7 +2637,16 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       const options = {
         isGame: this.state.projectType === 'game-godot',
         capturedFiles: existsSync(framesDir) ? readdirSync(framesDir) : [],
+        signInWall: existsSync(signInWallFile(phaseNumber, attempt)),
       };
+      if (options.signInWall) {
+        this.log(
+          'Visual QA could not get past sign-in, so pages behind it were NOT reviewed. ' +
+          `To have them reviewed, save a signed-in session to ${VISUAL_AUTH_FILE} ` +
+          `(npx playwright open --save-storage=${VISUAL_AUTH_FILE} <app url>, sign in with a test account, close the window) ` +
+          'or point TURKEYCODE_VISUAL_AUTH at one.'
+        );
+      }
       const merged = mergeVisualIntoVerdict(verdict, visual, options);
       writeFileSync(verdictPath, JSON.stringify(merged, null, 2));
       const { gating, notShown } = splitVisualBlockers(verdict, visual, options);
