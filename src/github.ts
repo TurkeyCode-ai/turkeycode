@@ -167,6 +167,16 @@ export class GitHubClient {
     } catch { /* ignore */ }
   }
 
+  /** True when every commit on `branch` is already reachable from `other`. */
+  branchIsContainedIn(branch: string, other: string): boolean {
+    try {
+      execSync(`git merge-base --is-ancestor ${branch} ${other}`, { stdio: 'pipe', cwd: this.workDir });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /**
    * Create and checkout a new branch
    */
@@ -207,9 +217,17 @@ export class GitHubClient {
         execSync(`git checkout -b ${branchName}`, { stdio: 'inherit', cwd: this.workDir });
         console.log(`Created branch: ${branchName}`);
       } catch {
-        // Branch already exists — just check it out
-        execSync(`git checkout ${branchName}`, { stdio: 'inherit' });
-        console.log(`Checked out existing branch: ${branchName}`);
+        // Branch already exists. If everything on it is already in the branch we
+        // are starting from, it is a leftover from an earlier, finished run with
+        // the same phase name: restart it here, or new work lands on an old base.
+        // If it holds commits of its own, a run is being resumed: keep them.
+        if (fromBranch && this.branchIsContainedIn(branchName, fromBranch)) {
+          execSync(`git checkout -B ${branchName} ${fromBranch}`, { stdio: 'inherit', cwd: this.workDir });
+          console.log(`Restarted leftover branch ${branchName} from ${fromBranch}`);
+        } else {
+          execSync(`git checkout ${branchName}`, { stdio: 'inherit', cwd: this.workDir });
+          console.log(`Checked out existing branch: ${branchName}`);
+        }
       }
       if (stashed) {
         try {

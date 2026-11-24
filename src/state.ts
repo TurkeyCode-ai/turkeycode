@@ -3,7 +3,9 @@
  * Phase-based orchestrator model
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'fs';
+import { join } from 'path';
+import { createHash } from 'crypto';
 import {
   ProjectState,
   PhasePlan,
@@ -12,6 +14,12 @@ import {
 import {
   STATE_FILE,
   PHASE_PLAN_FILE,
+  PLAN_DONE,
+  PHASES_DIR,
+  QA_DIR,
+  REVIEWS_DIR,
+  POLISH_DIR,
+  RESEARCH_DONE,
   ALL_DIRS
 } from './constants';
 
@@ -180,13 +188,54 @@ export function advancePhase(state: ProjectState): boolean {
 }
 
 /**
- * Reset state for a fresh run
+ * Remove everything a run leaves behind that the NEXT run would trust: the plan
+ * and its done marker, per-phase build markers, QA verdicts, reviews, polish
+ * notes and the research marker. Left in place, a later `run --spec <new>` sees
+ * "plan gate already passes", skips planning and builds the previous spec's
+ * phases. The spec and scope files, the persona, the audit log and screenshots
+ * are kept: they are inputs or history, not gates.
+ */
+export function clearRunArtifacts(workDir: string = process.cwd()): void {
+  for (const path of [PHASE_PLAN_FILE, PLAN_DONE, RESEARCH_DONE]) {
+    try { rmSync(join(workDir, path), { force: true }); } catch { /* ignore */ }
+  }
+  for (const dir of [PHASES_DIR, QA_DIR, REVIEWS_DIR, POLISH_DIR]) {
+    try { rmSync(join(workDir, dir), { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+}
+
+/** Stable fingerprint of a spec, so a run can tell its plan was made from another one. */
+export function specFingerprint(spec: string): string {
+  return createHash('sha256').update(spec.replace(/\r\n/g, '\n').trim()).digest('hex');
+}
+
+/**
+ * Whether the plan on disk belongs to a different job than the one being started.
+ * Two cases: the plan was made from a different spec (fingerprints differ), or
+ * the state is brand new ('init') yet a plan is already there, which is what a
+ * reset from a version before clearRunArtifacts leaves behind. A plan with no
+ * recorded fingerprint on a run that is under way is trusted, so resuming a run
+ * started by an older version keeps working.
+ */
+export function planIsLeftover(
+  state: Pick<ProjectState, 'currentPhase' | 'planSpecHash'>,
+  planExists: boolean,
+  specHash: string | undefined
+): boolean {
+  if (!planExists) return false;
+  if (state.currentPhase === 'init') return true;
+  return Boolean(specHash && state.planSpecHash && specHash !== state.planSpecHash);
+}
+
+/**
+ * Reset state to initial values, and clear the previous run's plan and markers
  */
 export function resetState(): void {
   if (existsSync(STATE_FILE)) {
     const state = getDefaultState();
     saveState(state);
   }
+  clearRunArtifacts();
 }
 
 /**

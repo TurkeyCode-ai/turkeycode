@@ -178,6 +178,10 @@ export interface ProjectState {
   // the same agent — artifacts and branches assume one agent's behavior.
   agent?: string;
 
+  // Fingerprint of the spec the plan on disk was made from. A `run` with a
+  // different spec re-plans instead of building the old plan's phases.
+  planSpecHash?: string;
+
   // Phase tracking
   currentPhase: Phase;
   currentStep: string;
