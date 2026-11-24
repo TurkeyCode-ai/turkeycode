@@ -42,6 +42,10 @@ export const PHASES_DIR = `${STATE_DIR}/phases`;
 // QA artifacts
 export const QA_DIR = `${STATE_DIR}/qa`;
 export const SCREENSHOTS_DIR = `${STATE_DIR}/screenshots`;
+// A signed-in browser session (Playwright storage state) the visual capture
+// loads so it can reach pages behind sign-in. Supplied by the project owner;
+// TURKEYCODE_VISUAL_AUTH may point at a file kept somewhere else.
+export const VISUAL_AUTH_FILE = `${STATE_DIR}/visual-auth.json`;
 
 // Review artifacts
 export const REVIEWS_DIR = `${STATE_DIR}/reviews`;

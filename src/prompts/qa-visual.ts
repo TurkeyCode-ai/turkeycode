@@ -16,9 +16,10 @@
  */
 
 import { ProjectState } from '../types';
-import { QA_DIR, SCREENSHOTS_DIR, REFERENCE_DIR } from '../constants';
+import { QA_DIR, SCREENSHOTS_DIR, REFERENCE_DIR, VISUAL_AUTH_FILE } from '../constants';
 import { AgentCapabilities, CLAUDE_BACKEND } from '../agents';
 import { existsSync, readdirSync, readFileSync } from 'fs';
+import { join } from 'path';
 import { oneTurnRule } from './one-turn';
 
 const GODOT_REVIEW_CATEGORIES = `These are frames from a running game, a few seconds apart. Review EVERY frame for:
@@ -26,6 +27,56 @@ const GODOT_REVIEW_CATEGORIES = `These are frames from a running game, a few sec
 - **WARNINGS**: Inconsistent art style, weak contrast between the player and the background, cramped or misaligned HUD, subjective polish problems.
 
 `;
+
+/** The signed-in session file the capture should load, if the owner supplied one. */
+export function visualAuthFile(
+  env: NodeJS.ProcessEnv = process.env,
+  workDir: string = process.cwd()
+): string | null {
+  const fromEnv = env.TURKEYCODE_VISUAL_AUTH;
+  if (fromEnv && existsSync(fromEnv)) return fromEnv;
+  return existsSync(join(workDir, VISUAL_AUTH_FILE)) ? VISUAL_AUTH_FILE : null;
+}
+
+/** Where the capture records that it could not get past sign-in. */
+export function signInWallFile(phaseNumber: number, attempt: number): string {
+  return `${QA_DIR}/phase-${phaseNumber}/sign-in-wall-${attempt}.md`;
+}
+
+/**
+ * What to do when the app's pages sit behind sign-in. Without this the capture
+ * photographs the sign-in screen for every route, the reviewer reports every
+ * deliverable as missing, and fix sessions are sent after a problem that is
+ * not in the code.
+ */
+export function signInSection(phaseNumber: number, attempt: number, authFile: string | null): string {
+  const wall = signInWallFile(phaseNumber, attempt);
+  const provided = authFile
+    ? `A signed-in browser session has been provided at \`${authFile}\` (Playwright storage state).
+Create every page from a context that loads it:
+\`\`\`typescript
+const context = await browser.newContext({ viewport, storageState: '${authFile}' });
+const page = await context.newPage();
+\`\`\`
+Never print, copy or commit that file.`
+    : `No signed-in session file was provided. If a route redirects to a sign-in screen:
+1. If the app has its OWN sign-in form and the project documents test or seed credentials
+   (README, seed files, fixtures, example env files), sign in with those in the script before capturing.
+2. If sign-in is handled by an outside provider (Auth0, Google, Okta, Clerk and the like), or no
+   test credentials are documented, you cannot sign in. Do not try.`;
+  return `
+### Pages behind sign-in
+
+${provided}
+
+Rules that always apply:
+- Never weaken, stub, bypass or edit the app's sign-in code, routes, guards or config to get a screenshot.
+- Never use credentials that are not documented test or seed values, never guess passwords, never create accounts.
+- After capturing, look at what you got. If the pages this phase needs still show a sign-in screen,
+  write \`${wall}\` listing the routes that were blocked and, in one line, why (for example
+  "Auth0 hosted sign-in, no session file"). Do not write that file if you reached the pages.
+`.trim();
+}
 
 /** Everything both prompt shapes need, derived once. */
 function visualContext(state: ProjectState, phaseNumber: number, attempt: number) {
@@ -137,6 +188,10 @@ ${ctx.isGame ? GODOT_REVIEW_CATEGORIES : `- **BLOCKERS**: Dead/broken elements, 
 
 If something a deliverable needs never appears in any file, mark it kind "not-shown"
 in the JSON. That records that these captures did not show it, not that it is broken.
+
+A capture that shows only a sign-in screen where an app page was expected means the capture
+could not sign in. Report what that page should have shown as ONE "not-shown" finding naming the
+routes. Do not report the sign-in screen itself as a defect unless sign-in is a deliverable of this phase.
 
 Be thorough but fair. Flag real problems, not nitpicks. For each issue include:
 - Which screenshot
@@ -412,6 +467,8 @@ async function capture() {
 
 capture();
 \`\`\`
+
+${signInSection(phaseNumber, attempt, visualAuthFile())}
 
 ### Run It:
 \`\`\`bash
