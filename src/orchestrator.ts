@@ -18,7 +18,10 @@ import {
   saveState,
   initState,
   loadPhasePlan,
-  advancePhase
+  advancePhase,
+  clearRunArtifacts,
+  specFingerprint,
+  planIsLeftover
 } from './state';
 import { Spawner, createSpawner } from './spawner';
 import { getActiveBackend } from './agents';
@@ -639,6 +642,26 @@ export class Orchestrator {
     }
     if (resolvedSpecFile && existsSync(resolvedSpecFile)) {
       specContent = readFileSync(resolvedSpecFile, 'utf-8');
+    }
+
+    // A plan left by a different job must not be built. `run` only: `resume`
+    // continues whatever is there. See planIsLeftover for the two cases.
+    const specHash = specContent ? specFingerprint(specContent) : undefined;
+    if (options.replanIfComplete) {
+      const planExists =
+        existsSync(join(this.workDir, PLAN_DONE)) || existsSync(join(this.workDir, PHASE_PLAN_FILE));
+      if (planIsLeftover(this.state, planExists, specHash)) {
+        this.log('The plan on disk was made for a different spec — discarding it and planning from the spec provided.');
+        clearRunArtifacts(this.workDir);
+        this.state.buildPhases = [];
+        this.state.completedPhases = [];
+        this.state.currentBuildPhaseNumber = 1;
+        this.state.currentPhase = 'init';
+      }
+    }
+    if (specHash && this.state.planSpecHash !== specHash) {
+      this.state.planSpecHash = specHash;
+      saveState(this.state);
     }
 
     // Detect if this is a continuation sprint (workspace already has code)
