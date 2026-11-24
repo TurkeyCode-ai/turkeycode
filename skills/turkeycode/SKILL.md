@@ -30,7 +30,11 @@ setsid nohup turkeycode run "<description>" --spec spec.md --verbose > build.log
 ### Clean restart (wipe previous state):
 ```bash
 rm -rf ~/test-builds/<project-name> && mkdir -p ~/test-builds/<project-name>
-cd ~/test-builds/<project-name> && setsid nohup node ...
+cd ~/test-builds/<project-name> && setsid nohup turkeycode run "<description>" --spec <spec.md> > build.log 2>&1 &
+```
+`setsid` is Linux only; on macOS use `nohup ... &` alone. To keep the folder and clear only the previous run:
+```bash
+turkeycode reset --force   # keeps spec, scope, persona, logs; clears state, plan and QA markers
 ```
 
 ## Checking Status
@@ -57,13 +61,14 @@ cat ~/test-builds/<project-name>/.turkey/qa/phase-1/verdict-*.json 2>/dev/null |
 
 ## Build Lifecycle
 
-1. **Research** — gathers context, writes specs (sprint 1 only)
+1. **Research** — gathers context, writes specs (only when the folder has no code yet)
 2. **Plan** — creates phase-plan.json with N sprints
 3. **Build** — Claude writes code (one session per sprint)
 4. **Quick Check** — smoke test
-5. **QA** — combined QA session (up to 3 attempts)
-6. **Merge** — merge phase branch into main
-7. **Next sprint** — repeat from step 3
+5. **QA** — combined QA session plus a blind visual review (up to 3 attempts)
+6. **Code review** — critical findings get one fix, kept only if QA passes
+7. **Merge** — merge phase branch into the base branch
+8. **Next phase** — repeat from step 3, then a polish pass for leftover warnings
 
 ## Common Failures
 
@@ -87,7 +92,7 @@ Check verdict files for specifics:
 ```bash
 cat ~/test-builds/<project-name>/.turkey/qa/phase-1/verdict-*.json 2>/dev/null
 ```
-After 3 failed QA attempts with only warnings, the build accepts automatically.
+Warnings never fail QA by default; only blockers do. Under `--strict-phases`, a phase with only warnings left is accepted after two attempts.
 
 ## Monitoring Multiple Builds
 
@@ -107,7 +112,7 @@ done
 | `build.log` | Full build output |
 | `.turkey/state.json` | Orchestrator state |
 | `.turkey/reference/specs.md` | Generated spec |
-| `.turkey/reference/phase-plan.json` | Sprint plan |
+| `.turkey/phase-plan.json` | Phase plan |
 | `.turkey/phases/phase-N/build.done` | Build completion marker |
 | `.turkey/qa/phase-N/verdict-*.json` | QA verdicts |
 
@@ -121,6 +126,8 @@ TurkeyCode detects project type automatically:
 - **library** — Packages/modules
 - **desktop** — Desktop apps
 - **mobile** — Mobile apps
+- **game-godot** — Godot games
+- **embedded**, **legacy** — firmware and older codebases
 - **monorepo** — Multi-package projects
 
-Non-web projects skip visual QA automatically.
+Visual QA runs for web-fullstack, web-frontend, desktop, mobile and game-godot. The other types skip it.

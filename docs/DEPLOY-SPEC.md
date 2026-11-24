@@ -43,7 +43,7 @@ turkeycode apps delete <name> --force
   ping. Every deploy creates it if it is missing; a firewall that already has that
   name keeps its rules. It is a cloud firewall because Docker publishes ports past
   a host firewall such as `ufw`.
-- Default size `s-1vcpu-1gb`, or `s-1vcpu-2gb` when the app needs a database or Redis.
+- Default size `s-1vcpu-1gb`, or `s-1vcpu-2gb` when the app needs a database server (Postgres, MySQL, MongoDB) or Redis. SQLite does not count.
   Default region `nyc3`. Both only apply when the droplet is created.
 - Creating a droplet costs the account owner money, so the first deploy prints the
   size and monthly price and asks. `--yes` skips the question; without a TTY and

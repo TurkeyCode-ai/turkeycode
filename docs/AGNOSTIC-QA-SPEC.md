@@ -1,5 +1,7 @@
 # Stack & Platform Agnostic QA Spec
 
+> **Design note, written before the work was done. Parts are out of date.** The flag is `--type`, not `--project-type`; the types now also include `game-godot`, `embedded` and `legacy`; QA is one combined session plus a visual review, not separate tiers; and the quick check routes by detected back end, front end and database. See the README for current behaviour.
+
 ## Problem
 
 The orchestrator currently assumes every project is a web app. QA smoke tests hit `localhost:5123`, functional tests use Playwright browsers, visual QA takes screenshots of web pages. This makes it useless for CLIs, libraries, desktop apps, mobile apps, APIs without frontends, etc.

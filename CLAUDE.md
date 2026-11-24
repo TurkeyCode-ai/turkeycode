@@ -7,8 +7,8 @@ Phase-based orchestrator for agent-CLI build workflows. Spawns agent sessions pe
 A TypeScript CLI that orchestrates multi-phase software builds:
 - **Research** → **Plan** → **Build (1 session per phase)** → **QA (parallel)** → **Review** → **AAR** → **Ship**
 - As many coherent build phases as the work needs — 1 for a small ticket, many for a big project — instead of dozens of micro-tickets
-- QA functional + visual tests run concurrently
-- Blocker fixes run in parallel
+- QA runs as one combined session (smoke + functional + verdict) alongside a blind visual review
+- One fix session per QA attempt handles every blocker
 - State persists in `.turkey/state.json`
 
 ## Key Insight
@@ -32,7 +32,8 @@ turkeycode resume
 # Check status
 turkeycode status
 
-# Reset (start over)
+# Reset: clears state, the plan and the phases/qa/reviews/polish folders.
+# Keeps spec, scope, persona, audit log and screenshots.
 turkeycode reset --force
 ```
 
@@ -46,7 +47,7 @@ scope (interactive) → specs.md
   → PHASE LOOP:
       build (1 session, full phase scope)
       → quick check
-      → QA (smoke + functional||visual + verdict)   [blockers-only gate by default]
+      → QA (one combined session: smoke + functional + verdict, alongside visual)   [blockers-only gate by default]
       → fix loop if needed
       → code review   [critical findings → one fix session → QA again; kept only if QA passes]
       → AAR (opt-in: --aar)
@@ -86,7 +87,7 @@ appending a `## Technical Survey` section instead of overwriting the confirmed i
 
 ## Phase Model
 
-Each build phase is one Claude session that builds a coherent chunk of the project:
+Each build phase is one agent session (on the active backend) that builds a coherent chunk of the project:
 - Phase 1 is always foundation (project setup, core infrastructure)
 - Each phase has scope, deliverables, and acceptance criteria
 - Phases build on each other (context from prior phases carried forward)
@@ -95,18 +96,22 @@ Each build phase is one Claude session that builds a coherent chunk of the proje
 ## QA Pipeline
 
 Each phase goes through:
-1. **Quick smoke check** — fast sanity test
-2. **Smoke test** — app starts, pages load, no dead elements
-3. **Functional test** + **Visual test** — run in parallel
-4. **Verdict** — CLEAN or NEEDS_FIX
-5. **Fix loop** — if NEEDS_FIX, parallel blocker fixes, then re-test (max 3 attempts)
+1. **Quick check** — deterministic pre-QA checks (build, boot, database, seed data, dead links). Two automatic fix sessions if it fails. A Node back end with no `build` script is not built.
+2. **Combined QA** — one session does the smoke and functional checks and writes the verdict (`verdict-N.json`: CLEAN or NEEDS_FIX). The **visual review** runs alongside it for web, desktop, mobile and game projects: one capture session, then a blind review session.
+3. **Fix loop** — if NEEDS_FIX, one fix session handles every blocker, then QA runs again (max 3 attempts; exit code 75 when they are used up).
+
+The separate smoke, functional and verdict prompts (`qa-smoke.ts`, `qa-functional.ts`, `qa-verdict.ts`) serve the older four-session flow, kept for reference.
+
+Visual findings that are not evidence about the code do not gate a phase:
+- **Sign-in wall** — the capture loads `.turkey/visual-auth.json` or `TURKEYCODE_VISUAL_AUTH` when supplied; if it still cannot sign in it writes `sign-in-wall-N.md` and "not shown" findings become warnings.
+- **Capture problems** (`src/capture-problems.ts`) — from `capture-N.json`, a finding that rests only on a screenshot that landed on another capture's page, or on a page where backend calls failed in a `web-frontend` project, becomes a warning.
 
 ### Warning policy (three modes)
 
 The end state is always ZERO warnings — the question is *when* they get fixed.
 
 - **DEFER (default)** — phases gate on **blockers only**, so a functionally-correct phase merges immediately without stalling on lint/style. Warnings accumulate, then a single **polish pass** after the last phase fixes them all coherently across the repo and **re-verifies the build** (deterministic quick-check) before merging. The re-verify is what keeps "perfect" honest — a cleanup that breaks compilation/boot is reverted, never merged. Stubborn warnings never fail the run (the build already passed functional QA per phase); they're logged and the verified-safe cleanup is merged anyway. The polish pass is skipped when every phase's passing QA verdict recorded zero warnings.
-- **`--strict-phases`** — old behavior: every phase gated on ZERO warnings (blockers AND warnings), no polish pass.
+- **`--strict-phases`** — old behavior: every phase gated on ZERO warnings (blockers AND warnings), no polish pass. If only warnings remain after two QA attempts the phase is accepted with them.
 - **`--allow-warnings` / `-w`** — blockers only per phase, warnings left as-is, no polish.
 
 Why defer-by-default: phases merge faster, and one repo-wide pass fixes a lint rule everywhere at once (better than each phase patching its slice). Warning fixes can be latent bugs, so the polish session treats them as real and never mass-suppresses.
@@ -120,7 +125,8 @@ Why defer-by-default: phases merge faster, and one repo-wide pass fixes a lint r
 3. If NO: This is a fresh start
 
 The state file tracks:
-- Current phase (research/plan/build/qa/review)
+- Current phase (init/research/plan/build/quick-check/qa/review/polish/done)
+- The fingerprint of the spec the plan was made from (`planSpecHash`): a `run` with a different spec file discards the plan and re-plans; `resume` never does
 - Current build phase number
 - Build phases with status, attempts, verdicts
 - Completed phases
@@ -142,6 +148,11 @@ src/
 │   ├── session-mcp.ts # Which user-level MCP servers a session keeps (none by default)
 │   └── claude.ts, codex.ts, gemini.ts, opencode.ts   # Built-in specs
 ├── gates.ts          # Artifact validation (plan, build, QA gates)
+├── capture-problems.ts # Which screenshots are not evidence about the code (wrong page, outside backend failed)
+├── detect-project-type.ts # Project type from files, the plan or the description
+├── scope-session.ts  # Terminal scope loop
+├── ticket-orchestrator.ts, story-orchestrator.ts, ticket-inflight.ts, repos.ts  # Jira ticket and story runs
+├── deploy/           # `deploy`, `login`, `apps`, `deliver`
 ├── state.ts          # State management (phases, not tickets)
 ├── types.ts          # BuildPhase, PhasePlan, ProjectState
 ├── prompts/          # Prompt builders for each phase
@@ -149,10 +160,9 @@ src/
 │   ├── research.ts
 │   ├── plan.ts       # Single session → N phases (as many as the work needs)
 │   ├── build.ts      # Full phase scope prompt
-│   ├── qa-smoke.ts
-│   ├── qa-functional.ts
-│   ├── qa-visual.ts
-│   ├── qa-verdict.ts
+│   ├── qa-combined.ts # The QA session a default run uses (smoke + functional + verdict)
+│   ├── qa-visual.ts  # Capture and blind review, sign-in handling
+│   ├── qa-smoke.ts, qa-functional.ts, qa-verdict.ts  # Older four-session flow
 │   ├── qa-fix.ts
 │   ├── code-review.ts
 │   ├── aar.ts
@@ -179,9 +189,9 @@ src/
 
 ## Git Strategy
 
-- Phase branch: `phase-{n}/{slug}` off main
+- Phase branch: `phase-{n}/{slug}` off the default branch, or off `--base` / `--feature`
 - Build session works directly on phase branch (multiple commits encouraged)
-- PR from phase branch → main after QA passes
+- PR from phase branch → that same branch after QA passes
 - No ticket branches. No merge choreography.
 
 ## Key Design Decisions
@@ -218,6 +228,7 @@ GH_TOKEN=ghp_...                  # For private repos
 DIGITALOCEAN_ACCESS_TOKEN=dop_... # `turkeycode deploy`: your own DigitalOcean account (or `turkeycode login --token`)
 TURKEYCODE_SDD_BIN=/path/to/sdd   # `turkeycode simulate`: an SDD engine that is not on PATH
 TURKEYCODE_KEEP_MCP=name1,name2   # Your own MCP servers that sessions keep (default: none; `all` keeps every one)
+TURKEYCODE_VISUAL_AUTH=/path/file.json # Signed-in browser session for visual QA (default .turkey/visual-auth.json)
 GITHUB_OWNER=username-or-org      # For auto-creating repos
 JIRA_HOST=company.atlassian.net   # For Jira integration (REST API)
 JIRA_EMAIL=you@example.com        # Jira account email
@@ -229,6 +240,7 @@ JIRA_PROJECT=PROJ                 # Jira project key (optional - auto-created if
 
 ```bash
 npm install
-npm run build
+npm run build   # deletes dist/ first: do not run while a build is using this checkout's dist
+npm test        # vitest
 npm link  # Makes turkeycode available globally
 ```
