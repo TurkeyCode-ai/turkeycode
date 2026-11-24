@@ -356,7 +356,7 @@ enquiries lines, labelled as not part of the conversion rate (see Stats).
 
 ## How page A is instrumented
 
-`site/a/index.html` is the original site (`reference/current-site/index.html`)
+`site/a/index.html` is the original site (a copy that is no longer kept in this repository)
 plus exactly the services block, its CSS and the 'Professional services'
 footer link; it must carry no tracker wiring of its own, so the tracker is
 injected at serve time only: the server inserts one tag,

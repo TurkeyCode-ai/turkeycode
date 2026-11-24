@@ -1,6 +1,6 @@
 # Ticket review upgrade: make the deep-tier review catch what an independent reviewer catches
 
-Status: implemented (uncommitted). Scope: `run-ticket` deep tier (`src/prompts/ticket-review.ts`,
+Status: implemented. This is the design record; see the README for current flags. Scope: `run-ticket` deep tier (`src/prompts/ticket-review.ts`,
 `src/prompts/ticket-common.ts`, `src/repos.ts`, `src/ticket-orchestrator.ts`).
 
 ## Why
@@ -95,7 +95,7 @@ step should get the same line, so the build doesn't inherit the error.
 Some teams batch a week of tickets into one PR and keep the stack local until then. Today
 `run-ticket` rebases onto `origin/<base>` and pushes (`ticket-orchestrator.ts`, rebase/push step), so
 it can't build on an unpushed stack.
-- `--base-local <ref>`: cut the ticket branch from a local ref (or a path + ref, for a worktree), and
+- `--base-local <repoPath>=<ref>[,<repoPath>=<ref>]`: cut the ticket branch from a local ref, and
   rebase onto that ref instead of `origin/<base>`.
 - `--no-push`: stop after review/fix; leave the branch local; report the branch and SHA for the
   caller to fold in.

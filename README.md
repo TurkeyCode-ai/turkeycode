@@ -28,10 +28,10 @@ You: "Build me a recipe sharing app"
     │
     ├── FOR EACH PHASE:
     │   ├── 🏗️  Build     → one focused coding session
-    │   ├── 🧪 QA        → smoke → functional → visual (parallel)
+    │   ├── 🧪 QA        → smoke + functional + verdict in one session, visual review alongside
     │   ├── 🔧 Fix       → all issues in one session, full context
     │   ├── 🔁 Retry     → up to 3 QA cycles until clean
-    │   ├── 📝 Review    → code review with actionable feedback
+    │   ├── 📝 Review    → code review; critical findings get one fix, kept only if QA passes
     │   └── ✅ Merge     → PR merged to main, next phase
     │
     └── ✨ Polish      → one repo-wide warning cleanup, re-verify build, merge
@@ -51,7 +51,7 @@ turkeycode run "a habit tracker with streaks and reminders"
 turkeycode scope "a habit tracker with streaks and reminders"
 ```
 
-It skips the loop and goes fully autonomous when you pass `--spec`, point it at a spec file, or run non-interactively (CI / piped stdin) — automation never blocks on input.
+It skips the loop and goes fully autonomous when you pass `--spec`, point it at a spec file, already have a confirmed scope in `.turkey/reference/`, or run non-interactively (CI / piped stdin) — automation never blocks on input.
 
 ### Make it think like you
 
@@ -202,9 +202,10 @@ agents:
       multimodalImages: false # can its model read screenshots?
 ```
 
-Capabilities shape the prompts: backends without in-session subagents run visual QA's
-blind review as a second fresh session (same blindness, different plumbing), and
-backends without vision do a structural review instead of judging screenshots.
+Capabilities shape the prompts: visual QA captures in one session and reviews in a
+second, blind one (only a custom backend with subagents and no blind flag reviews
+in-session), and backends without vision do a structural review instead of judging
+screenshots.
 
 ## Iterate with Tickets (Jira)
 
@@ -342,7 +343,7 @@ Between every step, the orchestrator checks for specific artifacts on disk. If t
 No Jira-style ticket fragmentation. Each phase has a name, scope, deliverables, and acceptance criteria. The build agent gets full context. One phase = one coherent chunk of work.
 
 ### 🔧 Fix Agents See Everything
-Fix sessions get the comprehensive picture: phase deliverables, all blockers, all warnings, smoke report, and previous attempt history. One session fixes everything coherently.
+Fix sessions get the comprehensive picture: phase deliverables, all blockers, all warnings, the verdict and visual report, and previous fix notes. One session fixes everything coherently.
 
 ### 👁️ Visual QA Has Memory
 On attempt 2+, visual QA gets the previous report so it verifies fixes instead of inventing new cosmetic nits. Consistency across attempts.
@@ -356,18 +357,41 @@ If your app's pages sit behind sign-in, visual QA needs a way in or it only ever
   npx playwright open --save-storage=.turkey/visual-auth.json http://localhost:5173
   # sign in with a TEST account, then close the window
   ```
-  Or keep the file elsewhere and set `TURKEYCODE_VISUAL_AUTH=/path/to/file.json`. The file is a live session: use a test account, and it stays out of git because `.turkey/` is ignored.
+  Use your app's real local address in place of `http://localhost:5173`, with the app running. Or keep the file elsewhere and set `TURKEYCODE_VISUAL_AUTH=/path/to/file.json`. The file is a live session: use a test account, it expires when the session does, and it stays out of git because `.turkey/` is ignored.
+- **Google and other providers that refuse automated browsers:** the command above opens a browser Google will not let you sign in to. Sign in in a normal browser you start yourself with a debugging port and a separate profile, then save the session from it:
+  ```bash
+  # macOS; use the Chrome binary's path on Linux and Windows
+  open -na "Google Chrome" --args --remote-debugging-port=9333 --user-data-dir="$HOME/.cache/visual-auth-chrome" http://localhost:5173
+  # sign in, leave the window open, then:
+  node -e "
+  const { chromium } = require('playwright');
+  (async () => {
+    const browser = await chromium.connectOverCDP('http://127.0.0.1:9333');
+    const context = browser.contexts()[0];
+    const state = await context.storageState();
+    // Local storage is not included over a remote connection; read it from your app's tab.
+    const page = context.pages().find(p => p.url().startsWith('http://localhost:5173'));
+    const origin = new URL(page.url()).origin;
+    const entries = await page.evaluate(() => Object.entries(localStorage).map(([name, value]) => ({ name, value })));
+    state.origins = [{ origin, localStorage: entries }];
+    // Keep only your app's own cookies; other sites' cookies are not needed and some cannot be reloaded.
+    state.cookies = state.cookies.filter(c => origin.includes(String(c.domain).replace(/^\\./, '')));
+    require('fs').writeFileSync('.turkey/visual-auth.json', JSON.stringify(state), { mode: 0o600 });
+    await browser.close();
+  })();"
+  ```
+  A saved session holds cookies and local storage. An app that keeps its sign-in only in memory or session storage will still be stopped at sign-in.
 
-If the capture still cannot get in, it says so (`qa/phase-N/sign-in-wall-M.md`), the run logs that those pages were not reviewed, and "not shown" findings become warnings instead of sending fix sessions after a problem that is not in the code. turkeycode never edits your sign-in code to get a screenshot.
+If the capture still cannot get in, it says so (`qa/phase-N/sign-in-wall-M.md`), and "not shown" findings become warnings instead of sending fix sessions after a problem that is not in the code. When the visual report has findings, the run log also says those pages were not reviewed and how to supply a session. The capture session is instructed never to edit your sign-in code, guess passwords or create accounts to get a screenshot.
 
 ### 📸 Screenshots That Prove Nothing Don't Fail a Phase
-The capture step records, for every screenshot, the page it asked for, where the browser ended up, and how many backend errors it saw (`qa/phase-N/capture-M.json`). A visual finding that rests only on a screenshot of the wrong page becomes a warning, and so does one on a page the backend failed to fill when the backend is not part of the build (`--type web-frontend`). The log says which findings were kept as warnings and why. A finding that names at least one sound screenshot, or none at all, still fails the phase.
+The capture step records, for every screenshot, the page it asked for, where the browser ended up, and how many backend errors it saw (`qa/phase-N/capture-M.json`). The backend errors counted are responses with status 500 or above and failed fetch or XHR requests. A visual finding that rests only on a screenshot of the wrong page (it landed on a page another capture asked for) becomes a warning. So does one on a page where backend calls failed, when the project type is `web-frontend`, whether detected or forced with `--type`. A redirect to a page nobody asked for still fails the phase, because the redirect may be the defect. The log says which findings were kept as warnings and why. A finding that names at least one sound screenshot, or none at all, still fails the phase.
 
 ### ⚖️ Blockers vs Warnings
 Blockers = broken functionality, dead elements, failed acceptance criteria. Warnings = cosmetic polish. Zero blockers = pass, regardless of warning count.
 
 ### ✨ Defer Warnings, Polish Once
-By default, phases gate on **blockers only** so a functionally-correct phase merges immediately instead of stalling on lint/style. Warnings accumulate, then a single **polish pass** after the last phase fixes them all coherently across the repo and **re-verifies the build** before merging — a cleanup that breaks compilation or boot is reverted, never merged. The end state is still ZERO warnings, just batched and verified at the end. Use `--strict-phases` to gate every phase on zero warnings (no polish pass), or `--allow-warnings` to leave warnings as-is.
+By default, phases gate on **blockers only** so a functionally-correct phase merges immediately instead of stalling on lint/style. Warnings accumulate, then a single **polish pass** after the last phase fixes them all coherently across the repo and **re-verifies the build** before merging — a cleanup that breaks compilation or boot is reverted, never merged. The aim is zero warnings, batched and verified at the end; polish gets two attempts, and warnings it cannot clear are logged and do not fail the run. Use `--strict-phases` to gate every phase on zero warnings with no polish pass (if only warnings remain after two QA attempts, the phase is accepted with them), or `--allow-warnings` to skip the polish pass and leave warnings as they are.
 
 ## Architecture
 
@@ -376,7 +400,10 @@ project/
 ├── .turkey/                    # Build state (gitignored)
 │   ├── state.json              # Current phase, QA attempts, etc.
 │   ├── audit.log               # Timestamped event log
+│   ├── run.lock                # One run per folder (a stale lock is taken over)
+│   ├── fatal.log               # Why a run died, if it did
 │   ├── persona.md              # Optional: your "how I scope" manual (project-level)
+│   ├── visual-auth.json        # Optional: signed-in session for visual QA
 │   ├── reference/
 │   │   ├── specs.md            # Confirmed intent spec (scope) + research survey
 │   │   ├── scope-working.md    # Living working model (during scope)
@@ -384,19 +411,22 @@ project/
 │   │   ├── scope.done          # Scope gate artifact
 │   │   └── research.done       # Research gate artifact
 │   ├── phase-plan.json         # build phases with deliverables (as many as needed)
+│   ├── plan.done               # Plan gate artifact
 │   ├── phases/
-│   │   └── phase-1.done        # Build completion gate
+│   │   └── phase-1/build.done  # Build completion gate
 │   ├── qa/
-│   │   └── phase-1/
-│   │       ├── smoke-1.md      # Smoke test report
-│   │       ├── functional-1.md # Functional test report
-│   │       ├── visual-1.md     # Visual test report
-│   │       ├── verdict-1.json  # Pass/fail decision
+│   │   └── phase-1/            # M is the QA attempt number
+│   │       ├── verdict-1.json  # Smoke + functional findings and the pass/fail decision
+│   │       ├── visual-1.md     # Visual review report (visual-1.json is the machine copy)
+│   │       ├── capture-1.md    # What was screenshotted
+│   │       ├── capture-1.json  # Per screenshot: page asked for, page reached, backend errors
+│   │       ├── sign-in-wall-1.md # Only when the capture was stopped at sign-in
 │   │       └── fixes-1.md      # Fix report
 │   ├── screenshots/            # Visual QA captures
 │   ├── reviews/                # Code review reports
-│   ├── aar/                    # After-action reviews (opt-in: --aar)
-│   └── polish/                 # End-of-build warning cleanup pass
+│   ├── aar/                    # After-action review markers (opt-in: --aar; reports go to docs/aar/)
+│   ├── polish/                 # End-of-build warning cleanup pass
+│   └── simulation/             # Simulation reports (opt-in: --simulate)
 └── src/                        # Your app's source code
 ```
 
@@ -415,7 +445,7 @@ TurkeyCode auto-detects your project and adapts. Build with any stack, deploy wi
 | **Static** | HTML, Tailwind, Alpine.js, Astro | — |
 | **Docker** | Bring your own Dockerfile | Auto-detected |
 
-The quick-check system installs missing prerequisites, starts Docker services, verifies DB connections, checks compilation, and confirms the server starts — all before the first QA agent runs.
+The quick-check system installs missing prerequisites, starts Docker services, verifies DB connections, checks compilation and the front-end build, confirms the server starts, and checks seed data, dead links and empty handlers, Tailwind setup and AI tells (em dashes and emojis in front-end source) — all before the first QA agent runs. A failed check gets two automatic fix sessions. A Node back end with no `build` script is not built (that check is skipped); a detected front end is still expected to have one.
 
 ## Options
 
@@ -424,7 +454,8 @@ turkeycode run <description>     # Start a new build (converges with you first o
 turkeycode scope <description>   # Converge on a spec without building
 turkeycode resume                # Resume from last checkpoint
 turkeycode status                # Show current state
-turkeycode reset --force         # Nuke state, start fresh
+turkeycode reset --force         # Clear the run (state, plan, phase and QA markers); keeps spec, scope, persona, logs
+turkeycode gate <gate>           # Check one gate by hand (-p <phase>, -a <attempt>)
 
 turkeycode story <description>   # Estimate, file, and run a Jira ticket
 turkeycode run-ticket <KEY>      # Run an existing Jira ticket (triage → build)
@@ -434,16 +465,19 @@ Options (run):
   -s, --spec <file>       Spec file for additional context (skips the scope loop)
   --persona <file>        Operating manual the scope agent embodies
   -v, --verbose           Show detailed output
-  -w, --allow-warnings    Let cosmetic warnings pass QA (no polish pass)
-  --strict-phases         Gate every phase on ZERO warnings (no polish pass)
+  -a, --agent <id>        Agent backend for this run (see Agent Backends)
+  -w, --allow-warnings    Skip the end-of-build polish pass; warnings are left as they are
+  --strict-phases         Gate every phase on zero warnings (no polish pass; accepted after two attempts if only warnings remain)
   --aar                   Generate a per-phase After-Action Report (extra session/phase)
-  --type <type>           Force project type (skips auto-detection)
+  --type <type>           Force project type (skips auto-detection): web-fullstack, web-frontend, web-api,
+                          cli, library, desktop, mobile, game-godot, embedded, legacy, monorepo
   --base <branch>         Base branch override (defaults to detected main/master)
   --feature <branch>      Feature branch — phases branch off and merge back into it
   --no-push               Skip git push (local-only repos or no_push remotes)
   --no-pr                 Skip gh pr create (implied by --no-push)
-  -j, --jira <project>    Create Jira tickets per phase
-  -g, --github <repo>     Create PRs per phase (owner/repo)
+  -j, --jira <project>    Create Jira tickets per phase (also needs the JIRA_* variables)
+  -g, --github <repo>     Recorded but currently has no effect: pull requests are opened whenever the
+                          folder has an `origin` remote and `gh` is signed in
 ```
 
 ## Simulate
@@ -462,7 +496,7 @@ turkeycode run "..." --simulate-loop       # simulate, revise, simulate again
 
 What it does:
 
-1. One session reads `.turkey/reference/specs.md` and designs the study: 5 to 7 visitors drawn from your audience, 2 to 4 questions about the entry page, and up to 2 tasks from your core flows. Two of the visitors are held back.
+1. One session reads `.turkey/reference/specs.md` and designs the study: 5 to 7 visitors drawn from your audience, 2 to 4 questions about the entry page, and up to 2 tasks from your core flows. One or two of the visitors are held back.
 2. Starts a throwaway copy of the app in Docker, on its own port with its own empty database. Your `.env` is not loaded, so the copy holds no real keys. Pass `--env <file>` for values the app needs to start.
 3. Visitors skim the entry page for a fixed time and answer the questions from memory. Then they try each task: they can scroll, click, type, or leave, and leaving is the default.
 4. Prints a table and writes `.turkey/simulation/<run>.md`: pass rates with 95% intervals, what visitors missed, where they stopped, and a sample of what went wrong. The copy is destroyed.
@@ -531,7 +565,7 @@ turkey deploy --env .env.production
 **What it does:**
 
 1. Detects your stack and generates a Dockerfile if the project has none (an existing `Dockerfile` is used as-is).
-2. The first time, shows the droplet it is about to create and what DigitalOcean charges for it, and asks before creating it (`--yes` skips the question). It is one droplet per app: 1 GB by default, 2 GB when the app needs a database or Redis.
+2. The first time, shows the droplet it is about to create and what DigitalOcean charges for it, and asks before creating it (`--yes` skips the question). It is one droplet per app: 1 GB by default, 2 GB when the app needs a database server (Postgres, MySQL, MongoDB) or Redis.
 3. Copies the project over SSH and builds it on the droplet with the same Compose services `turkey run-local` uses: your app, plus Postgres, MySQL, MongoDB or Redis when it needs them.
 4. Puts Caddy in front on ports 80 and 443. Nothing else is published, so the database is not reachable from the internet.
 
@@ -620,8 +654,9 @@ To push builds to GitHub or use `turkey deliver`:
 brew install gh  # or: apt install gh
 gh auth login
 
-# Now you can push builds and deliver non-web projects
-turkeycode run "your idea" --github yourname/repo
+# With `gh` signed in, a build opens a pull request per phase whenever the folder has an
+# `origin` remote. To have turkeycode create the repository for a new project, set GITHUB_OWNER:
+GITHUB_OWNER=yourname turkeycode run "your idea"
 turkey deliver
 ```
 
@@ -646,11 +681,20 @@ links epics on both team- and company-managed projects.
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `ANTHROPIC_API_KEY` | No* | Anthropic API key. *Not needed if using Claude Max/Pro via `claude login` |
+| `ANTHROPIC_API_KEY` | No* | Anthropic API key. *Not needed with Claude Max/Pro via `claude login`, and ignored unless `TURKEYCODE_USE_API_KEY=1` |
 | `TURKEYCODE_AGENT` | No | Agent backend: `claude` (default), `codex`, `gemini`, `opencode`, or an `agents.yaml` id. Same as `--agent` |
 | `TURKEYCODE_MODEL` / `TURKEYCODE_MODEL_<PHASE>` | No | Model override (global / per phase, e.g. `TURKEYCODE_MODEL_QA_FIX`), in the active backend's vocabulary |
 | `TURKEYCODE_USE_API_KEY` | No | Set to `1` to keep the vendor API key as the auth source instead of the CLI login session |
-| `GH_TOKEN` | No | GitHub token (alternative to `gh auth login`) |
+| `TURKEYCODE_VISUAL_AUTH` | No | Path to a signed-in browser session for visual QA (default: `.turkey/visual-auth.json`) |
+| `TURKEYCODE_KEEP_MCP` | No | Your own MCP servers that sessions keep, comma-separated (default: none; `all` keeps every one) |
+| `TURKEYCODE_MCP_CONFIG` | No | MCP config file passed to sessions |
+| `TURKEYCODE_BUILD_TIMEOUT_MIN` | No | Build session timeout in minutes for ticket runs (same as `--build-timeout`) |
+| `TURKEYCODE_SDD_BIN` | No | Path to the `sdd` engine for `simulate` when it is not on PATH |
+| `GH_TOKEN` / `GITHUB_TOKEN` | No | GitHub token (alternative to `gh auth login`) |
+| `GITHUB_OWNER` | No | User or organization to create a new project's repository under |
+| `DIGITALOCEAN_ACCESS_TOKEN` / `DIGITALOCEAN_TOKEN` | No | DigitalOcean token for `deploy` (alternative to `turkeycode login`) |
+| `JIRA_ENABLED` | No | Set to `1` to turn on Jira tracking for builds without `--jira` |
+| `TURKEYCODE_NO_WORKLOG` | No | Set to `1` to skip the Jira worklog on ticket runs |
 | `JIRA_HOST` | No | Jira instance hostname (e.g. `company.atlassian.net`) |
 | `JIRA_EMAIL` | No | Jira account email |
 | `JIRA_TOKEN` | No | Jira API token |
@@ -660,16 +704,16 @@ links epics on both team- and company-managed projects.
 
 | Gate | Artifact | Validation |
 |------|----------|------------|
-| scope | `reference/scope.done` | starts with `DONE`, specs.md > 200 chars |
-| research | `reference/research.done` | exists, specs.md > 200 chars |
-| plan | `phase-plan.json` | valid JSON, ≥1 phase |
-| build | `phases/phase-N.done` | exists |
-| qa-smoke | `qa/phase-N/smoke-M.done` | exists |
-| qa-functional | `qa/phase-N/functional-M.done` | exists |
-| qa-visual | `qa/phase-N/visual-M.done` | exists |
-| qa-verdict | `qa/phase-N/verdict-M.json` | 0 blockers |
+| scope | `reference/scope.done` | exists and is not empty, specs.md at least 200 chars |
+| research | `reference/research.done` | exists and is not empty, specs.md at least 200 chars |
+| plan | `phase-plan.json` and `plan.done` | valid JSON, ≥1 phase, each with a number, name, scope, deliverables and acceptance criteria |
+| phase-build | `phases/phase-N/build.done` | exists |
+| qa-visual | `qa/phase-N/visual-M.done` | exists (web, desktop, mobile and game projects only) |
+| qa-verdict | `qa/phase-N/verdict-M.json` | 0 blockers (and 0 warnings under `--strict-phases`) |
 | code-review | `reviews/phase-N.md` | exists |
-| aar | `aar/phase-N.done` | exists |
+| aar | `aar/phase-N.done` | exists, with the report at `docs/aar/phase-N.md` |
+
+One combined QA session does the smoke and functional checks and writes the verdict, so a default run writes no separate smoke or functional files. `turkeycode gate qa-smoke` and `qa-functional` remain for the older four-session flow. A run that uses up its QA attempts exits with code 75.
 
 ## Troubleshooting
 
@@ -679,11 +723,13 @@ links epics on both team- and company-managed projects.
 
 **`npm install -g turkeycode` fails with `EACCES`?** Your user cannot write to npm's global folder. Run `npx turkeycode run "..."` instead, or see the note under [Install](#install).
 
-**QA keeps failing?** Try `--allow-warnings` to let cosmetic issues pass. If it's looping on real bugs, check `.turkey/qa/` for the latest report.
+**QA keeps failing?** QA only fails on blockers; warnings never fail a default run. Read `.turkey/qa/phase-N/verdict-M.json` for what it objected to. If the objections are about screenshots of a sign-in page, see [Visual QA Behind Sign-In](#-visual-qa-behind-sign-in).
 
 **Process killed on disconnect?** Detach the build properly. See [Spawning Long-Running Builds](#spawning-long-running-builds) for Linux and macOS.
 
-**Need to start over?** `turkeycode reset --force` nukes the `.turkey/` state directory.
+**Need to start over?** `turkeycode reset --force` clears the run: state, the plan, and the phases, qa, reviews and polish folders. It keeps your spec and scope files, persona, audit log and screenshots, and never touches your code or branches. To start a different job in the same folder, pass `--spec <file>`, or delete `.turkey/`.
+
+**Running a new spec in a folder that already has a plan?** `turkeycode run --spec <file>` notices that the plan on disk was made from a different spec, discards it and plans again. This needs a spec file: a different bare description on a run that is under way continues the old plan. `resume` never re-plans.
 
 ## Contributing
 
