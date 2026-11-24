@@ -209,6 +209,16 @@ const DATABASE_INFO: DatabaseInfo[] = [
 ];
 
 /** Build config per backend type */
+/** Whether the package.json in `dir` defines the named script. */
+export function hasNpmScript(dir: string, script: string): boolean {
+  try {
+    const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf-8'));
+    return typeof pkg?.scripts?.[script] === 'string' && pkg.scripts[script].trim() !== '';
+  } catch {
+    return false;
+  }
+}
+
 interface BuildConfig {
   /** Commands to try for compilation check (first success wins) */
   buildCmds: { cmd: string; condition?: string; label: string }[];
@@ -1430,6 +1440,11 @@ function checkBackendBuild(project: ProjectInfo): CheckResult {
   // Try build commands — substitute package manager for Node.js
   for (const buildCmd of config.buildCmds) {
     if (buildCmd.condition && !existsSync(join(backendDir, buildCmd.condition))) continue;
+    // A plain Node service often has no build step. Running `npm run build`
+    // anyway fails with "Missing script", which is not a defect in the project:
+    // it sent fix sessions to add a build script the owner never asked for.
+    const script = /^npm run (\S+)/.exec(buildCmd.cmd)?.[1];
+    if (script && !hasNpmScript(backendDir, script)) continue;
 
     let cmd = buildCmd.cmd;
     if (backendType === 'node') {
