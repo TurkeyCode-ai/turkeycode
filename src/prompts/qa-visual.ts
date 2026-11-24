@@ -470,6 +470,29 @@ capture();
 
 ${signInSection(phaseNumber, attempt, visualAuthFile())}
 
+### Record where each capture landed
+
+A screenshot of the wrong page, or of a page the backend failed to fill, says nothing about
+the code. So the review can tell, write \`${qaDir}/capture-${attempt}.json\` from the script:
+one entry per file.
+
+\`\`\`typescript
+// Before page.goto(): count backend failures while this page loads.
+let serverErrors = 0;
+page.on('response', r => { if (r.status() >= 500) serverErrors++; });
+page.on('requestfailed', r => { if (['fetch', 'xhr'].includes(r.resourceType())) serverErrors++; });
+// After the screenshot:
+manifest.push({ file: \`\${route.name}-desktop.png\`, route: route.path, finalUrl: page.url(), serverErrors });
+// At the end:
+writeFileSync('${qaDir}/capture-${attempt}.json', JSON.stringify(manifest, null, 2));
+\`\`\`
+
+- \`route\` is the path you asked for, \`finalUrl\` is \`page.url()\` when the screenshot was taken.
+- Open each page by its own address. Do not reach a page by clicking from another one and then
+  name the file after where you meant to go.
+- If \`finalUrl\` is not the page you asked for, capture it anyway and leave the record honest.
+  Never rename a file or edit the record to make it look right.
+
 ### Run It:
 \`\`\`bash
 npx ts-node capture-screenshots.ts

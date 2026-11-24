@@ -360,6 +360,9 @@ If your app's pages sit behind sign-in, visual QA needs a way in or it only ever
 
 If the capture still cannot get in, it says so (`qa/phase-N/sign-in-wall-M.md`), the run logs that those pages were not reviewed, and "not shown" findings become warnings instead of sending fix sessions after a problem that is not in the code. turkeycode never edits your sign-in code to get a screenshot.
 
+### 📸 Screenshots That Prove Nothing Don't Fail a Phase
+The capture step records, for every screenshot, the page it asked for, where the browser ended up, and how many backend errors it saw (`qa/phase-N/capture-M.json`). A visual finding that rests only on a screenshot of the wrong page becomes a warning, and so does one on a page the backend failed to fill when the backend is not part of the build (`--type web-frontend`). The log says which findings were kept as warnings and why. A finding that names at least one sound screenshot, or none at all, still fails the phase.
+
 ### ⚖️ Blockers vs Warnings
 Blockers = broken functionality, dead elements, failed acceptance criteria. Warnings = cosmetic polish. Zero blockers = pass, regardless of warning count.
 

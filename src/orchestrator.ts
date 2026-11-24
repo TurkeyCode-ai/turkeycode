@@ -83,6 +83,7 @@ import { summarizeAuditLog, formatRunSummary } from './run-summary';
 import { readReviewFindings, reviewAction } from './review-findings';
 import { buildReviewFixPrompt } from './prompts/review-fix';
 import { signInWallFile } from './prompts/qa-visual';
+import { captureProblemFor, findCaptureProblems, parseCaptureManifest } from './capture-problems';
 import { runQuickChecks } from './quick-check';
 import { captureGodotFrames, GODOT_CAPTURE_TIMELINE } from './godot-capture';
 import { adoptPlannedProjectType, detectProjectTypeStrict, inferProjectTypeFromDescription } from './detect-project-type';
@@ -240,6 +241,8 @@ export interface VisualMergeOptions {
   capturedFiles?: string[];
   /** The capture could not get past sign-in, so pages behind it were never photographed. */
   signInWall?: boolean;
+  /** file -> why that screenshot says nothing about the code (see capture-problems.ts). */
+  captureProblems?: Record<string, string>;
 }
 
 /**
@@ -255,7 +258,7 @@ export function splitVisualBlockers(
   verdict: Record<string, unknown>,
   visual: { blockers?: QaFinding[]; framesReviewed?: string[] },
   options: VisualMergeOptions = {}
-): { gating: QaFinding[]; notShown: QaFinding[] } {
+): { gating: QaFinding[]; notShown: QaFinding[]; captureProblems: Array<QaFinding & { reason: string }> } {
   const blockers = Array.isArray(visual.blockers) ? visual.blockers : [];
   const reviewed = Array.isArray(visual.framesReviewed) ? visual.framesReviewed : [];
   const skippedFiles = (options.capturedFiles ?? []).some(
@@ -266,9 +269,21 @@ export function splitVisualBlockers(
     skippedFiles ||
     options.signInWall === true ||
     (options.isGame === true && functionalBlockers === 0);
+  // A finding that rests only on screenshots of the wrong page, or of a page
+  // the outside backend failed to fill, is not evidence about this build.
+  const files = options.capturedFiles ?? [];
+  const problems = options.captureProblems ?? {};
+  const captureProblems: Array<QaFinding & { reason: string }> = [];
+  const sound: QaFinding[] = [];
+  for (const blocker of blockers) {
+    const reason = captureProblemFor(blocker, files, problems);
+    if (reason) captureProblems.push({ ...blocker, reason });
+    else sound.push(blocker);
+  }
   return {
-    gating: blockers.filter(b => !(b.kind === 'not-shown' && unproven)),
-    notShown: blockers.filter(b => b.kind === 'not-shown' && unproven),
+    gating: sound.filter(b => !(b.kind === 'not-shown' && unproven)),
+    notShown: sound.filter(b => b.kind === 'not-shown' && unproven),
+    captureProblems,
   };
 }
 
@@ -315,10 +330,14 @@ export function mergeVisualIntoVerdict(
   visual: { blockers?: QaFinding[]; warnings?: QaFinding[]; framesReviewed?: string[] },
   options: VisualMergeOptions = {}
 ): Record<string, unknown> {
-  const { gating: visualBlockers, notShown } = splitVisualBlockers(verdict, visual, options);
+  const { gating: visualBlockers, notShown, captureProblems } = splitVisualBlockers(verdict, visual, options);
   const visualWarnings = [
     ...(Array.isArray(visual.warnings) ? visual.warnings : []),
-    ...notShown.map(b => ({ ...b, description: `[not shown in capture] ${b.description || 'visual blocker'}` }))
+    ...notShown.map(b => ({ ...b, description: `[not shown in capture] ${b.description || 'visual blocker'}` })),
+    ...captureProblems.map(b => ({
+      ...b,
+      description: `[not reviewed: ${b.reason}] ${b.description || 'visual blocker'}`
+    }))
   ];
 
   const blockers = [
@@ -2638,6 +2657,14 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
         isGame: this.state.projectType === 'game-godot',
         capturedFiles: existsSync(framesDir) ? readdirSync(framesDir) : [],
         signInWall: existsSync(signInWallFile(phaseNumber, attempt)),
+        captureProblems: findCaptureProblems(
+          parseCaptureManifest(
+            existsSync(`${qaDir}/capture-${attempt}.json`)
+              ? readFileSync(`${qaDir}/capture-${attempt}.json`, 'utf-8')
+              : null
+          ),
+          { backendIsOutside: this.state.projectType === 'web-frontend' }
+        ),
       };
       if (options.signInWall) {
         this.log(
@@ -2649,8 +2676,11 @@ When done, create a file: ${qaDir}/quick-fix-${attempt}.done`;
       }
       const merged = mergeVisualIntoVerdict(verdict, visual, options);
       writeFileSync(verdictPath, JSON.stringify(merged, null, 2));
-      const { gating, notShown } = splitVisualBlockers(verdict, visual, options);
-      this.log(`Merged visual QA into verdict: +${gating.length} blockers, +${visualWarnings.length + notShown.length} warnings`);
+      const { gating, notShown, captureProblems } = splitVisualBlockers(verdict, visual, options);
+      this.log(`Merged visual QA into verdict: +${gating.length} blockers, +${visualWarnings.length + notShown.length + captureProblems.length} warnings`);
+      for (const finding of captureProblems) {
+        this.log(`Kept a visual finding as a warning, not a blocker: ${finding.reason}`);
+      }
       if (notShown.length > 0) {
         this.log(`Kept ${notShown.length} "not shown in capture" finding(s) as warnings: the frames can't prove them`);
       }
