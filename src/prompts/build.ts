@@ -129,6 +129,22 @@ function getTypeSpecificRules(projectType: ProjectType, caps: AgentCapabilities)
   }
 }
 
+/**
+ * The type rules above describe how to build a NEW project. On a repository
+ * that existed before the run they were read as orders: client services kept
+ * gaining a health endpoint and a build script their specs had forbidden. The
+ * baseline commit is the signal that the repo was already there.
+ */
+export function existingRepoRules(state: Pick<ProjectState, 'baselineSha'>): string {
+  if (!state.baselineSha) return '';
+  return `
+
+**THIS REPOSITORY EXISTED BEFORE THIS RUN.** The numbered rules above describe how to build a new project. Here they are defaults only:
+- The spec's own rules and this repository's existing conventions win wherever they differ from a rule above.
+- Do not add something only because a rule above lists it. Unless the spec asks for it by name, add no health endpoint, no build script, no new logging or error format, no CORS, rate-limit or auth changes, and no README or documentation changes.
+- If a check later fails only because one of those is absent (for example "Missing script: build" or no /health route), say so in your notes and leave the repository as its owner has it.`;
+}
+
 export function buildBuildPhasePrompt(
   state: ProjectState,
   phase: BuildPhase,
@@ -289,7 +305,7 @@ ${oneTurnRule(buildDone, { completionGate: true, partialNotes: buildPartial })}
 5. **Do NOT build ahead** - Only implement what's in this phase's scope
 6. **Do NOT skip deliverables** - Every deliverable must be implemented
 7. **Commit, never push** - Commit everything to the current phase branch. Do NOT run git push, do NOT switch branches, and do NOT look for or configure git credentials — the orchestrator handles pushing and merging
-${getTypeSpecificRules(state.projectType || 'web-fullstack', caps)}
+${getTypeSpecificRules(state.projectType || 'web-fullstack', caps)}${existingRepoRules(state)}
 
 ---
 
