@@ -348,7 +348,7 @@ review:
   });
 
   it('default checklist covers the fourteen standing failure modes', () => {
-    expect(DEFAULT_REVIEW_CHECKLIST).toHaveLength(14);
+    expect(DEFAULT_REVIEW_CHECKLIST).toHaveLength(17);
     const joined = DEFAULT_REVIEW_CHECKLIST.join('\n');
     for (const word of ['Sentinel', 'Both directions', 'Field ownership', 'Bypass', 'Re-entry', 'Concurrency', 'premise', 'Constructor', 'Consistency with the rest', 'Stale read-modify-write', 'Who else must act', 'Data source exists', 'Invariants across records', 'Legacy write conventions']) {
       expect(joined).toContain(word);

@@ -257,6 +257,7 @@ turkeycode run-ticket PROJ-123 --deep --base-local stack/week-46 --no-push
 | Flag | Effect |
 |------|--------|
 | `--base-local <ref>` | Cut the ticket branch from a **local** ref and rebase onto it (no fetch) instead of `origin/<base>`. A bare `<ref>` applies to every scoped repo where it exists; the others keep `origin/<base>`. Pin per repo with `<repoPath>=<ref>` (comma-separated; the ref must exist there). |
+| `--build-timeout <minutes>` | Build-session time limit (default 90; or set `TURKEYCODE_BUILD_TIMEOUT_MIN`). Raise it when the full test suite is slow or the build machine is shared. In the deep tier, a build that runs out of time after committing work still gets its review rounds; the branch is kept local (never pushed), the Jira comment says so, and the run exits non-zero. |
 | `--no-push` | Stop after review/fix + rebase: the branch stays local, branch + SHA per repo are printed and written to `~/.turkeycode/tickets/<KEY>/local-branches.json`. No push, no Jira transition; the Jira comment and worklog still happen. |
 
 **Running several tickets at once.** Each `run-ticket` process leaves a marker in `~/.turkeycode/tickets/<KEY>/in-flight.json` while it works. The plan and build sessions are told which other tickets are being built in the same repos and where their plans are, so they can keep shared edits small and record any overlap. It is information, not a lock: nothing waits. The deep tier also rebases before review, so a conflict with a ticket that landed meanwhile is resolved while review rounds are still ahead.
@@ -295,7 +296,9 @@ as *not reviewed* (re-run once, then the run fails before anything is pushed).
 Review rounds use different lenses, so a clean round 1 still gets a round 2. Each later round verifies the previous fixes and challenges them (a fix can introduce its own problem). If the last scheduled round still finds something, one extra fix → verify round runs; anything left after that is reported as open. `--review-rounds 1` means exactly one review.
 The built-in checklist covers sentinel literals in legacy fields, both directions of
 every integration, field ownership, bypass paths, re-entry, concurrency, tests that
-encode the premise, and constructor/signature churn.
+encode the premise, constructor/signature churn, external service limits on ids built
+from free text, the same lock on both sides of a race, and porting from the original's
+before-change state.
 
 Requires Jira env (`JIRA_HOST`, `JIRA_EMAIL`, `JIRA_TOKEN`, and `JIRA_PROJECT` for
 `story`). See [Jira Integration](#jira-integration-optional).
